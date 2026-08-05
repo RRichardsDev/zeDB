@@ -1,0 +1,15 @@
+[package]
+name = "zedb-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "zedb"
+path = "src/main.rs"
+
+[dependencies]
+zedb-core.workspace = true
+zedb-ch.workspace = true
+gpui.workspace = true

@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/zedb-core", "crates/zedb-ch", "crates/zedb-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/rhodri-richards/zedb"
+
+[workspace.dependencies]
+zedb-core = { path = "crates/zedb-core" }
+zedb-ch = { path = "crates/zedb-ch" }
+gpui = "0.2.2"
+
+[profile.dev]
+# gpui is heavy; keep dependency codegen optimized so the dev app stays usable.
+[profile.dev.package."*"]
+opt-level = 2
