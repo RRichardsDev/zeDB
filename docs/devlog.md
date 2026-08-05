@@ -75,3 +75,20 @@ GPUI findings, in rough order of hours cost:
   wrap into vertically-squeezed lines inside the fixed row height.
 - Process discipline note: `cargo clippy` does not produce the binary;
   after edits, `cargo build` before relaunching, or you debug a stale app.
+
+## M3: connections (2026-08-05)
+
+- GPUI 0.2.2 has no built-in text input control. The connection form uses
+  a small single-line input adapted from GPUI's `examples/input.rs`,
+  including IME ranges, Unicode grapheme navigation, selection, and
+  clipboard actions. This should become a shared primitive before M6's
+  multiline query editor.
+- ClickHouse read-only mode is best enforced by the server. Sending
+  `readonly=2` on every request rejects writes and DDL while avoiding
+  brittle client-side SQL classification.
+- Connection metadata is JSON in the platform config directory. Passwords
+  are keyed by connection name in macOS Keychain and never enter the
+  serializable connection type.
+- GPUI's executor is not a Tokio reactor. Network work runs on one shared
+  Tokio runtime, then a GPUI task awaits the executor-agnostic join handle
+  and updates the view.

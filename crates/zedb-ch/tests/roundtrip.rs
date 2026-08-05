@@ -114,11 +114,16 @@ impl EphemeralServer {
     }
 
     fn client(&self) -> ChClient {
+        self.client_with(false)
+    }
+
+    fn client_with(&self, read_only: bool) -> ChClient {
         ChClient::new(ChConfig {
             url: format!("http://127.0.0.1:{}", self.http_port),
             user: "default".into(),
             password: None,
             database: None,
+            read_only,
         })
     }
 
@@ -269,4 +274,18 @@ async fn query_roundtrip_type_zoo() {
         .unwrap();
     assert_eq!(empty.rows.len(), 0);
     assert_eq!(empty.columns.len(), 20);
+
+    // A read-only client can select but the server rejects writes.
+    let ro = server.client_with(true);
+    ro.query("SELECT id FROM zoo")
+        .await
+        .expect("select allowed");
+    let err = ro
+        .execute("INSERT INTO zoo (id) VALUES (99)")
+        .await
+        .unwrap_err();
+    match err {
+        ChError::Server { code, .. } => assert_eq!(code, Some(164)), // READONLY
+        other => panic!("expected readonly rejection, got: {other:?}"),
+    }
 }

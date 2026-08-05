@@ -15,6 +15,10 @@ pub struct ChConfig {
     pub password: Option<String>,
     /// Default database for unqualified table names.
     pub database: Option<String>,
+    /// When set, every request carries `readonly=2`: the server rejects
+    /// writes and DDL while still allowing query-level settings. Safety is
+    /// enforced server-side, not by client-side SQL inspection.
+    pub read_only: bool,
 }
 
 pub struct ChClient {
@@ -46,7 +50,14 @@ impl ChClient {
     /// `GET /ping`: true when the server is up and answering.
     pub async fn ping(&self) -> bool {
         let url = format!("{}/ping", self.cfg.url.trim_end_matches('/'));
-        match self.http.get(url).send().await {
+        let mut request = self
+            .http
+            .get(url)
+            .header("X-ClickHouse-User", &self.cfg.user);
+        if let Some(password) = &self.cfg.password {
+            request = request.header("X-ClickHouse-Key", password);
+        }
+        match request.send().await {
             Ok(resp) => resp.status().is_success(),
             Err(_) => false,
         }
@@ -63,6 +74,9 @@ impl ChClient {
         }
         if let Some(db) = &self.cfg.database {
             req = req.query(&[("database", db.as_str())]);
+        }
+        if self.cfg.read_only {
+            req = req.query(&[("readonly", "2")]);
         }
         req = req.query(params);
 

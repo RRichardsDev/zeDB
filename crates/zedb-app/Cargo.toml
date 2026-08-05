@@ -13,3 +13,5 @@ path = "src/main.rs"
 zedb-core.workspace = true
 zedb-ch.workspace = true
 gpui.workspace = true
+tokio.workspace = true
+unicode-segmentation = "1"
