@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos-app:
+    name: Package zeDB.app (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # bundle script derives the build number from history
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Metal toolchain
+        run: |
+          if ! xcrun -f metal >/dev/null 2>&1; then
+            sudo xcodebuild -downloadComponent MetalToolchain
+          fi
+
+      - name: Import Developer ID certificate
+        if: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain=$RUNNER_TEMP/release.keychain-db
+          keychain_password=$(uuidgen)
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain
+          identity=$(security find-identity -v -p codesigning "$keychain" |
+            awk -F'"' '/Developer ID Application/ {print $2; exit}')
+          echo "ZEDB_CODESIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "ZEDB_HARDENED_RUNTIME=1" >> "$GITHUB_ENV"
+
+      - name: Build bundle
+        run: ./scripts/bundle-macos.sh
+
+      - name: Notarize and staple
+        if: ${{ secrets.NOTARY_APPLE_ID != '' && env.ZEDB_CODESIGN_IDENTITY != '' }}
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+        run: |
+          ditto -c -k --keepParent target/macos/zeDB.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --apple-id "$NOTARY_APPLE_ID" \
+            --password "$NOTARY_PASSWORD" \
+            --team-id "$NOTARY_TEAM_ID" \
+            --wait
+          xcrun stapler staple target/macos/zeDB.app
+
+      - name: Zip bundle
+        id: zip
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          zip_name=zeDB-$version-macos.zip
+          ditto -c -k --keepParent target/macos/zeDB.app "$zip_name"
+          echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.zip.outputs.zip_name }}
+          path: ${{ steps.zip.outputs.zip_name }}
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="macOS app bundle."
+          if [[ -z "${ZEDB_CODESIGN_IDENTITY:-}" ]]; then
+            notes="$notes Ad-hoc signed: Gatekeeper will block it on other machines until Developer ID signing secrets are configured."
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "zeDB $GITHUB_REF_NAME" \
+            --notes "$notes" \
+            "${{ steps.zip.outputs.zip_name }}" ||
+          gh release upload "$GITHUB_REF_NAME" "${{ steps.zip.outputs.zip_name }}" --clobber
