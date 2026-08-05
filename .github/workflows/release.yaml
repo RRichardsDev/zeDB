@@ -75,6 +75,7 @@ jobs:
       - name: Create DMG
         id: dmg
         run: |
+          command -v create-dmg >/dev/null 2>&1 || brew install create-dmg
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           dmg_name=zeDB-$version-macos.dmg
           ./scripts/make-dmg.sh "$dmg_name"

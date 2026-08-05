@@ -62,9 +62,15 @@ entitlements so they can launch unprofiled.
 
 - [x] Ship a DMG alongside the zip, signed and notarized
       (`scripts/make-dmg.sh` + the release workflow).
-- [ ] DMG window polish: background image with a drag-to-Applications
-      arrow and fixed icon layout (do together with the app icon work;
-      `create-dmg` handles the layout).
+- [x] DMG window polish: `make-dmg.sh` uses `create-dmg` (falls back to a
+      plain DMG when absent) with a generated background
+      (`packaging/macos/dmg-background.swift` renders it; plates behind the
+      Finder labels keep light-mode label text legible on the dark
+      surface). Regenerate via
+      `swiftc -O dmg-background.swift -o /tmp/bg && /tmp/bg dmg-background@2x.png`,
+      then `sips -Z 660` for @1x and `tiffutil -cathidpicheck` to rebuild
+      the tiff. Note: DMG backgrounds and .icns have no light/dark variant
+      mechanism; one artwork must serve both appearances.
 - [x] Hand-rolled auto-update (`zedb-app/src/updates.rs`): the app checks the
       GitHub Releases feed at startup; the title-bar pill downloads the
       release zip, verifies the new bundle is signed by our team, swaps it

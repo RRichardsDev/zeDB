@@ -20,9 +20,24 @@ staging=$(mktemp -d "${TMPDIR:-/tmp}/zedb-dmg.XXXXXX")
 trap 'rm -rf "$staging"' EXIT
 
 cp -R "$app" "$staging/"
-ln -s /Applications "$staging/Applications"
+rm -f "$out"
 
-hdiutil create -volname "zeDB" -srcfolder "$staging" -ov -format UDZO "$out"
+if command -v create-dmg >/dev/null 2>&1; then
+    create-dmg \
+        --volname "zeDB" \
+        --background "$root/packaging/macos/dmg-background.tiff" \
+        --window-size 660 400 \
+        --icon-size 128 \
+        --icon "zeDB.app" 165 200 \
+        --app-drop-link 495 200 \
+        --hide-extension "zeDB.app" \
+        --no-internet-enable \
+        "$out" "$staging"
+else
+    echo "create-dmg not found; producing a plain DMG without window layout" >&2
+    ln -s /Applications "$staging/Applications"
+    hdiutil create -volname "zeDB" -srcfolder "$staging" -ov -format UDZO "$out"
+fi
 
 if [[ -n ${ZEDB_CODESIGN_IDENTITY:-} && ${ZEDB_CODESIGN_IDENTITY} != - ]]; then
     echo "Signing DMG with identity: $ZEDB_CODESIGN_IDENTITY"
