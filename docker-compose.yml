@@ -1,0 +1,90 @@
+name: zedb-clickhouse
+
+x-keeper: &keeper
+  image: clickhouse/clickhouse-keeper:26.3.12.3
+  restart: unless-stopped
+  networks: [clickhouse]
+
+x-clickhouse: &clickhouse
+  image: clickhouse/clickhouse-server:26.3.12.3
+  restart: unless-stopped
+  environment:
+    CLICKHOUSE_USER: zedb
+    CLICKHOUSE_PASSWORD: zedb
+    CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+  depends_on:
+    - keeper-1
+    - keeper-2
+    - keeper-3
+  healthcheck:
+    test: ["CMD", "clickhouse-client", "--user", "zedb", "--password", "zedb", "--query", "SELECT 1"]
+    interval: 2s
+    timeout: 2s
+    retries: 30
+  networks: [clickhouse]
+
+services:
+  keeper-1:
+    <<: *keeper
+    hostname: keeper-1
+    volumes:
+      - keeper-1-data:/var/lib/clickhouse
+      - ./docker/clickhouse/keeper-1.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+
+  keeper-2:
+    <<: *keeper
+    hostname: keeper-2
+    volumes:
+      - keeper-2-data:/var/lib/clickhouse
+      - ./docker/clickhouse/keeper-2.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+
+  keeper-3:
+    <<: *keeper
+    hostname: keeper-3
+    volumes:
+      - keeper-3-data:/var/lib/clickhouse
+      - ./docker/clickhouse/keeper-3.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+
+  clickhouse-1:
+    <<: *clickhouse
+    hostname: clickhouse-1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse-1-data:/var/lib/clickhouse
+      - ./docker/clickhouse/clickhouse-1.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+
+  clickhouse-2:
+    <<: *clickhouse
+    hostname: clickhouse-2
+    ports:
+      - "8124:8123"
+      - "9001:9000"
+    volumes:
+      - clickhouse-2-data:/var/lib/clickhouse
+      - ./docker/clickhouse/clickhouse-2.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+
+  bootstrap:
+    image: clickhouse/clickhouse-server:26.3.12.3
+    restart: "no"
+    depends_on:
+      clickhouse-1:
+        condition: service_healthy
+      clickhouse-2:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/bootstrap/bootstrap.sh"]
+    volumes:
+      - ./docker/clickhouse/bootstrap.sh:/bootstrap/bootstrap.sh:ro
+      - ./docker/clickhouse/testing.sql:/bootstrap/testing.sql:ro
+    networks: [clickhouse]
+
+networks:
+  clickhouse:
+
+volumes:
+  keeper-1-data:
+  keeper-2-data:
+  keeper-3-data:
+  clickhouse-1-data:
+  clickhouse-2-data:

@@ -121,8 +121,10 @@ inherited blindly):
 
 ## Fleet model
 
-- A **connection** points at a cluster (or single node) with credentials
-  and an environment tier (dev / staging / production).
+- A **connection** points at a logical cluster (or single node), contains
+  one or more node or load balancer endpoints for connectivity and failover,
+  and has shared credentials plus an environment tier (dev / staging /
+  production).
 - Databases are **discovered live** from the servers (system tables and,
   where present, an application-level registry query configured per repo).
   The fleet is not a checked-in inventory file.

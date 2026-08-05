@@ -76,7 +76,10 @@ mod tests {
 
         let conns = vec![ConnectionConfig {
             name: "staging".into(),
-            url: "http://ch.example:8123".into(),
+            endpoints: vec![
+                "http://ch-1.example:8123".into(),
+                "http://ch-2.example:8123".into(),
+            ],
             user: "default".into(),
             database: None,
             tier: EnvTier::Staging,

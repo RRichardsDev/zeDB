@@ -63,6 +63,13 @@ impl ChClient {
         }
     }
 
+    /// Run an authenticated, read-only query to validate the endpoint and
+    /// credentials together. ClickHouse's `/ping` endpoint does not perform
+    /// authentication, so it cannot be used as a connection test.
+    pub async fn test_connection(&self) -> Result<()> {
+        self.request("SELECT 1", &[]).await.map(|_| ())
+    }
+
     async fn request(&self, sql: &str, params: &[(&str, &str)]) -> Result<Vec<u8>> {
         let mut req = self
             .http

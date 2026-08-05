@@ -55,14 +55,19 @@ have written down how (uniform_list vs custom element, etc.).
 
 ### M3. Connections
 
-Connection model in core: name, endpoint, credentials, environment tier
-(dev / staging / production), read-only flag (default on). Persisted
-config in the platform config dir; secrets in the OS keychain, never in
-the config file. UI: connection picker, add/edit form, connect/disconnect,
+Connection model in core: logical cluster name, one or more node or load
+balancer endpoints, shared credentials, environment tier (dev / staging /
+production), read-only flag (default on). Persisted config in the platform
+config dir; secrets in the OS keychain, never in the config file. UI:
+connection picker, add/edit/delete form, per-node connection test,
+connect/disconnect,
 tier shown as an unmistakable visual identity (color/badge) from day one.
 
-Done when: you can add your staging connection in the UI, connect, and see
-the tier badge; config file contains no secret material.
+Done when: you can add your staging cluster in the UI, test its nodes,
+connect through a healthy endpoint, and see the tier badge; invalid
+credentials are not presented as a successful tested save, and the config
+file contains no secret material. Deleting a connection also removes its
+saved credentials and leaves selection and active-connection state valid.
 
 ### M4. Schema tree
 

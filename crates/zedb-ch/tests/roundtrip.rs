@@ -288,4 +288,17 @@ async fn query_roundtrip_type_zoo() {
         ChError::Server { code, .. } => assert_eq!(code, Some(164)), // READONLY
         other => panic!("expected readonly rejection, got: {other:?}"),
     }
+
+    // Connection testing must reject credentials the server does not accept.
+    let invalid = ChClient::new(ChConfig {
+        url: format!("http://127.0.0.1:{}", server.http_port),
+        user: "default".into(),
+        password: Some("definitely-wrong".into()),
+        database: None,
+        read_only: true,
+    });
+    assert!(
+        invalid.test_connection().await.is_err(),
+        "invalid credentials must fail the authenticated connection test"
+    );
 }

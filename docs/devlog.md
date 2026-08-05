@@ -92,3 +92,19 @@ GPUI findings, in rough order of hours cost:
 - GPUI's executor is not a Tokio reactor. Network work runs on one shared
   Tokio runtime, then a GPUI task awaits the executor-agnostic join handle
   and updates the view.
+- A saved connection is a logical cluster, not a single URL. The config
+  stores an endpoint list and transparently reads the original singular
+  `url` shape. The primary form action tests every node and persists only
+  when at least one accepts the credentials; saving an untested/offline
+  cluster remains an explicit secondary action.
+- The M2 synthetic grid remains useful as a performance harness, but it is
+  now an explicitly labeled opt-in view. Showing it as the default content
+  after a live connection made synthetic rows look like server data.
+- Connection deletion requires confirmation, removes the Keychain password,
+  disconnects the deleted active cluster, and preserves a valid sidebar
+  selection. Config and Keychain updates use rollback paths so a partial
+  rename or delete does not silently leave the app in an inconsistent state.
+- Local development runs can use `scripts/run-signed-macos.sh` to build a
+  minimal `zeDB.app` bundle with the stable `dev.zedb.app` identifier. The
+  script selects the valid Apple Development certificate with the latest
+  expiry, signs and verifies the bundle, then launches it.

@@ -1,0 +1,19 @@
+<clickhouse>
+    <remote_servers>
+        <zedb_cluster>
+            <shard>
+                <internal_replication>true</internal_replication>
+                <replica><host>clickhouse-1</host><port>9000</port></replica>
+                <replica><host>clickhouse-2</host><port>9000</port></replica>
+            </shard>
+        </zedb_cluster>
+    </remote_servers>
+    <zookeeper>
+        <node index="1"><host>keeper-1</host><port>9181</port></node>
+        <node index="2"><host>keeper-2</host><port>9181</port></node>
+        <node index="3"><host>keeper-3</host><port>9181</port></node>
+    </zookeeper>
+    <distributed_ddl><path>/clickhouse/task_queue/ddl</path></distributed_ddl>
+    <interserver_http_host>clickhouse-2</interserver_http_host>
+    <macros><shard>01</shard><replica>clickhouse-2</replica></macros>
+</clickhouse>
