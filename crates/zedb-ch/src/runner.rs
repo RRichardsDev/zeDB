@@ -56,6 +56,13 @@ pub enum Targets {
     All,
 }
 
+/// The outcome of resolving `Targets`: what runs, and what `All` skipped
+/// (database, exclusion group) so callers can say so out loud.
+pub struct ResolvedTargets {
+    pub databases: Vec<String>,
+    pub skipped: Vec<(String, String)>,
+}
+
 fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
 }
@@ -132,7 +139,8 @@ impl<'a> Runner<'a> {
             .collect()
     }
 
-    pub async fn target_databases(&self, targets: &Targets) -> Result<Vec<String>, RunnerError> {
+    /// Resolve targets without side effects; `All` reports skips.
+    pub async fn resolve_targets(&self, targets: &Targets) -> Result<ResolvedTargets, RunnerError> {
         match targets {
             Targets::Databases(databases) => {
                 let mut unique = Vec::new();
@@ -141,7 +149,10 @@ impl<'a> Runner<'a> {
                         unique.push(database.clone());
                     }
                 }
-                Ok(unique)
+                Ok(ResolvedTargets {
+                    databases: unique,
+                    skipped: Vec::new(),
+                })
             }
             Targets::Group(name) => {
                 let group = self.repo.exclusions.groups.get(name).ok_or_else(|| {
@@ -150,7 +161,10 @@ impl<'a> Runner<'a> {
                         "unknown group {name:?}; exclusions.toml defines: {known:?}"
                     ))
                 })?;
-                Ok(group.databases.clone())
+                Ok(ResolvedTargets {
+                    databases: group.databases.clone(),
+                    skipped: Vec::new(),
+                })
             }
             Targets::All => {
                 let query = self
@@ -176,6 +190,7 @@ impl<'a> Runner<'a> {
                     .filter_map(|row| row.first().map(|value| value.to_string()))
                     .collect();
                 databases.sort();
+                databases.dedup();
                 let skipped: Vec<(String, String)> = databases
                     .iter()
                     .filter_map(|database| {
@@ -186,18 +201,24 @@ impl<'a> Runner<'a> {
                             .map(|(_, group)| (database.clone(), group.to_string()))
                     })
                     .collect();
-                for (database, group) in &skipped {
-                    eprintln!(
-                        "skipping excluded database {database} (group {group}); target it with --db/--group"
-                    );
-                }
                 databases.retain(|database| !self.repo.exclusions.is_excluded(database));
                 if databases.is_empty() {
                     return Err(RunnerError::Repo("no databases discovered".into()));
                 }
-                Ok(databases)
+                Ok(ResolvedTargets { databases, skipped })
             }
         }
+    }
+
+    /// Resolve targets and announce anything `All` skipped.
+    pub async fn target_databases(&self, targets: &Targets) -> Result<Vec<String>, RunnerError> {
+        let resolved = self.resolve_targets(targets).await?;
+        for (database, group) in &resolved.skipped {
+            eprintln!(
+                "skipping excluded database {database} (group {group}); target it with --db/--group"
+            );
+        }
+        Ok(resolved.databases)
     }
 
     pub async fn ensure_tracking(&self) -> Result<(), RunnerError> {

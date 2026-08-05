@@ -164,3 +164,66 @@ async fn runner_walks_the_chain_on_a_real_server() {
         .unwrap();
     assert_eq!(meta.rows[0][0].to_string(), "1");
 }
+
+/// M6 done-condition: --all discovers from the registry query, skips
+/// exclusion groups out loud, and --group / --db still target them
+/// deliberately.
+#[tokio::test]
+async fn fleet_targeting_discovers_and_skips_exclusions() {
+    let Some(binary) = any_cached_binary() else {
+        eprintln!("skipping: no cached clickhouse binary (run `zedb pin`)");
+        return;
+    };
+    let server = EphemeralServer::start(&binary).unwrap();
+    let repo = MigrationRepo::open_root(&fixture()).unwrap();
+    let client = zedb_ch::ChClient::new(options(&server, true).server);
+    for database in ["demo_one", "demo_two", "demo_frozen"] {
+        client
+            .execute(&format!("CREATE DATABASE {database}"))
+            .await
+            .unwrap();
+    }
+
+    let runner = Runner::new(&repo, options(&server, true));
+    let resolved = runner.resolve_targets(&Targets::All).await.unwrap();
+    assert_eq!(resolved.databases, ["demo_one", "demo_two"]);
+    assert_eq!(
+        resolved.skipped,
+        [("demo_frozen".to_string(), "frozen".to_string())]
+    );
+
+    // --all upgrades only the non-excluded databases.
+    runner.upgrade(&Targets::All, None).await.unwrap();
+    let statuses = runner
+        .status(&dbs(&["demo_one", "demo_two", "demo_frozen"]))
+        .await
+        .unwrap();
+    assert_eq!(statuses[0].head, Some(100));
+    assert_eq!(statuses[1].head, Some(100));
+    assert_eq!(
+        statuses[2].head, None,
+        "excluded database must be untouched"
+    );
+
+    // --group targets the excluded database deliberately.
+    let group = runner
+        .resolve_targets(&Targets::Group("frozen".into()))
+        .await
+        .unwrap();
+    assert_eq!(group.databases, ["demo_frozen"]);
+    runner
+        .upgrade(&Targets::Group("frozen".into()), None)
+        .await
+        .unwrap();
+    let statuses = runner.status(&dbs(&["demo_frozen"])).await.unwrap();
+    assert_eq!(statuses[0].head, Some(100));
+
+    // An unknown group is a readable error.
+    let error = runner
+        .resolve_targets(&Targets::Group("nope".into()))
+        .await
+        .map(|resolved| resolved.databases)
+        .expect_err("unknown group")
+        .to_string();
+    assert!(error.contains("frozen"), "{error}");
+}
