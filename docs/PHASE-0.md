@@ -108,8 +108,9 @@ Done when: type query, run, see error or results; cancel a
 Wire M1 streaming into the M2 grid: results stream in and render
 incrementally, grid stays responsive on multi-million-row results, status
 bar shows rows read / bytes / elapsed (from ClickHouse progress headers).
-Guardrails: default row cap with explicit "stream more", so a careless
-`SELECT *` on a billion-row table degrades gracefully.
+Guardrails: a per-query-tab maximum row picker defaults to 100,000 rows,
+with 1,000, 10,000, 50,000, 1,000,000, and explicit Unlimited options, so a
+careless `SELECT *` on a billion-row table degrades gracefully.
 
 Done when: `SELECT * FROM <big staging table>` streams into the grid
 without jank, and progress/timing is live in the status bar.

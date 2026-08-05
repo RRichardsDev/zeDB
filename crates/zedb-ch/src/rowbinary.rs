@@ -9,6 +9,123 @@ use zedb_core::{ColumnMeta, QueryResult, Value};
 use crate::error::{ChError, Result};
 use crate::types::{parse_type, ChType};
 
+/// Incrementally decodes a `RowBinaryWithNamesAndTypes` response.
+///
+/// ClickHouse does not frame individual rows, so an incomplete row is retained
+/// until the next network chunk arrives. Complete rows are returned immediately.
+pub(crate) struct StreamingDecoder {
+    buffer: Vec<u8>,
+    columns: Option<Vec<ColumnMeta>>,
+    types: Vec<ChType>,
+}
+
+impl StreamingDecoder {
+    pub(crate) fn new() -> Self {
+        Self {
+            buffer: Vec::new(),
+            columns: None,
+            types: Vec::new(),
+        }
+    }
+
+    pub(crate) fn columns(&self) -> Option<&[ColumnMeta]> {
+        self.columns.as_deref()
+    }
+
+    pub(crate) fn push(&mut self, chunk: &[u8]) -> Result<Vec<Vec<Value>>> {
+        self.buffer.extend_from_slice(chunk);
+        if self.columns.is_none() && !self.try_decode_header()? {
+            return Ok(Vec::new());
+        }
+
+        let mut rows = Vec::new();
+        let mut consumed = 0;
+        loop {
+            let mut reader = Reader {
+                buf: &self.buffer,
+                pos: consumed,
+            };
+            let row_start = reader.pos;
+            let mut row = Vec::with_capacity(self.types.len());
+            for ty in &self.types {
+                match read_value(&mut reader, ty) {
+                    Ok(value) => row.push(value),
+                    Err(error) if is_incomplete(&error) => {
+                        self.buffer.drain(..consumed);
+                        return Ok(rows);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if reader.pos == row_start {
+                break;
+            }
+            consumed = reader.pos;
+            rows.push(row);
+            if consumed == self.buffer.len() {
+                break;
+            }
+        }
+        self.buffer.drain(..consumed);
+        Ok(rows)
+    }
+
+    pub(crate) fn finish(self) -> Result<()> {
+        if self.columns.is_none() {
+            return Err(ChError::Decode("response ended before its header".into()));
+        }
+        if !self.buffer.is_empty() {
+            return Err(ChError::Decode(format!(
+                "response ended with {} bytes of an incomplete row",
+                self.buffer.len()
+            )));
+        }
+        Ok(())
+    }
+
+    fn try_decode_header(&mut self) -> Result<bool> {
+        let mut reader = Reader {
+            buf: &self.buffer,
+            pos: 0,
+        };
+        let result = (|| {
+            let n_cols = reader.varuint()? as usize;
+            let mut names = Vec::with_capacity(n_cols);
+            for _ in 0..n_cols {
+                names.push(reader.string()?);
+            }
+            let mut type_names = Vec::with_capacity(n_cols);
+            let mut types = Vec::with_capacity(n_cols);
+            for _ in 0..n_cols {
+                let type_name = reader.string()?;
+                types.push(parse_type(&type_name)?);
+                type_names.push(type_name);
+            }
+            Ok::<_, ChError>((names, type_names, types))
+        })();
+
+        match result {
+            Ok((names, type_names, types)) => {
+                let columns = names
+                    .into_iter()
+                    .zip(type_names)
+                    .map(|(name, type_name)| ColumnMeta { name, type_name })
+                    .collect();
+                self.types = types;
+                self.columns = Some(columns);
+                self.buffer.drain(..reader.pos);
+                Ok(true)
+            }
+            Err(error) if is_incomplete(&error) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+fn is_incomplete(error: &ChError) -> bool {
+    matches!(error, ChError::Decode(message) if message.starts_with("unexpected end of data"))
+}
+
 pub fn decode(buf: &[u8]) -> Result<QueryResult> {
     let mut r = Reader { buf, pos: 0 };
     let n_cols = r.varuint()? as usize;
@@ -287,5 +404,39 @@ mod tests {
         let mut buf = header(&[("id", "UInt64")]);
         buf.extend_from_slice(&[1, 2, 3]); // only 3 of 8 bytes
         assert!(matches!(decode(&buf), Err(ChError::Decode(_))));
+    }
+
+    #[test]
+    fn streaming_decoder_handles_every_chunk_boundary() {
+        let mut buf = header(&[("id", "UInt64"), ("name", "String")]);
+        buf.extend_from_slice(&7u64.to_le_bytes());
+        buf.extend_from_slice(&[2, b'h', b'i']);
+        buf.extend_from_slice(&9u64.to_le_bytes());
+        buf.extend_from_slice(&[3, b'b', b'y', b'e']);
+
+        for split in 0..=buf.len() {
+            let mut decoder = StreamingDecoder::new();
+            let mut rows = decoder.push(&buf[..split]).unwrap();
+            rows.extend(decoder.push(&buf[split..]).unwrap());
+            assert_eq!(decoder.columns().unwrap()[0].name, "id");
+            decoder.finish().unwrap();
+            assert_eq!(
+                rows,
+                vec![
+                    vec![Value::UInt(7), Value::String("hi".into())],
+                    vec![Value::UInt(9), Value::String("bye".into())],
+                ],
+                "failed at chunk boundary {split}"
+            );
+        }
+    }
+
+    #[test]
+    fn streaming_decoder_rejects_truncated_final_row() {
+        let mut decoder = StreamingDecoder::new();
+        let mut buf = header(&[("id", "UInt64")]);
+        buf.extend_from_slice(&[1, 2, 3]);
+        assert!(decoder.push(&buf).unwrap().is_empty());
+        assert!(matches!(decoder.finish(), Err(ChError::Decode(_))));
     }
 }

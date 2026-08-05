@@ -8,6 +8,7 @@ use gpui::{
     actions, div, prelude::*, px, rgb, uniform_list, App, ClipboardItem, Context, FocusHandle,
     Focusable, KeyBinding, ListHorizontalSizingBehavior, UniformListScrollHandle, Window,
 };
+use zedb_core::{ColumnMeta, Value};
 
 use crate::theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, TEXT, TEXT_DIM};
 
@@ -20,6 +21,55 @@ const COL_WIDTH: f32 = 120.0;
 pub struct SyntheticTable {
     pub rows: usize,
     pub cols: usize,
+}
+
+enum TableData {
+    Synthetic(SyntheticTable),
+    Result {
+        columns: Vec<ColumnMeta>,
+        rows: Vec<Vec<Value>>,
+    },
+}
+
+impl TableData {
+    fn row_count(&self) -> usize {
+        match self {
+            Self::Synthetic(table) => table.rows,
+            Self::Result { rows, .. } => rows.len(),
+        }
+    }
+
+    fn column_count(&self) -> usize {
+        match self {
+            Self::Synthetic(table) => table.cols,
+            Self::Result { columns, .. } => columns.len(),
+        }
+    }
+
+    fn header(&self, column: usize) -> String {
+        match self {
+            Self::Synthetic(table) => table.header(column),
+            Self::Result { columns, .. } => columns
+                .get(column)
+                .map(|column| column.name.clone())
+                .unwrap_or_default(),
+        }
+    }
+
+    fn cell(&self, row: usize, column: usize) -> String {
+        match self {
+            Self::Synthetic(table) => table.cell(row, column),
+            Self::Result { rows, .. } => rows
+                .get(row)
+                .and_then(|row| row.get(column))
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        }
+    }
+
+    fn is_synthetic(&self) -> bool {
+        matches!(self, Self::Synthetic(_))
+    }
 }
 
 impl SyntheticTable {
@@ -48,7 +98,10 @@ impl SyntheticTable {
 }
 
 pub struct GridSpike {
-    table: SyntheticTable,
+    table: TableData,
+    requested_rows: Option<usize>,
+    result_complete: bool,
+    result_capped: bool,
     focus_handle: FocusHandle,
     scroll: UniformListScrollHandle,
     selected: Option<(usize, usize)>,
@@ -58,14 +111,48 @@ impl GridSpike {
     pub fn new(cx: &mut Context<Self>) -> Self {
         cx.bind_keys([KeyBinding::new("cmd-c", Copy, None)]);
         Self {
-            table: SyntheticTable {
+            table: TableData::Synthetic(SyntheticTable {
                 rows: 1_000_000,
                 cols: 50,
-            },
+            }),
+            requested_rows: None,
+            result_complete: false,
+            result_capped: false,
             focus_handle: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             selected: None,
         }
+    }
+
+    pub fn begin_result(
+        &mut self,
+        columns: Vec<ColumnMeta>,
+        requested_rows: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.table = TableData::Result {
+            columns,
+            rows: Vec::new(),
+        };
+        self.requested_rows = requested_rows;
+        self.result_complete = false;
+        self.result_capped = false;
+        self.selected = None;
+        self.scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    pub fn append_rows(&mut self, batch: Vec<Vec<Value>>, cx: &mut Context<Self>) {
+        if let TableData::Result { rows, .. } = &mut self.table {
+            rows.extend(batch);
+            cx.notify();
+        }
+    }
+
+    pub fn finish_result(&mut self, capped: bool, cx: &mut Context<Self>) {
+        self.result_complete = true;
+        self.result_capped = capped;
+        cx.notify();
     }
 
     fn copy_selected(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
@@ -77,7 +164,8 @@ impl GridSpike {
 
     /// Header outside the list, following the list's horizontal offset.
     fn header_row(&self, scroll_x: gpui::Pixels) -> impl IntoElement {
-        let cells: Vec<_> = (0..self.table.cols)
+        let column_count = self.table.column_count();
+        let cells: Vec<_> = (0..column_count)
             .map(|col| {
                 div()
                     .w(px(COL_WIDTH))
@@ -105,7 +193,7 @@ impl GridSpike {
                     .flex()
                     .h_full()
                     .ml(scroll_x)
-                    .w(px(COL_WIDTH * self.table.cols as f32))
+                    .w(px(COL_WIDTH * column_count as f32))
                     .children(cells),
             )
     }
@@ -119,12 +207,13 @@ impl Focusable for GridSpike {
 
 impl Render for GridSpike {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let cols = self.table.cols;
+        let cols = self.table.column_count();
+        let rows = self.table.row_count();
         let selected = self.selected;
 
         let list = uniform_list(
             "grid-rows",
-            self.table.rows,
+            rows,
             cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
                 range
                     .map(|row| {
@@ -165,6 +254,23 @@ impl Render for GridSpike {
         .h_full()
         .flex_grow();
 
+        let fetched = self.table.row_count();
+        let fetch_status = if self.table.is_synthetic() {
+            format!(
+                "{} rows x {} cols (synthetic)",
+                fetched,
+                self.table.column_count()
+            )
+        } else if self.result_capped {
+            format!(
+                "Fetched {fetched} of {} requested rows, more available",
+                self.requested_rows.unwrap_or(fetched)
+            )
+        } else if self.result_complete {
+            format!("Fetched {fetched} of {fetched} rows")
+        } else {
+            format!("Fetched {fetched} rows")
+        };
         let status = div()
             .h(px(24.))
             .flex_none()
@@ -177,10 +283,7 @@ impl Render for GridSpike {
             .border_color(rgb(BORDER))
             .text_xs()
             .text_color(rgb(TEXT_DIM))
-            .child(format!(
-                "{} rows x {} cols (synthetic)",
-                self.table.rows, self.table.cols
-            ))
+            .child(fetch_status)
             .child(match self.selected {
                 Some((r, c)) => format!("selected {r}:{c} (cmd-c copies)"),
                 None => "click a cell to select".to_string(),

@@ -4744,6 +4744,7 @@ dependencies = [
  "base64",
  "bytes",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -4763,12 +4764,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "webpki-roots",
 ]
@@ -7995,6 +7998,7 @@ name = "zedb-ch"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "futures-util",
  "reqwest",
  "tempfile",
  "thiserror 2.0.19",

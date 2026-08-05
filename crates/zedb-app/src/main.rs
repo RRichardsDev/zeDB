@@ -11,19 +11,22 @@ use std::{
 
 use gpui::{
     actions, div, point, prelude::*, px, rgb, rgba, size, svg, App, Application, AssetSource,
-    Bounds, ClipboardItem, Context, Entity, EntityInputHandler, IntoElement, KeyBinding,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, SharedString, TitlebarOptions,
-    Window, WindowBounds, WindowOptions,
+    Bounds, ClipboardItem, Context, Entity, EntityInputHandler, Focusable, IntoElement, KeyBinding,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, SharedString, Timer,
+    TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use gpui_component::{
+    button::Button,
     highlighter::HighlightTheme,
     input::{Input, InputState},
+    menu::{DropdownMenu, PopupMenu},
     scroll::ScrollableElement,
-    Root, Theme,
+    Disableable, Root, Theme,
 };
 use tokio::task::AbortHandle;
 use zedb_ch::{
-    ChClient, ChConfig, ColumnInfo, DatabaseMeta, ObjectDetails, SchemaObjectKind, SchemaObjectMeta,
+    ChClient, ChConfig, ColumnInfo, DatabaseMeta, ObjectDetails, QueryStreamEvent,
+    SchemaObjectKind, SchemaObjectMeta,
 };
 use zedb_core::{load_connections, save_connections, ConnectionConfig, EnvTier};
 
@@ -31,7 +34,52 @@ use components::text_input::{self, TextInput};
 use grid_spike::GridSpike;
 use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
 
-actions!(query_editor, [RunQuery]);
+actions!(
+    query_editor,
+    [
+        RunQuery,
+        MaxRows1k,
+        MaxRows10k,
+        MaxRows50k,
+        MaxRows100k,
+        MaxRows1m,
+        MaxRowsUnlimited
+    ]
+);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MaxRows {
+    Rows1k,
+    Rows10k,
+    Rows50k,
+    Rows100k,
+    Rows1m,
+    Unlimited,
+}
+
+impl MaxRows {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Rows1k => "1k",
+            Self::Rows10k => "10k",
+            Self::Rows50k => "50k",
+            Self::Rows100k => "100k",
+            Self::Rows1m => "1m",
+            Self::Unlimited => "Unlimited",
+        }
+    }
+
+    fn limit(self) -> Option<usize> {
+        match self {
+            Self::Rows1k => Some(1_000),
+            Self::Rows10k => Some(10_000),
+            Self::Rows50k => Some(50_000),
+            Self::Rows100k => Some(100_000),
+            Self::Rows1m => Some(1_000_000),
+            Self::Unlimited => None,
+        }
+    }
+}
 
 struct Assets;
 
@@ -114,6 +162,14 @@ enum ObjectInspectorTab {
 struct QueryTab {
     id: usize,
     editor: Entity<InputState>,
+    result_grid: Entity<GridSpike>,
+    result_columns: usize,
+    result_rows: usize,
+    has_result: bool,
+    max_rows: MaxRows,
+    result_capped: bool,
+    editor_height: f32,
+    status_height: f32,
     outcome: QueryOutcome,
     started_at: Option<Instant>,
     elapsed: Option<Duration>,
@@ -125,6 +181,12 @@ enum QueryOutcome {
     Complete { columns: usize, rows: usize },
     Error(String),
     Cancelled,
+}
+
+#[derive(Clone, Copy)]
+enum QueryResizeTarget {
+    Editor,
+    Status,
 }
 
 struct Workspace {
@@ -144,6 +206,8 @@ struct Workspace {
     schema_error: Option<String>,
     selected_schema_object: Option<SelectedSchemaObject>,
     notice: Option<String>,
+    notice_warning: bool,
+    notice_flash_id: u64,
     show_grid_spike: bool,
     sidebar_width: f32,
     resizing_sidebar: bool,
@@ -155,6 +219,7 @@ struct Workspace {
     show_query_editor: bool,
     query_abort: Option<AbortHandle>,
     query_run_id: u64,
+    query_resize: Option<(QueryResizeTarget, f32)>,
 }
 
 impl Workspace {
@@ -169,6 +234,14 @@ impl Workspace {
         let query_tabs = vec![QueryTab {
             id: 1,
             editor: query_editor,
+            result_grid: cx.new(GridSpike::new),
+            result_columns: 0,
+            result_rows: 0,
+            has_result: false,
+            max_rows: MaxRows::Rows100k,
+            result_capped: false,
+            editor_height: 220.0,
+            status_height: 52.0,
             outcome: QueryOutcome::Idle,
             started_at: None,
             elapsed: None,
@@ -191,6 +264,8 @@ impl Workspace {
                 schema_error: None,
                 selected_schema_object: None,
                 notice: None,
+                notice_warning: false,
+                notice_flash_id: 0,
                 show_grid_spike: false,
                 sidebar_width: 240.0,
                 resizing_sidebar: false,
@@ -202,6 +277,7 @@ impl Workspace {
                 show_query_editor: false,
                 query_abort: None,
                 query_run_id: 0,
+                query_resize: None,
             },
             Err(error) => Self {
                 grid,
@@ -220,6 +296,8 @@ impl Workspace {
                 schema_error: None,
                 selected_schema_object: None,
                 notice: Some(format!("Could not load connections: {error}")),
+                notice_warning: false,
+                notice_flash_id: 0,
                 show_grid_spike: false,
                 sidebar_width: 240.0,
                 resizing_sidebar: false,
@@ -231,6 +309,7 @@ impl Workspace {
                 show_query_editor: false,
                 query_abort: None,
                 query_run_id: 0,
+                query_resize: None,
             },
         }
     }
@@ -1672,6 +1751,14 @@ impl Workspace {
         self.query_tabs.push(QueryTab {
             id,
             editor,
+            result_grid: cx.new(GridSpike::new),
+            result_columns: 0,
+            result_rows: 0,
+            has_result: false,
+            max_rows: MaxRows::Rows100k,
+            result_capped: false,
+            editor_height: 220.0,
+            status_height: 52.0,
             outcome: QueryOutcome::Idle,
             started_at: None,
             elapsed: None,
@@ -1702,13 +1789,31 @@ impl Workspace {
         self.run_query(window, cx);
     }
 
+    fn flash_warning(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.notice = Some(message.into());
+        self.notice_warning = true;
+        self.notice_flash_id += 1;
+        let flash_id = self.notice_flash_id;
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_secs(1)).await;
+            this.update(cx, |this, cx| {
+                if this.notice_flash_id == flash_id {
+                    this.notice_warning = false;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.query_abort.is_some() {
             return;
         }
         let Some(connected) = &self.connected else {
-            self.notice = Some("Connect to a cluster before running a query".into());
-            cx.notify();
+            self.flash_warning("Connect to a cluster before running a query", cx);
             return;
         };
         let Some(editor) = self
@@ -1745,16 +1850,60 @@ impl Workspace {
 
         let tab_id = tab.id;
         tab.outcome = QueryOutcome::Running;
+        tab.result_columns = 0;
+        tab.result_rows = 0;
+        tab.has_result = false;
+        tab.result_capped = false;
         tab.started_at = Some(Instant::now());
         tab.elapsed = None;
         let config = connected.client_config.clone();
+        let row_limit = tab.max_rows.limit();
         self.query_run_id += 1;
         let run_id = self.query_run_id;
-        let task = rt::tokio().spawn(async move { ChClient::new(config).query(&sql).await });
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let task = rt::tokio().spawn(async move {
+            ChClient::new(config)
+                .query_stream(&sql, row_limit.unwrap_or(usize::MAX), |event| {
+                    let _ = sender.send(event);
+                })
+                .await
+        });
         self.query_abort = Some(task.abort_handle());
         cx.notify();
 
         cx.spawn(async move |this, cx| {
+            while let Some(event) = receiver.recv().await {
+                let keep_receiving = this
+                    .update(cx, |this, cx| {
+                        if this.query_run_id != run_id {
+                            return false;
+                        }
+                        let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id)
+                        else {
+                            return false;
+                        };
+                        match event {
+                            QueryStreamEvent::Columns(columns) => {
+                                tab.result_columns = columns.len();
+                                tab.has_result = true;
+                                tab.result_grid.update(cx, |grid, cx| {
+                                    grid.begin_result(columns, row_limit, cx)
+                                });
+                            }
+                            QueryStreamEvent::Rows(rows) => {
+                                tab.result_rows += rows.len();
+                                tab.result_grid
+                                    .update(cx, |grid, cx| grid.append_rows(rows, cx));
+                            }
+                        }
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep_receiving {
+                    break;
+                }
+            }
             let result = task.await;
             this.update(cx, |this, cx| {
                 if this.query_run_id != run_id {
@@ -1766,10 +1915,15 @@ impl Workspace {
                 };
                 tab.elapsed = tab.started_at.take().map(|started| started.elapsed());
                 tab.outcome = match result {
-                    Ok(Ok(result)) => QueryOutcome::Complete {
-                        columns: result.columns.len(),
-                        rows: result.rows.len(),
-                    },
+                    Ok(Ok(summary)) => {
+                        tab.result_capped = summary.capped;
+                        tab.result_grid
+                            .update(cx, |grid, cx| grid.finish_result(summary.capped, cx));
+                        QueryOutcome::Complete {
+                            columns: tab.result_columns,
+                            rows: tab.result_rows,
+                        }
+                    }
                     Ok(Err(error)) => QueryOutcome::Error(error.to_string()),
                     Err(error) => QueryOutcome::Error(error.to_string()),
                 };
@@ -1778,6 +1932,68 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    fn select_max_rows(&mut self, max_rows: MaxRows, cx: &mut Context<Self>) {
+        if let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) {
+            tab.max_rows = max_rows;
+        }
+        cx.notify();
+    }
+
+    fn max_rows_selector(&self, running: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = &self.query_tabs[self.active_query_tab];
+        let selected = active.max_rows;
+        let action_context = active.editor.focus_handle(cx);
+        Button::new("query-max-rows")
+            .label(format!("Max rows: {}", selected.label()))
+            .dropdown_caret(true)
+            .compact()
+            .outline()
+            .disabled(running)
+            .dropdown_menu(move |menu: PopupMenu, _, _| {
+                menu.action_context(action_context.clone())
+                    .min_w(px(164.))
+                    .menu("1,000", Box::new(MaxRows1k))
+                    .menu("10,000", Box::new(MaxRows10k))
+                    .menu("50,000", Box::new(MaxRows50k))
+                    .menu("100,000", Box::new(MaxRows100k))
+                    .menu("1,000,000", Box::new(MaxRows1m))
+                    .menu("Unlimited", Box::new(MaxRowsUnlimited))
+            })
+    }
+
+    fn query_resize_handle(
+        &self,
+        id: &'static str,
+        target: QueryResizeTarget,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .h(px(8.))
+            .w_full()
+            .mt(px(-4.))
+            .mb(px(-4.))
+            .flex_none()
+            .relative()
+            .cursor_row_resize()
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(3.))
+                    .h(px(1.))
+                    .bg(rgb(BORDER)),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.query_resize = Some((target, f32::from(event.position.y)));
+                    cx.notify();
+                }),
+            )
     }
 
     fn cancel_query(&mut self, cx: &mut Context<Self>) {
@@ -2423,11 +2639,20 @@ impl Workspace {
             .get(self.active_query_tab)
             .expect("query editor requires an active tab");
         let running = matches!(active.outcome, QueryOutcome::Running);
+        let has_result = active.has_result;
+        let result_capped = active.result_capped;
+        let editor_height = active.editor_height;
+        let status_height = active.status_height;
+        let result_grid = active.result_grid.clone();
         let status = match &active.outcome {
             QueryOutcome::Idle => "Ready".to_string(),
-            QueryOutcome::Running => "Running query...".to_string(),
+            QueryOutcome::Running => format!("Running: {} row(s)", active.result_rows),
             QueryOutcome::Complete { columns, rows } => {
-                format!("Complete: {rows} row(s), {columns} column(s). Results arrive in M7.")
+                if result_capped {
+                    format!("Showing first {rows} row(s), {columns} column(s)")
+                } else {
+                    format!("Complete: {rows} row(s), {columns} column(s)")
+                }
             }
             QueryOutcome::Error(error) => error.clone(),
             QueryOutcome::Cancelled => "Query cancelled".to_string(),
@@ -2471,6 +2696,7 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap_2()
+                            .child(self.max_rows_selector(running, cx))
                             .child(
                                 div()
                                     .id("cancel-query")
@@ -2513,7 +2739,8 @@ impl Workspace {
             )
             .child(
                 div()
-                    .flex_1()
+                    .when(!has_result, |editor| editor.flex_1())
+                    .when(has_result, |editor| editor.h(px(editor_height)).flex_none())
                     .min_h_0()
                     .relative()
                     .bg(rgb(BG))
@@ -2537,10 +2764,31 @@ impl Workspace {
                             .border_color(rgb(0x2b3037)),
                     ),
             )
+            .when(has_result, |panel| {
+                panel.child(self.query_resize_handle(
+                    "query-editor-resize-handle",
+                    QueryResizeTarget::Editor,
+                    cx,
+                ))
+            })
+            .when(has_result, |panel| {
+                panel.child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .border_t_1()
+                        .border_color(rgb(BORDER))
+                        .child(result_grid),
+                )
+            })
+            .child(self.query_resize_handle(
+                "query-status-resize-handle",
+                QueryResizeTarget::Status,
+                cx,
+            ))
             .child(
                 div()
-                    .min_h(px(34.))
-                    .max_h(px(112.))
+                    .h(px(status_height))
                     .flex_none()
                     .px_3()
                     .py_2()
@@ -2623,7 +2871,11 @@ impl Workspace {
             .items_center()
             .justify_between()
             .text_xs()
-            .text_color(rgb(TEXT_DIM))
+            .text_color(rgb(if self.notice_warning {
+                DANGER
+            } else {
+                TEXT_DIM
+            }))
             .child(status)
             .child(concat!("zedb ", env!("CARGO_PKG_VERSION"), " | M4"))
     }
@@ -2640,6 +2892,28 @@ impl Render for Workspace {
             .font_family("Menlo")
             .text_sm()
             .on_action(cx.listener(Self::run_query_action))
+            .on_action(
+                cx.listener(|this, _: &MaxRows1k, _, cx| this.select_max_rows(MaxRows::Rows1k, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &MaxRows10k, _, cx| {
+                    this.select_max_rows(MaxRows::Rows10k, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &MaxRows50k, _, cx| {
+                    this.select_max_rows(MaxRows::Rows50k, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &MaxRows100k, _, cx| {
+                this.select_max_rows(MaxRows::Rows100k, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &MaxRows1m, _, cx| this.select_max_rows(MaxRows::Rows1m, cx)),
+            )
+            .on_action(cx.listener(|this, _: &MaxRowsUnlimited, _, cx| {
+                this.select_max_rows(MaxRows::Unlimited, cx)
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.resizing_sidebar {
                     this.sidebar_width = f32::from(event.position.x).clamp(180.0, 480.0);
@@ -2652,12 +2926,29 @@ impl Render for Workspace {
                         (f32::from(event.position.y) - 36.0).clamp(140.0, maximum);
                     cx.notify();
                 }
+                if let Some((target, last_y)) = this.query_resize {
+                    let current_y = f32::from(event.position.y);
+                    let delta = current_y - last_y;
+                    if let Some(tab) = this.query_tabs.get_mut(this.active_query_tab) {
+                        match target {
+                            QueryResizeTarget::Editor => {
+                                tab.editor_height = (tab.editor_height + delta).clamp(80.0, 720.0);
+                            }
+                            QueryResizeTarget::Status => {
+                                tab.status_height = (tab.status_height - delta).clamp(34.0, 240.0);
+                            }
+                        }
+                    }
+                    this.query_resize = Some((target, current_y));
+                    cx.notify();
+                }
             }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _, _| {
                     this.resizing_sidebar = false;
                     this.resizing_sidebar_sections = false;
+                    this.query_resize = None;
                 }),
             )
             .on_mouse_up_out(
@@ -2665,6 +2956,7 @@ impl Render for Workspace {
                 cx.listener(|this, _: &MouseUpEvent, _, _| {
                     this.resizing_sidebar = false;
                     this.resizing_sidebar_sections = false;
+                    this.query_resize = None;
                 }),
             )
             .child(self.title_bar())
@@ -2741,12 +3033,17 @@ fn format_query_duration(duration: Duration) -> String {
 
 fn configure_component_theme(cx: &mut App) {
     let theme = Theme::global_mut(cx);
-    theme.font_family = "Berkeley Mono".into();
-    theme.mono_font_family = "Berkeley Mono".into();
+    theme.font_family = "Menlo".into();
+    theme.mono_font_family = "Menlo".into();
     theme.font_size = px(14.);
     theme.mono_font_size = px(14.);
     theme.colors.background = rgb(BG).into();
     theme.colors.foreground = rgb(TEXT).into();
+    theme.colors.popover = rgb(BG_SIDEBAR).into();
+    theme.colors.popover_foreground = rgb(TEXT_DIM).into();
+    theme.colors.accent = rgb(0x303640).into();
+    theme.colors.accent_foreground = rgb(TEXT).into();
+    theme.colors.secondary_foreground = rgb(TEXT_DIM).into();
     theme.colors.border = rgb(BORDER).into();
     theme.colors.input = rgb(BORDER).into();
     theme.colors.muted = rgb(BG_SIDEBAR).into();

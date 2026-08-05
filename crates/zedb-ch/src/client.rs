@@ -1,8 +1,11 @@
 //! Minimal ClickHouse HTTP client.
 //!
-//! Whole-response buffering for now; streaming decode arrives in M7.
+//! Schema queries can be materialized, while result queries can be decoded in
+//! incremental batches as their HTTP body arrives.
 
+use futures_util::StreamExt;
 use zedb_core::QueryResult;
+use zedb_core::{ColumnMeta, Value};
 
 use crate::error::{ChError, Result};
 use crate::rowbinary;
@@ -26,6 +29,18 @@ pub struct ChClient {
     http: reqwest::Client,
 }
 
+#[derive(Debug)]
+pub enum QueryStreamEvent {
+    Columns(Vec<ColumnMeta>),
+    Rows(Vec<Vec<Value>>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueryStreamSummary {
+    pub rows: usize,
+    pub capped: bool,
+}
+
 impl ChClient {
     pub fn new(cfg: ChConfig) -> Self {
         Self {
@@ -40,6 +55,82 @@ impl ChClient {
             .request(sql, &[("default_format", "RowBinaryWithNamesAndTypes")])
             .await?;
         rowbinary::decode(&body)
+    }
+
+    /// Run a query and report decoded columns and rows as soon as complete
+    /// values arrive from ClickHouse. Aborting the caller's task cancels the
+    /// underlying HTTP request.
+    pub async fn query_stream(
+        &self,
+        sql: &str,
+        row_limit: usize,
+        mut on_event: impl FnMut(QueryStreamEvent),
+    ) -> Result<QueryStreamSummary> {
+        let mut request = self
+            .http
+            .post(&self.cfg.url)
+            .header("X-ClickHouse-User", &self.cfg.user)
+            .body(sql.to_string());
+        if let Some(password) = &self.cfg.password {
+            request = request.header("X-ClickHouse-Key", password);
+        }
+        if let Some(database) = &self.cfg.database {
+            request = request.query(&[("database", database.as_str())]);
+        }
+        if self.cfg.read_only {
+            request = request.query(&[("readonly", "2")]);
+        }
+        request = request.query(&[("default_format", "RowBinaryWithNamesAndTypes")]);
+
+        let response = request.send().await?;
+        let status = response.status();
+        let code = response
+            .headers()
+            .get("X-ClickHouse-Exception-Code")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse().ok());
+        if !status.is_success() {
+            let bytes = response.bytes().await?;
+            return Err(ChError::Server {
+                code,
+                message: String::from_utf8_lossy(&bytes).trim().to_string(),
+            });
+        }
+
+        let mut decoder = rowbinary::StreamingDecoder::new();
+        let mut sent_columns = false;
+        let mut sent_rows = 0;
+        let mut body = response.bytes_stream();
+        while let Some(chunk) = body.next().await {
+            let mut rows = decoder.push(&chunk?)?;
+            if !sent_columns {
+                if let Some(columns) = decoder.columns() {
+                    on_event(QueryStreamEvent::Columns(columns.to_vec()));
+                    sent_columns = true;
+                }
+            }
+            if !rows.is_empty() {
+                let remaining = row_limit.saturating_sub(sent_rows);
+                if rows.len() > remaining {
+                    rows.truncate(remaining);
+                    if !rows.is_empty() {
+                        sent_rows += rows.len();
+                        on_event(QueryStreamEvent::Rows(rows));
+                    }
+                    return Ok(QueryStreamSummary {
+                        rows: sent_rows,
+                        capped: true,
+                    });
+                }
+                sent_rows += rows.len();
+                on_event(QueryStreamEvent::Rows(rows));
+            }
+        }
+        decoder.finish()?;
+        Ok(QueryStreamSummary {
+            rows: sent_rows,
+            capped: false,
+        })
     }
 
     /// Run a statement, discarding any output (DDL, INSERT, SET, ...).

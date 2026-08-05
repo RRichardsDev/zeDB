@@ -13,7 +13,8 @@ zedb-core = { path = "crates/zedb-core" }
 zedb-ch = { path = "crates/zedb-ch" }
 gpui = "0.2.2"
 chrono = "0.4"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+futures-util = "0.3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
