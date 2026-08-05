@@ -14,6 +14,26 @@ struct Workspace {
 }
 
 impl Workspace {
+    /// Full-width top bar; the transparent native titlebar overlays it, so
+    /// it is also the window drag area. Left padding clears the traffic
+    /// lights.
+    fn title_bar(&self) -> impl IntoElement {
+        div()
+            .h(px(36.))
+            .flex_none()
+            .w_full()
+            .bg(rgb(BG_SIDEBAR))
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .flex()
+            .items_center()
+            .pl(px(80.))
+            .pr_3()
+            .text_sm()
+            .text_color(rgb(TEXT_DIM))
+            .child("zeDB")
+    }
+
     fn sidebar(&self) -> impl IntoElement {
         div()
             .w(px(240.))
@@ -22,18 +42,10 @@ impl Workspace {
             .bg(rgb(BG_SIDEBAR))
             .border_r_1()
             .border_color(rgb(BORDER))
-            .flex()
-            .flex_col()
-            // Clear the overlaid traffic lights; this strip doubles as the
-            // window drag area.
-            .child(div().h(px(36.)).flex_none())
-            .child(
-                div()
-                    .p_3()
-                    .text_sm()
-                    .text_color(rgb(TEXT_DIM))
-                    .child("connections"),
-            )
+            .p_3()
+            .text_sm()
+            .text_color(rgb(TEXT_DIM))
+            .child("connections")
     }
 
     fn status_bar(&self) -> impl IntoElement {
@@ -66,10 +78,12 @@ impl Render for Workspace {
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
             .font_family("Menlo")
+            .child(self.title_bar())
             .child(
                 div()
                     .flex_1()
                     .w_full()
+                    .min_h_0()
                     .flex()
                     .child(self.sidebar())
                     .child(div().flex_1().h_full().min_w_0().child(self.grid.clone())),
