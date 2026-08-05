@@ -293,3 +293,24 @@ Status: implementation complete, awaiting UI acceptance.
   mostly window/tab management (surfaced via the unsupported-action notice)
   and `:substitute` is not yet implemented upstream; both cases surface an
   explicit message instead of silently doing nothing.
+
+## Phase 1 M0-M3: format, repo model, pin, regen (2026-08-05)
+
+- Format v1 decided in FORMAT.md; repo model and zedb CLI (init, new, ls,
+  show) landed with fixture-backed tests; pinned binary management caches
+  per version under the platform cache dir and downloads from the official
+  GitHub release assets (both channels tried; the app binary was renamed
+  zedb-app to give the zedb name to the CLI).
+- The replay module ports canonical.py: statement splitting, declustering,
+  access-control stripping, multi-side isolated clickhouse-local replays,
+  canonical dumps, sentinel round-tripping. Verified against the real
+  pinned 26.3.12.3 binary.
+- regen ports regen.py onto format v1: text tracking (CREATE/DROP/GRANT/
+  REVOKE/RENAME with attached comments), generalized scopes (hardcoded
+  global/org became config-driven), shared databases discovered from the
+  chain instead of hardcoded, the dependency bump pass, and the
+  three-replay canonical phase with self-verifying synthesis. ON CLUSTER
+  now only travels where a file declared it, so unclustered repos never
+  gain the clause. Demonstrated live: ALTER rewrites exactly one file
+  canonically, data-only migrations cause zero churn, reruns are
+  byte-stable, and regen --check catches hand edits.

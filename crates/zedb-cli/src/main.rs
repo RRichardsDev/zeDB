@@ -54,6 +54,12 @@ enum Command {
         #[arg(long = "version", id = "pin_version")]
         pin_version: Option<String>,
     },
+    /// Regenerate current-state/ by replaying the migration chain.
+    Regen {
+        /// Verify the committed tree matches instead of writing (CI mode).
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -180,6 +186,53 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             println!("pinned: ClickHouse {version} at {}", binary.display());
             Ok(())
+        }
+        Command::Regen { check } => {
+            let repo = MigrationRepo::open(&cli.repo).map_err(|error| error.to_string())?;
+            let version = &repo.config.engine.version;
+            let binary = zedb_ch::cached_binary(version).ok_or_else(|| {
+                format!("pinned ClickHouse {version} is not cached; run `zedb pin` first")
+            })?;
+            let regenerator = zedb_ch::regen::Regenerator::new(&repo, binary);
+            let files = regenerator
+                .regenerate()
+                .map_err(|error| error.to_string())?;
+            if check {
+                let problems =
+                    zedb_ch::regen::diff_tree(&repo, &files).map_err(|error| error.to_string())?;
+                if problems.is_empty() {
+                    println!(
+                        "current-state/ matches the migration chain ({} files)",
+                        files.len()
+                    );
+                    Ok(())
+                } else {
+                    for problem in &problems {
+                        eprintln!("{problem}");
+                    }
+                    Err(format!(
+                        "current-state/ is out of date ({} problem(s)); run `zedb regen`",
+                        problems.len()
+                    ))
+                }
+            } else {
+                let (changed, removed) =
+                    zedb_ch::regen::write_tree(&repo, &files).map_err(|error| error.to_string())?;
+                for path in &changed {
+                    println!("wrote {}", path.display());
+                }
+                for path in &removed {
+                    println!("removed {}", path.display());
+                }
+                println!(
+                    "current-state/: {} files ({} written, {} removed, {} unchanged)",
+                    files.len(),
+                    changed.len(),
+                    removed.len(),
+                    files.len() - changed.len()
+                );
+                Ok(())
+            }
         }
     }
 }
