@@ -216,10 +216,8 @@ impl VimController {
                 self.commit_on_input = true;
                 return Some(pair);
             }
-            match self.keystack.pop_front() {
-                Some(key) => self.machine.input_key(key),
-                None => return None,
-            }
+            let key = self.keystack.pop_front()?;
+            self.machine.input_key(key);
         }
     }
 
