@@ -143,3 +143,20 @@ Status: implementation complete, awaiting UI acceptance.
   matching application, team, and Keychain access-group entitlements. Passwords
   live in the data-protection Keychain with user-presence access control. Raw
   `cargo run` builds must not be used for credential testing.
+
+## M5: object inspector (2026-08-05)
+
+Status: implementation complete, awaiting UI acceptance.
+
+- Selecting a schema object loads its columns and `system.tables` details in
+  parallel without blocking GPUI.
+- The inspector keeps the compact object identity header visible and separates
+  metadata into Overview, Columns, and DDL tabs.
+- Overview exposes the full engine definition, partition key, order-by key,
+  primary key, row count, and stored size. Empty keys are shown explicitly.
+- Columns retain a fixed header and independent scrolling. DDL is read-only,
+  line-numbered, scrollable, and can be copied. SQL highlighting remains M8
+  work as planned.
+- M8 must use one Tree-sitter SQL rendering path for the query editor, full DDL
+  documents, and engine-definition fragments. The engine block wraps in M5 so
+  its content never depends on a hidden horizontal scrollbar.

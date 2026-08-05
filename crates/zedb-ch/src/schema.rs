@@ -41,6 +41,15 @@ pub struct ColumnInfo {
     pub type_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectDetails {
+    pub engine_full: String,
+    pub partition_key: String,
+    pub sorting_key: String,
+    pub primary_key: String,
+    pub create_table_query: String,
+}
+
 impl ChClient {
     pub async fn list_databases(&self) -> Result<Vec<DatabaseMeta>> {
         let result = self
@@ -82,6 +91,20 @@ impl ChClient {
             ))
             .await?;
         parse_columns(result)
+    }
+
+    pub async fn object_details(&self, database: &str, object: &str) -> Result<ObjectDetails> {
+        let database = escape_string(database);
+        let object = escape_string(object);
+        let result = self
+            .query(&format!(
+                "SELECT engine_full, partition_key, sorting_key, primary_key, \
+                        formatQuery(create_table_query) \
+                 FROM system.tables \
+                 WHERE database = '{database}' AND name = '{object}'"
+            ))
+            .await?;
+        parse_object_details(result)
     }
 }
 
@@ -139,6 +162,25 @@ fn parse_columns(result: QueryResult) -> Result<Vec<ColumnInfo>> {
             })
         })
         .collect()
+}
+
+fn parse_object_details(result: QueryResult) -> Result<ObjectDetails> {
+    let mut rows = result.rows.into_iter();
+    let row = rows
+        .next()
+        .ok_or_else(|| ChError::Decode("schema object no longer exists".into()))?;
+    if rows.next().is_some() {
+        return Err(ChError::Decode(
+            "expected one schema object details row".into(),
+        ));
+    }
+    Ok(ObjectDetails {
+        engine_full: string_at(&row, 0, "engine definition")?,
+        partition_key: string_at(&row, 1, "partition key")?,
+        sorting_key: string_at(&row, 2, "sorting key")?,
+        primary_key: string_at(&row, 3, "primary key")?,
+        create_table_query: string_at(&row, 4, "create table query")?,
+    })
 }
 
 fn string_at(row: &[Value], index: usize, label: &str) -> Result<String> {
@@ -202,5 +244,22 @@ mod tests {
     #[test]
     fn escapes_clickhouse_string_literals() {
         assert_eq!(escape_string("a'b\\c"), "a\\'b\\\\c");
+    }
+
+    #[test]
+    fn parses_object_details() {
+        let details = parse_object_details(result(vec![vec![
+            Value::String("MergeTree ORDER BY id".into()),
+            Value::String("toYYYYMM(created_at)".into()),
+            Value::String("id".into()),
+            Value::String("id".into()),
+            Value::String("CREATE TABLE events (id UInt64) ENGINE = MergeTree ORDER BY id".into()),
+        ]]))
+        .unwrap();
+
+        assert_eq!(details.sorting_key, "id");
+        assert!(details
+            .create_table_query
+            .starts_with("CREATE TABLE events"));
     }
 }

@@ -16,5 +16,5 @@ mod types;
 
 pub use client::{ChClient, ChConfig};
 pub use error::{ChError, Result};
-pub use schema::{ColumnInfo, DatabaseMeta, SchemaObjectKind, SchemaObjectMeta};
+pub use schema::{ColumnInfo, DatabaseMeta, ObjectDetails, SchemaObjectKind, SchemaObjectMeta};
 pub use types::{parse_type, ChType};

@@ -6,11 +6,13 @@ mod theme;
 use std::{borrow::Cow, collections::HashMap};
 
 use gpui::{
-    div, point, prelude::*, px, rgb, size, svg, App, Application, AssetSource, Bounds, Context,
-    Entity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, SharedString,
-    TitlebarOptions, Window, WindowBounds, WindowOptions,
+    div, point, prelude::*, px, rgb, size, svg, App, Application, AssetSource, Bounds,
+    ClipboardItem, Context, Entity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
-use zedb_ch::{ChClient, ChConfig, ColumnInfo, DatabaseMeta, SchemaObjectKind, SchemaObjectMeta};
+use zedb_ch::{
+    ChClient, ChConfig, ColumnInfo, DatabaseMeta, ObjectDetails, SchemaObjectKind, SchemaObjectMeta,
+};
 use zedb_core::{load_connections, save_connections, ConnectionConfig, EnvTier};
 
 use components::text_input::{self, TextInput};
@@ -83,7 +85,16 @@ struct SelectedSchemaObject {
     object: SchemaObjectMeta,
     loading: bool,
     columns: Vec<ColumnInfo>,
+    details: Option<ObjectDetails>,
+    tab: ObjectInspectorTab,
     error: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ObjectInspectorTab {
+    Overview,
+    Columns,
+    Ddl,
 }
 
 struct Workspace {
@@ -1266,6 +1277,8 @@ impl Workspace {
             object,
             loading: true,
             columns: Vec::new(),
+            details: None,
+            tab: ObjectInspectorTab::Overview,
             error: None,
         });
         self.show_grid_spike = false;
@@ -1275,9 +1288,11 @@ impl Workspace {
             let database_name = database_name.clone();
             let object_name = object_name.clone();
             async move {
-                ChClient::new(config)
-                    .list_columns(&database_name, &object_name)
-                    .await
+                let client = ChClient::new(config);
+                tokio::join!(
+                    client.list_columns(&database_name, &object_name),
+                    client.object_details(&database_name, &object_name)
+                )
             }
         });
         cx.spawn(async move |this, cx| {
@@ -1296,8 +1311,13 @@ impl Workspace {
                 }
                 selected.loading = false;
                 match result {
-                    Ok(Ok(columns)) => selected.columns = columns,
-                    Ok(Err(error)) => selected.error = Some(error.to_string()),
+                    Ok((Ok(columns), Ok(details))) => {
+                        selected.columns = columns;
+                        selected.details = Some(details);
+                    }
+                    Ok((Err(error), _)) | Ok((_, Err(error))) => {
+                        selected.error = Some(error.to_string());
+                    }
                     Err(error) => selected.error = Some(error.to_string()),
                 }
                 cx.notify();
@@ -1707,7 +1727,7 @@ impl Workspace {
         }
     }
 
-    fn schema_object_panel(&self) -> impl IntoElement {
+    fn schema_object_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self
             .selected_schema_object
             .as_ref()
@@ -1747,6 +1767,277 @@ impl Workspace {
                     )
             })
             .collect::<Vec<_>>();
+
+        let loading = selected.loading;
+        let error = selected.error.clone();
+        let details = selected.details.clone();
+        let tab = selected.tab;
+        let tab_bar = div()
+            .h(px(34.))
+            .flex_none()
+            .px_3()
+            .flex()
+            .items_end()
+            .gap_4()
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .children(
+                [
+                    (ObjectInspectorTab::Overview, "Overview"),
+                    (ObjectInspectorTab::Columns, "Columns"),
+                    (ObjectInspectorTab::Ddl, "DDL"),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (button_tab, label))| {
+                    div()
+                        .id(("object-inspector-tab", index))
+                        .h_full()
+                        .px_1()
+                        .flex()
+                        .items_center()
+                        .border_b_2()
+                        .when(tab == button_tab, |button| {
+                            button.border_color(rgb(0x6f8fac)).text_color(rgb(TEXT))
+                        })
+                        .when(tab != button_tab, |button| {
+                            button
+                                .border_color(rgb(BG))
+                                .text_color(rgb(TEXT_DIM))
+                                .hover(|button| button.text_color(rgb(TEXT)).cursor_pointer())
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(selected) = &mut this.selected_schema_object {
+                                selected.tab = button_tab;
+                                cx.notify();
+                            }
+                        }))
+                        .child(label)
+                }),
+            );
+
+        let content = match tab {
+            ObjectInspectorTab::Overview => {
+                let engine_definition = details.as_ref().map(|details| details.engine_full.clone());
+                let metadata = details.as_ref().map(|details| {
+                    [
+                        ("Partition key", details.partition_key.clone()),
+                        ("Order by", details.sorting_key.clone()),
+                        ("Primary key", details.primary_key.clone()),
+                    ]
+                    .into_iter()
+                    .map(|(label, value)| {
+                        div()
+                            .py_3()
+                            .border_b_1()
+                            .border_color(rgb(BORDER))
+                            .flex()
+                            .gap_4()
+                            .child(
+                                div()
+                                    .w(px(150.))
+                                    .flex_none()
+                                    .text_color(rgb(TEXT_DIM))
+                                    .child(label),
+                            )
+                            .child(div().flex_1().min_w_0().text_color(rgb(TEXT)).child(
+                                if value.is_empty() {
+                                    "None".to_string()
+                                } else {
+                                    value
+                                },
+                            ))
+                    })
+                    .collect::<Vec<_>>()
+                });
+                div().flex_1().min_h_0().child(
+                    div()
+                        .id("object-overview")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .px_4()
+                        .py_2()
+                        .when(loading, |panel| {
+                            panel.child(
+                                div()
+                                    .py_3()
+                                    .text_color(rgb(TEXT_DIM))
+                                    .child("Loading details..."),
+                            )
+                        })
+                        .when_some(error.as_ref(), |panel, error| {
+                            panel.child(div().py_3().text_color(rgb(DANGER)).child(error.clone()))
+                        })
+                        .when_some(engine_definition, |panel, engine| {
+                            panel.child(
+                                div()
+                                    .py_3()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(
+                                        div().text_color(rgb(TEXT_DIM)).child("Engine definition"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("engine-definition")
+                                            .w_full()
+                                            .px_3()
+                                            .py_2()
+                                            .rounded(px(3.))
+                                            .border_1()
+                                            .border_color(rgb(BORDER))
+                                            .bg(rgb(0x191c21))
+                                            .whitespace_normal()
+                                            .text_color(rgb(TEXT))
+                                            .child(engine),
+                                    ),
+                            )
+                        })
+                        .when_some(metadata, |panel, rows| panel.children(rows)),
+                )
+            }
+            ObjectInspectorTab::Columns => div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .h(px(28.))
+                        .flex_none()
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .bg(rgb(BG_SIDEBAR))
+                        .border_b_1()
+                        .border_color(rgb(BORDER))
+                        .text_xs()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(div().w_1_3().child("COLUMN"))
+                        .child(div().flex_1().child("TYPE")),
+                )
+                .child(
+                    div()
+                        .id("schema-columns")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .when(loading, |columns| {
+                            columns.child(
+                                div()
+                                    .p_3()
+                                    .text_color(rgb(TEXT_DIM))
+                                    .child("Loading columns..."),
+                            )
+                        })
+                        .when_some(error.as_ref(), |columns, error| {
+                            columns.child(div().p_3().text_color(rgb(DANGER)).child(error.clone()))
+                        })
+                        .when(
+                            !loading && error.is_none() && selected.columns.is_empty(),
+                            |columns| {
+                                columns.child(
+                                    div().p_3().text_color(rgb(TEXT_DIM)).child("No columns"),
+                                )
+                            },
+                        )
+                        .children(column_rows),
+                ),
+            ObjectInspectorTab::Ddl => {
+                let ddl = details
+                    .as_ref()
+                    .map(|details| details.create_table_query.clone())
+                    .unwrap_or_default();
+                let clipboard_ddl = ddl.clone();
+                let lines = ddl
+                    .lines()
+                    .enumerate()
+                    .map(|(index, line)| {
+                        div()
+                            .id(("ddl-line", index))
+                            .min_h(px(22.))
+                            .flex()
+                            .whitespace_nowrap()
+                            .child(
+                                div()
+                                    .w(px(42.))
+                                    .pr_3()
+                                    .flex_none()
+                                    .text_right()
+                                    .text_color(rgb(0x5f6672))
+                                    .child((index + 1).to_string()),
+                            )
+                            .child(div().flex_1().min_w_0().child(line.to_string()))
+                    })
+                    .collect::<Vec<_>>();
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .h(px(34.))
+                            .flex_none()
+                            .px_3()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .border_b_1()
+                            .border_color(rgb(BORDER))
+                            .child(
+                                div()
+                                    .id("copy-object-ddl")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(3.))
+                                    .text_xs()
+                                    .text_color(rgb(TEXT_DIM))
+                                    .when(!ddl.is_empty(), |button| {
+                                        button
+                                            .hover(|button| {
+                                                button
+                                                    .bg(rgb(BG_SIDEBAR))
+                                                    .text_color(rgb(TEXT))
+                                                    .cursor_pointer()
+                                            })
+                                            .on_click(cx.listener(move |_, _, _, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    clipboard_ddl.clone(),
+                                                ));
+                                            }))
+                                    })
+                                    .child("Copy DDL"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("object-ddl")
+                            .flex_1()
+                            .min_h_0()
+                            .m_3()
+                            .overflow_scroll()
+                            .p_3()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(rgb(0x191c21))
+                            .text_color(rgb(TEXT))
+                            .when(loading, |panel| panel.child("Loading DDL..."))
+                            .when_some(error.as_ref(), |panel, error| {
+                                panel.child(div().text_color(rgb(DANGER)).child(error.clone()))
+                            })
+                            .when(!loading && error.is_none() && ddl.is_empty(), |panel| {
+                                panel
+                                    .child(div().text_color(rgb(TEXT_DIM)).child("DDL unavailable"))
+                            })
+                            .children(lines),
+                    )
+            }
+        };
 
         div()
             .size_full()
@@ -1800,48 +2091,8 @@ impl Workspace {
                             }),
                     ),
             )
-            .child(
-                div()
-                    .h(px(28.))
-                    .flex_none()
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .bg(rgb(BG_SIDEBAR))
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .text_xs()
-                    .text_color(rgb(TEXT_DIM))
-                    .child(div().w_1_3().child("COLUMN"))
-                    .child(div().flex_1().child("TYPE")),
-            )
-            .child(
-                div()
-                    .id("schema-columns")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .when(selected.loading, |columns| {
-                        columns.child(
-                            div()
-                                .p_3()
-                                .text_color(rgb(TEXT_DIM))
-                                .child("Loading columns..."),
-                        )
-                    })
-                    .when_some(selected.error.as_ref(), |columns, error| {
-                        columns.child(div().p_3().text_color(rgb(DANGER)).child(error.clone()))
-                    })
-                    .when(
-                        !selected.loading
-                            && selected.error.is_none()
-                            && selected.columns.is_empty(),
-                        |columns| {
-                            columns.child(div().p_3().text_color(rgb(TEXT_DIM)).child("No columns"))
-                        },
-                    )
-                    .children(column_rows),
-            )
+            .child(tab_bar)
+            .child(content)
     }
 
     fn grid_spike_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1961,7 +2212,7 @@ impl Render for Workspace {
                                                 .when(
                                                     self.selected_schema_object.is_some(),
                                                     |content| {
-                                                        content.child(self.schema_object_panel())
+                                                        content.child(self.schema_object_panel(cx))
                                                     },
                                                 )
                                                 .when(
