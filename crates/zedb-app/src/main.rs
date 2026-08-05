@@ -135,6 +135,7 @@ impl AssetSource for Assets {
             "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
             "icons/close.svg" => Some(include_bytes!("../assets/icons/close.svg")),
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
+            "icons/folder-open.svg" => Some(include_bytes!("../assets/icons/folder-open.svg")),
             "icons/refresh.svg" => Some(include_bytes!("../assets/icons/refresh.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             _ => None,

@@ -64,7 +64,10 @@ mod tests {
 
         assert_eq!(load_preferences().unwrap(), Preferences::default());
 
-        let preferences = Preferences { vim_mode: true };
+        let preferences = Preferences {
+            vim_mode: true,
+            fleet_repo: Some("/tmp/repo".into()),
+        };
         save_preferences(&preferences).unwrap();
         assert_eq!(load_preferences().unwrap(), preferences);
 

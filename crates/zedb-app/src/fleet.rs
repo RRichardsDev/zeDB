@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use gpui::{div, prelude::*, px, rgb, uniform_list, Context, Entity, SharedString};
+use gpui::{div, prelude::*, px, rgb, svg, uniform_list, Context, Entity, SharedString};
 use zedb_ch::runner::{Runner, RunnerOptions, Targets};
 use zedb_core::repo::MigrationRepo;
 use zedb_core::save_preferences;
@@ -262,25 +262,47 @@ impl Workspace {
             .child(
                 div()
                     .id("fleet-open")
-                    .px_3()
+                    .px_2()
                     .py_1()
                     .rounded(px(3.))
                     .border_1()
                     .border_color(rgb(BORDER))
-                    .child("Open")
-                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                    .text_color(rgb(TEXT_DIM))
+                    .child(
+                        svg()
+                            .path("icons/folder-open.svg")
+                            .size(px(14.))
+                            .text_color(rgb(TEXT_DIM)),
+                    )
+                    .hover(|button| {
+                        button
+                            .bg(rgb(BG_SIDEBAR))
+                            .text_color(rgb(TEXT))
+                            .cursor_pointer()
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.fleet_open_repo(cx))),
             )
             .child(
                 div()
                     .id("fleet-refresh")
-                    .px_3()
+                    .px_2()
                     .py_1()
                     .rounded(px(3.))
                     .border_1()
                     .border_color(rgb(BORDER))
-                    .child(if loading { "Refreshing..." } else { "Refresh" })
-                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                    .text_color(rgb(if loading { SUCCESS } else { TEXT_DIM }))
+                    .child(
+                        svg()
+                            .path("icons/refresh.svg")
+                            .size(px(14.))
+                            .text_color(rgb(if loading { SUCCESS } else { TEXT_DIM })),
+                    )
+                    .hover(|button| {
+                        button
+                            .bg(rgb(BG_SIDEBAR))
+                            .text_color(rgb(TEXT))
+                            .cursor_pointer()
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.fleet_refresh(cx))),
             )
             .child(div().w(px(220.)).child(self.fleet.filter.clone()))
