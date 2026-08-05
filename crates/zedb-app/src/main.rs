@@ -3,6 +3,7 @@ mod fleet;
 mod grid_spike;
 mod rt;
 mod theme;
+mod updates;
 mod vim;
 
 use std::{
@@ -308,6 +309,7 @@ struct Workspace {
     notice: Option<String>,
     notice_warning: bool,
     notice_flash_id: u64,
+    update_available: Option<updates::UpdateInfo>,
     sidebar_width: f32,
     resizing_sidebar: bool,
     connections_pane_height: f32,
@@ -334,6 +336,18 @@ impl Workspace {
             ),
         };
         let fleet_repo_path = preferences.fleet_repo.clone();
+        let update_check = rt::tokio().spawn(updates::check());
+        cx.spawn(async move |this, cx| {
+            let Ok(Some(update)) = update_check.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.update_available = Some(update);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         let schema_filter = Self::input("", "Filter schema", false, cx);
         cx.observe(&schema_filter, |_, _, cx| cx.notify()).detach();
         let query_editor = cx.new(|cx| {
@@ -394,6 +408,7 @@ impl Workspace {
                 notice: None,
                 notice_warning: false,
                 notice_flash_id: 0,
+                update_available: None,
                 sidebar_width: 240.0,
                 resizing_sidebar: false,
                 connections_pane_height: 430.0,
@@ -429,6 +444,7 @@ impl Workspace {
                 notice: Some(format!("Could not load connections: {error}")),
                 notice_warning: false,
                 notice_flash_id: 0,
+                update_available: None,
                 sidebar_width: 240.0,
                 resizing_sidebar: false,
                 connections_pane_height: 430.0,
@@ -457,7 +473,7 @@ impl Workspace {
         self
     }
 
-    fn title_bar(&self) -> impl IntoElement {
+    fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .h(px(36.))
             .flex_none()
@@ -472,6 +488,28 @@ impl Workspace {
             .text_sm()
             .text_color(rgb(TEXT))
             .child("zeDB")
+            .child(div().flex_1())
+            .when_some(self.update_available.clone(), |bar, update| {
+                let label = format!("Update available: v{}", update.version);
+                bar.child(
+                    div()
+                        .id("update-available")
+                        .px_2()
+                        .py_0p5()
+                        .rounded(px(3.))
+                        .text_xs()
+                        .text_color(rgb(TEXT_DIM))
+                        .hover(|pill| {
+                            pill.bg(rgb(BG))
+                                .text_color(rgb(TEXT))
+                                .cursor_pointer()
+                        })
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.open_url(&update.url);
+                        }))
+                        .child(label),
+                )
+            })
     }
 
     fn open_preferences(&mut self, cx: &mut Context<Self>) {
@@ -3869,7 +3907,7 @@ impl Render for Workspace {
                     this.query_resize = None;
                 }),
             )
-            .child(self.title_bar())
+            .child(self.title_bar(cx))
             .child(
                 div()
                     .flex_1()
