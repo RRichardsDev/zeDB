@@ -1266,11 +1266,20 @@ impl Workspace {
                     .border_1()
                     .border_color(rgb(BORDER))
                     .text_color(rgb(if hidden_count > 0 { TEXT } else { TEXT_DIM }))
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .child(if hidden_count > 0 {
                         format!("Databases ({hidden_count} hidden)")
                     } else {
                         "Databases".into()
                     })
+                    .child(
+                        svg()
+                            .path("icons/chevron-down.svg")
+                            .size(px(12.))
+                            .text_color(rgb(if hidden_count > 0 { TEXT } else { TEXT_DIM })),
+                    )
                     .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.fleet.filter_open = !this.fleet.filter_open;
@@ -1288,10 +1297,19 @@ impl Workspace {
                         .border_1()
                         .border_color(rgb(BORDER))
                         .text_color(rgb(TEXT_DIM))
+                        .flex()
+                        .items_center()
+                        .gap_1()
                         .child(format!(
                             "cluster: {}",
                             self.fleet.selected_cluster.as_deref().unwrap_or("none")
                         ))
+                        .child(
+                            svg()
+                                .path("icons/chevron-down.svg")
+                                .size(px(12.))
+                                .text_color(rgb(TEXT_DIM)),
+                        )
                         .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.fleet.cluster_open = !this.fleet.cluster_open;
