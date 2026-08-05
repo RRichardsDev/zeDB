@@ -2,6 +2,7 @@ mod components;
 mod grid_spike;
 mod rt;
 mod theme;
+mod vim;
 
 use std::{
     borrow::Cow,
@@ -12,13 +13,14 @@ use std::{
 use gpui::{
     actions, div, point, prelude::*, px, rgb, rgba, size, svg, Action, App, Application,
     AssetSource, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, Focusable,
-    IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    SharedString, Timer, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    IntoElement, KeyBinding, Keystroke, Menu, MenuItem, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, SharedString, SystemMenuType, Timer, TitlebarOptions, Window,
+    WindowBounds, WindowOptions,
 };
 use gpui_component::{
     button::Button,
     highlighter::HighlightTheme,
-    input::{Input, InputState},
+    input::{Input, InputState, Position},
     menu::{DropdownMenu, PopupMenu},
     scroll::ScrollableElement,
     Disableable, Root, Theme,
@@ -28,11 +30,15 @@ use zedb_ch::{
     ChClient, ChConfig, ColumnInfo, DatabaseMeta, ObjectDetails, QueryStreamEvent,
     SchemaObjectKind, SchemaObjectMeta,
 };
-use zedb_core::{load_connections, save_connections, ConnectionConfig, ConnectionNode, EnvTier};
+use zedb_core::{
+    load_connections, load_preferences, save_connections, save_preferences, ConnectionConfig,
+    ConnectionNode, EnvTier, Preferences,
+};
 
 use components::text_input::{self, TextInput};
 use grid_spike::GridSpike;
 use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
+use vim::{CommandLineSnapshot, VimController};
 
 const M8_HIGHLIGHTING_SAMPLE: &str = r#"-- M8 ClickHouse syntax-highlighting sample
 WITH
@@ -72,6 +78,8 @@ fn format_engine_definition(engine: &str) -> String {
 actions!(
     query_editor,
     [
+        OpenPreferences,
+        QuitZeDb,
         RunQuery,
         MaxRows1k,
         MaxRows10k,
@@ -236,6 +244,9 @@ struct QueryTab {
     outcome: QueryOutcome,
     started_at: Option<Instant>,
     elapsed: Option<Duration>,
+    vim: VimController,
+    vim_command_line: Option<CommandLineSnapshot>,
+    vim_recording: Option<char>,
 }
 
 enum QueryOutcome {
@@ -253,7 +264,6 @@ enum QueryResizeTarget {
 }
 
 struct Workspace {
-    grid: Entity<GridSpike>,
     connections: Vec<ConnectionConfig>,
     selected: Option<usize>,
     connected: Option<ConnectedCluster>,
@@ -271,7 +281,6 @@ struct Workspace {
     notice: Option<String>,
     notice_warning: bool,
     notice_flash_id: u64,
-    show_grid_spike: bool,
     sidebar_width: f32,
     resizing_sidebar: bool,
     connections_pane_height: f32,
@@ -283,10 +292,19 @@ struct Workspace {
     query_abort: Option<AbortHandle>,
     query_run_id: u64,
     query_resize: Option<(QueryResizeTarget, f32)>,
+    preferences: Preferences,
+    show_preferences: bool,
 }
 
 impl Workspace {
-    fn new(grid: Entity<GridSpike>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (preferences, preferences_error) = match load_preferences() {
+            Ok(preferences) => (preferences, None),
+            Err(error) => (
+                Preferences::default(),
+                Some(format!("Could not load preferences: {error}")),
+            ),
+        };
         let schema_filter = Self::input("", "Filter schema", false, cx);
         cx.observe(&schema_filter, |_, _, cx| cx.notify()).detach();
         let query_editor = cx.new(|cx| {
@@ -294,6 +312,18 @@ impl Workspace {
                 .code_editor("sql")
                 .default_value(M8_HIGHLIGHTING_SAMPLE)
         });
+        // Vim keys must be intercepted before action dispatch: the editor's
+        // own key bindings (Enter, Backspace, arrows) run before any key-down
+        // listener and would edit the buffer behind modalkit's back.
+        let workspace = cx.entity().downgrade();
+        cx.intercept_keystrokes(move |event, window, cx| {
+            if let Some(workspace) = workspace.upgrade() {
+                workspace.update(cx, |this, cx| {
+                    this.vim_keystroke(&event.keystroke, window, cx)
+                });
+            }
+        })
+        .detach();
         let query_tabs = vec![QueryTab {
             id: 1,
             editor: query_editor,
@@ -312,12 +342,14 @@ impl Workspace {
             outcome: QueryOutcome::Idle,
             started_at: None,
             elapsed: None,
+            vim: VimController::new(M8_HIGHLIGHTING_SAMPLE),
+            vim_command_line: None,
+            vim_recording: None,
         }];
         match load_connections() {
             Ok(connections) => Self {
                 selected: (!connections.is_empty()).then_some(0),
                 connections,
-                grid,
                 connected: None,
                 connecting: None,
                 endpoint_health: HashMap::new(),
@@ -333,7 +365,6 @@ impl Workspace {
                 notice: None,
                 notice_warning: false,
                 notice_flash_id: 0,
-                show_grid_spike: false,
                 sidebar_width: 240.0,
                 resizing_sidebar: false,
                 connections_pane_height: 430.0,
@@ -345,9 +376,10 @@ impl Workspace {
                 query_abort: None,
                 query_run_id: 0,
                 query_resize: None,
+                preferences,
+                show_preferences: false,
             },
             Err(error) => Self {
-                grid,
                 connections: Vec::new(),
                 selected: None,
                 connected: None,
@@ -365,7 +397,6 @@ impl Workspace {
                 notice: Some(format!("Could not load connections: {error}")),
                 notice_warning: false,
                 notice_flash_id: 0,
-                show_grid_spike: false,
                 sidebar_width: 240.0,
                 resizing_sidebar: false,
                 connections_pane_height: 430.0,
@@ -377,8 +408,18 @@ impl Workspace {
                 query_abort: None,
                 query_run_id: 0,
                 query_resize: None,
+                preferences,
+                show_preferences: false,
             },
         }
+        .with_startup_notice(preferences_error)
+    }
+
+    fn with_startup_notice(mut self, notice: Option<String>) -> Self {
+        if notice.is_some() {
+            self.notice = notice;
+        }
+        self
     }
 
     fn title_bar(&self) -> impl IntoElement {
@@ -396,6 +437,117 @@ impl Workspace {
             .text_sm()
             .text_color(rgb(TEXT))
             .child("zeDB")
+    }
+
+    fn open_preferences(&mut self, cx: &mut Context<Self>) {
+        self.form = None;
+        self.show_preferences = true;
+        cx.notify();
+    }
+
+    fn close_preferences(&mut self, cx: &mut Context<Self>) {
+        self.show_preferences = false;
+        cx.notify();
+    }
+
+    fn toggle_vim_mode(&mut self, cx: &mut Context<Self>) {
+        self.preferences.vim_mode = !self.preferences.vim_mode;
+        if self.preferences.vim_mode {
+            for tab in &mut self.query_tabs {
+                let editor = tab.editor.read(cx);
+                let cursor = editor.cursor_position();
+                tab.vim.reset(
+                    editor.value().as_ref(),
+                    cursor.line as usize,
+                    cursor.character as usize,
+                );
+                tab.vim_command_line = None;
+                tab.vim_recording = None;
+            }
+        }
+        if let Err(error) = save_preferences(&self.preferences) {
+            self.notice = Some(format!("Could not save preferences: {error}"));
+        }
+        cx.notify();
+    }
+
+    fn preferences_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().flex().justify_center().child(
+            div()
+                .w(px(680.))
+                .max_w_full()
+                .p_6()
+                .flex()
+                .flex_col()
+                .gap_5()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(div().text_xl().child("Preferences"))
+                        .child(
+                            div()
+                                .id("close-preferences")
+                                .px_3()
+                                .py_1()
+                                .rounded(px(3.))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .text_color(rgb(TEXT_DIM))
+                                .hover(|button| {
+                                    button
+                                        .bg(rgb(BG_SIDEBAR))
+                                        .text_color(rgb(TEXT))
+                                        .cursor_pointer()
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.close_preferences(cx)))
+                                .child("Done"),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .py_3()
+                        .border_b_1()
+                        .border_color(rgb(BORDER))
+                        .child(
+                            div().flex().flex_col().gap_1().child("Vim mode").child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(TEXT_DIM))
+                                    .child("Use Vim keybindings in query editors."),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .id("toggle-vim-mode")
+                                .w(px(54.))
+                                .h(px(28.))
+                                .px_1()
+                                .rounded_full()
+                                .flex()
+                                .items_center()
+                                .when(self.preferences.vim_mode, |toggle| {
+                                    toggle.justify_end().bg(rgb(0x3f6650))
+                                })
+                                .when(!self.preferences.vim_mode, |toggle| {
+                                    toggle.justify_start().bg(rgb(0x343941))
+                                })
+                                .hover(|toggle| toggle.cursor_pointer())
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_vim_mode(cx)))
+                                .child(div().size(px(20.)).rounded_full().bg(rgb(
+                                    if self.preferences.vim_mode {
+                                        0x9ab7a1
+                                    } else {
+                                        0x777e88
+                                    },
+                                ))),
+                        ),
+                ),
+        )
     }
 
     fn tier_colors(tier: EnvTier) -> (u32, u32) {
@@ -1374,10 +1526,10 @@ impl Workspace {
 
                 let Some(active_node) = active_node else {
                     this.endpoint_health.insert(name.clone(), health);
-                    this.notice = Some(format!(
-                        "No node accepted the connection details for {name}"
-                    ));
-                    cx.notify();
+                    this.flash_warning(
+                        format!("No node accepted the connection details for {name}"),
+                        cx,
+                    );
                     return;
                 };
 
@@ -1599,7 +1751,6 @@ impl Workspace {
             tab: ObjectInspectorTab::Overview,
             error: None,
         });
-        self.show_grid_spike = false;
         self.show_query_editor = false;
         cx.notify();
 
@@ -1879,7 +2030,6 @@ impl Workspace {
 
     fn open_query_editor(&mut self, cx: &mut Context<Self>) {
         self.show_query_editor = true;
-        self.show_grid_spike = false;
         cx.notify();
     }
 
@@ -1905,6 +2055,9 @@ impl Workspace {
             outcome: QueryOutcome::Idle,
             started_at: None,
             elapsed: None,
+            vim: VimController::new(""),
+            vim_command_line: None,
+            vim_recording: None,
         });
         self.active_query_tab = self.query_tabs.len() - 1;
         self.show_query_editor = true;
@@ -1930,6 +2083,156 @@ impl Workspace {
 
     fn run_query_action(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
         self.run_query(window, cx);
+    }
+
+    fn modalkit_key(keystroke: &Keystroke) -> Option<String> {
+        if keystroke.modifiers.platform || keystroke.modifiers.function {
+            return None;
+        }
+
+        let special = match keystroke.key.as_str() {
+            "escape" => Some("Esc"),
+            "enter" => Some("Enter"),
+            "backspace" => Some("BS"),
+            "delete" => Some("Del"),
+            "tab" => Some("Tab"),
+            "space" => Some("Space"),
+            "left" => Some("Left"),
+            "right" => Some("Right"),
+            "up" => Some("Up"),
+            "down" => Some("Down"),
+            "home" => Some("Home"),
+            "end" => Some("End"),
+            "pageup" => Some("PageUp"),
+            "pagedown" => Some("PageDown"),
+            _ => None,
+        };
+        let key = special
+            .map(str::to_string)
+            .or_else(|| keystroke.key_char.clone())
+            .unwrap_or_else(|| keystroke.key.clone());
+
+        if keystroke.modifiers.control || keystroke.modifiers.alt || special.is_some() {
+            let mut modifiers = String::new();
+            if keystroke.modifiers.control {
+                modifiers.push_str("C-");
+            }
+            if keystroke.modifiers.alt {
+                modifiers.push_str("A-");
+            }
+            if keystroke.modifiers.shift && special.is_some() {
+                modifiers.push_str("S-");
+            }
+            Some(format!("<{modifiers}{key}>"))
+        } else {
+            Some(key)
+        }
+    }
+
+    fn vim_keystroke(&mut self, keystroke: &Keystroke, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.preferences.vim_mode {
+            return;
+        }
+        let Some(key) = Self::modalkit_key(keystroke) else {
+            return;
+        };
+        let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) else {
+            return;
+        };
+        if !tab.editor.focus_handle(cx).is_focused(window) {
+            return;
+        }
+        // In visual mode the editor cursor tracks the selection end, not the
+        // Vim head, so feeding it back would drift the selection; in command
+        // mode keystrokes edit the command line, not the buffer.
+        if !matches!(
+            tab.vim.mode(),
+            modalkit::env::vim::VimMode::Visual
+                | modalkit::env::vim::VimMode::Select
+                | modalkit::env::vim::VimMode::Command
+        ) {
+            let cursor = tab.editor.read(cx).cursor_position();
+            tab.vim
+                .set_cursor(cursor.line as usize, cursor.character as usize);
+        }
+        let mut snapshot = match tab.vim.input(&key) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.notice = Some(format!("Vim input error: {error}"));
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+        };
+        tab.vim_command_line = snapshot.command_line.take();
+        tab.vim_recording = snapshot.recording;
+        let editor = tab.editor.clone();
+        editor.update(cx, |state, cx| {
+            let old_utf16_len = state.value().encode_utf16().count();
+            EntityInputHandler::replace_text_in_range(
+                state,
+                Some(0..old_utf16_len),
+                &snapshot.text,
+                window,
+                cx,
+            );
+            state.set_cursor_position(
+                Position::new(snapshot.line as u32, snapshot.column as u32),
+                window,
+                cx,
+            );
+            if let Some(selection) = &snapshot.selection {
+                let start = Self::utf16_offset(&snapshot.text, selection.start);
+                let end = Self::utf16_offset(&snapshot.text, selection.end);
+                if start < end {
+                    let mut adjusted_range = None;
+                    let selected = EntityInputHandler::text_for_range(
+                        state,
+                        start..end,
+                        &mut adjusted_range,
+                        window,
+                        cx,
+                    );
+                    if let Some(selected) = selected.filter(|selected| !selected.is_empty()) {
+                        // InputState has no public API for setting an arbitrary
+                        // selection; a same-text IME replace positions one
+                        // without changing the buffer.
+                        EntityInputHandler::replace_and_mark_text_in_range(
+                            state,
+                            Some(start..end),
+                            &selected,
+                            Some(0..0),
+                            window,
+                            cx,
+                        );
+                        EntityInputHandler::unmark_text(state, window, cx);
+                    }
+                }
+            }
+        });
+        if let Some(unsupported) = snapshot.unsupported {
+            self.notice = Some(format!("Vim action not available here: {unsupported}"));
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn utf16_offset(text: &str, (line, column): (usize, usize)) -> usize {
+        let mut offset = 0;
+        for (index, line_text) in text.split('\n').enumerate() {
+            if index == line {
+                return offset
+                    + line_text
+                        .chars()
+                        .take(column)
+                        .map(char::len_utf16)
+                        .sum::<usize>();
+            }
+            offset += line_text.encode_utf16().count() + 1;
+        }
+        // `line` is past the last line (e.g. a line-wise selection ending at
+        // the final line); the loop overcounts by one virtual newline.
+        offset.saturating_sub(1)
     }
 
     fn flash_warning(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
@@ -2327,12 +2630,7 @@ impl Workspace {
             )
     }
 
-    fn toggle_grid_spike(&mut self, cx: &mut Context<Self>) {
-        self.show_grid_spike = !self.show_grid_spike;
-        cx.notify();
-    }
-
-    fn cluster_overview(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn cluster_overview(&self) -> impl IntoElement {
         let selected = self.selected.and_then(|index| self.connections.get(index));
         let nodes = selected
             .map(|connection| {
@@ -2398,20 +2696,7 @@ impl Workspace {
                 })
                 .when(selected.is_none(), |panel| {
                     panel.child("Add or select a cluster connection to begin.")
-                })
-                .child(
-                    div()
-                        .id("open-grid-spike")
-                        .w(px(250.))
-                        .px_3()
-                        .py_2()
-                        .rounded(px(3.))
-                        .border_1()
-                        .border_color(rgb(BORDER))
-                        .child("Open M2 synthetic grid spike")
-                        .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_grid_spike(cx))),
-                ),
+                }),
         )
     }
 
@@ -2909,6 +3194,10 @@ impl Workspace {
         let result_capped = active.result_capped;
         let editor_height = active.editor_height;
         let status_height = active.status_height;
+        let vim_mode = active.vim.mode();
+        let vim_mode_label = active.vim.mode_label();
+        let vim_command_line = active.vim_command_line.clone();
+        let vim_recording = active.vim_recording;
         let result_grid = active.result_grid.clone();
         let mut status = match &active.outcome {
             QueryOutcome::Idle => "Ready".to_string(),
@@ -3096,7 +3385,63 @@ impl Workspace {
                             .items_start()
                             .justify_between()
                             .gap_4()
-                            .child(div().flex_1().min_w_0().child(status))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .when(self.preferences.vim_mode, |status_row| {
+                                        status_row
+                                            .child(
+                                                div()
+                                                    .flex_none()
+                                                    .text_color(rgb(
+                                                        if vim_mode
+                                                            == modalkit::env::vim::VimMode::Normal
+                                                        {
+                                                            0x9ab7a1
+                                                        } else {
+                                                            TEXT_DIM
+                                                        },
+                                                    ))
+                                                    .child(vim_mode_label),
+                                            )
+                                            .when_some(
+                                                vim_command_line,
+                                                |status_row, command_line| {
+                                                    let mut text = command_line.text;
+                                                    let cursor = command_line
+                                                        .cursor
+                                                        .min(text.chars().count());
+                                                    let byte = text
+                                                        .char_indices()
+                                                        .nth(cursor)
+                                                        .map(|(index, _)| index)
+                                                        .unwrap_or(text.len());
+                                                    text.insert(byte, '▌');
+                                                    status_row.child(
+                                                        div().flex_none().text_color(rgb(TEXT)).child(
+                                                            format!(
+                                                                "{}{text}",
+                                                                command_line.prompt
+                                                            ),
+                                                        ),
+                                                    )
+                                                },
+                                            )
+                                            .when_some(vim_recording, |status_row, register| {
+                                                status_row.child(
+                                                    div()
+                                                        .flex_none()
+                                                        .text_color(rgb(0xd7a65f))
+                                                        .child(format!("recording @{register}")),
+                                                )
+                                            })
+                                    })
+                                    .child(status),
+                            )
                             .when_some(elapsed, |row, elapsed| {
                                 row.child(
                                     div().flex_none().text_color(rgb(TEXT_DIM)).child(elapsed),
@@ -3104,36 +3449,6 @@ impl Workspace {
                             }),
                     ),
             )
-    }
-
-    fn grid_spike_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .h(px(34.))
-                    .flex_none()
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .bg(rgb(0x4d3b16))
-                    .text_color(rgb(0xf0c36a))
-                    .child("M2 synthetic grid spike: this is not ClickHouse data")
-                    .child(
-                        div()
-                            .id("close-grid-spike")
-                            .px_2()
-                            .py_1()
-                            .rounded(px(3.))
-                            .child("Close")
-                            .hover(|button| button.bg(rgb(0x665020)).cursor_pointer())
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_grid_spike(cx))),
-                    ),
-            )
-            .child(div().flex_1().min_h_0().child(self.grid.clone()))
     }
 
     fn status_bar(&self) -> impl IntoElement {
@@ -3266,8 +3581,13 @@ impl Render for Workspace {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .when(self.form.is_some(), |main| main.child(self.form_panel(cx)))
-                            .when(self.form.is_none(), |main| {
+                            .when(self.show_preferences, |main| {
+                                main.child(self.preferences_panel(cx))
+                            })
+                            .when(!self.show_preferences && self.form.is_some(), |main| {
+                                main.child(self.form_panel(cx))
+                            })
+                            .when(!self.show_preferences && self.form.is_none(), |main| {
                                 main.child(self.connection_toolbar(cx)).child(
                                     div()
                                         .flex_1()
@@ -3276,11 +3596,7 @@ impl Render for Workspace {
                                             content.child(self.query_editor_panel(cx))
                                         })
                                         .when(
-                                            !self.show_query_editor && self.show_grid_spike,
-                                            |content| content.child(self.grid_spike_panel(cx)),
-                                        )
-                                        .when(
-                                            !self.show_query_editor && !self.show_grid_spike,
+                                            !self.show_query_editor,
                                             |content| {
                                                 content
                                                     .when(
@@ -3296,7 +3612,7 @@ impl Render for Workspace {
                                                     .when(
                                                         self.selected_schema_object.is_none(),
                                                         |content| {
-                                                            content.child(self.cluster_overview(cx))
+                                                            content.child(self.cluster_overview())
                                                         },
                                                     )
                                             },
@@ -3354,12 +3670,30 @@ fn configure_component_theme(cx: &mut App) {
     highlight.style.editor_active_line_number = Some(rgb(TEXT).into());
 }
 
+fn quit_ze_db(_: &QuitZeDb, cx: &mut App) {
+    cx.quit();
+}
+
 fn main() {
     Application::new().with_assets(Assets).run(|cx: &mut App| {
         gpui_component::init(cx);
         configure_component_theme(cx);
         text_input::init(cx);
-        cx.bind_keys([KeyBinding::new("cmd-enter", RunQuery, None)]);
+        cx.on_action(quit_ze_db);
+        cx.bind_keys([
+            KeyBinding::new("cmd-enter", RunQuery, None),
+            KeyBinding::new("cmd-,", OpenPreferences, None),
+        ]);
+        cx.set_menus(vec![Menu {
+            name: "zeDB".into(),
+            items: vec![
+                MenuItem::action("Preferences…", OpenPreferences),
+                MenuItem::separator(),
+                MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::separator(),
+                MenuItem::action("Quit zeDB", QuitZeDb),
+            ],
+        }]);
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
             WindowOptions {
@@ -3372,8 +3706,13 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
-                let grid = cx.new(GridSpike::new);
-                let workspace = cx.new(|cx| Workspace::new(grid, window, cx));
+                let workspace = cx.new(|cx| Workspace::new(window, cx));
+                let preferences_workspace = workspace.clone();
+                cx.on_action(move |_: &OpenPreferences, cx| {
+                    preferences_workspace.update(cx, |workspace, cx| {
+                        workspace.open_preferences(cx);
+                    });
+                });
                 cx.new(|cx| Root::new(workspace, window, cx))
             },
         )

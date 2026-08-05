@@ -14,5 +14,6 @@ zedb-core.workspace = true
 zedb-ch.workspace = true
 gpui.workspace = true
 gpui-component = { version = "0.5.1", features = ["tree-sitter-languages"] }
+modalkit = "0.0.25"
 tokio.workspace = true
 unicode-segmentation = "1"

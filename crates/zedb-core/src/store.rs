@@ -5,6 +5,9 @@ use std::path::PathBuf;
 
 use crate::connection::ConnectionConfig;
 
+#[cfg(test)]
+pub(crate) static CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("could not determine config directory")]
@@ -67,6 +70,7 @@ mod tests {
 
     #[test]
     fn round_trip_and_missing_file() {
+        let _environment = CONFIG_ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         // Env vars are process-global; this test is the only one touching
         // this variable.

@@ -1,8 +1,6 @@
-//! M2 spike: virtualized data grid over synthetic data.
-//!
-//! Goal: 1M+ rows x 50 columns with only visible cells rendered, smooth
-//! scroll, flat memory. Cell content is generated on demand from
-//! (row, col); nothing is materialized. Findings go to docs/devlog.md.
+//! Virtualized results grid: only visible cells are rendered, so
+//! multi-million-row results scroll smoothly with flat memory. Started as
+//! the M2 spike; findings are in docs/devlog.md.
 
 use gpui::{
     actions, div, prelude::*, px, rgb, uniform_list, App, ClipboardItem, Context, FocusHandle,
@@ -17,88 +15,9 @@ actions!(grid_spike, [Copy]);
 const ROW_HEIGHT: f32 = 24.0;
 const COL_WIDTH: f32 = 120.0;
 
-/// Deterministic synthetic table; cells are computed, never stored.
-pub struct SyntheticTable {
-    pub rows: usize,
-    pub cols: usize,
-}
-
-enum TableData {
-    Synthetic(SyntheticTable),
-    Result {
-        columns: Vec<ColumnMeta>,
-        rows: Vec<Vec<Value>>,
-    },
-}
-
-impl TableData {
-    fn row_count(&self) -> usize {
-        match self {
-            Self::Synthetic(table) => table.rows,
-            Self::Result { rows, .. } => rows.len(),
-        }
-    }
-
-    fn column_count(&self) -> usize {
-        match self {
-            Self::Synthetic(table) => table.cols,
-            Self::Result { columns, .. } => columns.len(),
-        }
-    }
-
-    fn header(&self, column: usize) -> String {
-        match self {
-            Self::Synthetic(table) => table.header(column),
-            Self::Result { columns, .. } => columns
-                .get(column)
-                .map(|column| column.name.clone())
-                .unwrap_or_default(),
-        }
-    }
-
-    fn cell(&self, row: usize, column: usize) -> String {
-        match self {
-            Self::Synthetic(table) => table.cell(row, column),
-            Self::Result { rows, .. } => rows
-                .get(row)
-                .and_then(|row| row.get(column))
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-        }
-    }
-
-    fn is_synthetic(&self) -> bool {
-        matches!(self, Self::Synthetic(_))
-    }
-}
-
-impl SyntheticTable {
-    fn header(&self, col: usize) -> String {
-        format!("col_{col:02}")
-    }
-
-    fn cell(&self, row: usize, col: usize) -> String {
-        // Cheap deterministic mix resembling real result data.
-        let h = (row as u64).wrapping_mul(0x9e3779b97f4a7c15)
-            ^ (col as u64).wrapping_mul(0xff51afd7ed558ccd);
-        match col % 5 {
-            0 => format!("{row}"),
-            1 => format!("{}", h % 1_000_000),
-            2 => format!("{:.4}", (h % 100_000) as f64 / 1000.0),
-            3 => {
-                if h.is_multiple_of(7) {
-                    "NULL".to_string()
-                } else {
-                    format!("user_{}", h % 10_000)
-                }
-            }
-            _ => format!("{:016x}", h),
-        }
-    }
-}
-
 pub struct GridSpike {
-    table: TableData,
+    columns: Vec<ColumnMeta>,
+    rows: Vec<Vec<Value>>,
     requested_rows: Option<usize>,
     result_complete: bool,
     result_capped: bool,
@@ -111,10 +30,8 @@ impl GridSpike {
     pub fn new(cx: &mut Context<Self>) -> Self {
         cx.bind_keys([KeyBinding::new("cmd-c", Copy, None)]);
         Self {
-            table: TableData::Synthetic(SyntheticTable {
-                rows: 1_000_000,
-                cols: 50,
-            }),
+            columns: Vec::new(),
+            rows: Vec::new(),
             requested_rows: None,
             result_complete: false,
             result_capped: false,
@@ -130,10 +47,8 @@ impl GridSpike {
         requested_rows: Option<usize>,
         cx: &mut Context<Self>,
     ) {
-        self.table = TableData::Result {
-            columns,
-            rows: Vec::new(),
-        };
+        self.columns = columns;
+        self.rows = Vec::new();
         self.requested_rows = requested_rows;
         self.result_complete = false;
         self.result_capped = false;
@@ -143,10 +58,8 @@ impl GridSpike {
     }
 
     pub fn append_rows(&mut self, batch: Vec<Vec<Value>>, cx: &mut Context<Self>) {
-        if let TableData::Result { rows, .. } = &mut self.table {
-            rows.extend(batch);
-            cx.notify();
-        }
+        self.rows.extend(batch);
+        cx.notify();
     }
 
     pub fn finish_result(&mut self, capped: bool, cx: &mut Context<Self>) {
@@ -157,14 +70,29 @@ impl GridSpike {
 
     fn copy_selected(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some((row, col)) = self.selected {
-            let text = self.table.cell(row, col);
+            let text = self.cell(row, col);
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
+    fn header(&self, column: usize) -> String {
+        self.columns
+            .get(column)
+            .map(|column| column.name.clone())
+            .unwrap_or_default()
+    }
+
+    fn cell(&self, row: usize, column: usize) -> String {
+        self.rows
+            .get(row)
+            .and_then(|row| row.get(column))
+            .map(ToString::to_string)
+            .unwrap_or_default()
+    }
+
     /// Header outside the list, following the list's horizontal offset.
     fn header_row(&self, scroll_x: gpui::Pixels) -> impl IntoElement {
-        let column_count = self.table.column_count();
+        let column_count = self.columns.len();
         let cells: Vec<_> = (0..column_count)
             .map(|col| {
                 div()
@@ -177,7 +105,7 @@ impl GridSpike {
                     .border_r_1()
                     .border_color(rgb(BORDER))
                     .text_color(rgb(TEXT_DIM))
-                    .child(self.table.header(col))
+                    .child(self.header(col))
             })
             .collect();
         div()
@@ -207,8 +135,8 @@ impl Focusable for GridSpike {
 
 impl Render for GridSpike {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let cols = self.table.column_count();
-        let rows = self.table.row_count();
+        let cols = self.columns.len();
+        let rows = self.rows.len();
         let selected = self.selected;
 
         let list = uniform_list(
@@ -234,7 +162,7 @@ impl Render for GridSpike {
                                         this.selected = Some((row, col));
                                         cx.notify();
                                     }))
-                                    .child(this.table.cell(row, col))
+                                    .child(this.cell(row, col))
                             })
                             .collect();
                         div()
@@ -257,14 +185,8 @@ impl Render for GridSpike {
         .h_full()
         .flex_grow();
 
-        let fetched = self.table.row_count();
-        let fetch_status = if self.table.is_synthetic() {
-            format!(
-                "{} rows x {} cols (synthetic)",
-                fetched,
-                self.table.column_count()
-            )
-        } else if self.result_capped {
+        let fetched = self.rows.len();
+        let fetch_status = if self.result_capped {
             format!(
                 "Fetched {fetched} of {} requested rows, more available",
                 self.requested_rows.unwrap_or(fetched)

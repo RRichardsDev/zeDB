@@ -228,3 +228,68 @@ Status: implementation complete, awaiting UI acceptance.
 - The initial M8 acceptance buffer contains safe ClickHouse-flavored SQL that
   makes supported syntax and grammar gaps visible immediately. New query tabs
   continue to start with `SELECT 1;`.
+
+## M9: Vim visual selection rendering (2026-08-05)
+
+- modalkit owns visual-mode state; `EditBuffer::get_leader_selection` returns a
+  sorted `(start, end, shape)` triple, which the snapshot converts into a
+  single character range (char-wise ranges include the cursor character,
+  line-wise ranges run from column 0 through the start of the line after the
+  selection).
+- `gpui-component` 0.5.1 `InputState` has no public way to set an arbitrary
+  selection range: `selected_range` and `select_to` are crate-private, and the
+  public surface only offers `set_cursor_position` plus fixed-motion select
+  actions. Upstream contribution candidate: a `set_selected_range` method.
+- Workaround: the public `EntityInputHandler` impl can position a selection.
+  `replace_and_mark_text_in_range(Some(range), same_text, Some(0..0))` sets
+  `selected_range` to exactly `range` without changing the buffer, and an
+  immediate `unmark_text` clears the IME marked range before it renders. The
+  no-op replace does push an entry onto the input's own undo history, which is
+  harmless here because undo/redo in Vim mode goes through modalkit.
+- Documented limitations: block-wise (Ctrl-V) selections cannot be expressed
+  as the editor's single linear range, so they get no highlight; the status
+  bar reports V-BLOCK (and V-LINE) so the active shape is always explicit.
+  For selections extended backwards, the highlight is correct but the cursor
+  renders at the selection end, since `selection_reversed` is crate-private.
+
+## M9: Vim key routing and the modalkit desync crash (2026-08-05)
+
+- GPUI dispatches key events to matching key BINDINGS before any key-down
+  listener, and a handled binding ends dispatch entirely. In Vim mode this let
+  the editor's built-in Enter/Backspace/arrow bindings edit the buffer while
+  modalkit never saw the key; feeding the editor's moved cursor back into
+  modalkit then indexed past its rope and aborted the app (ropey
+  "Line index out of bounds", non-unwinding panic inside the AppKit key
+  handler). Element-level `on_key_down`/`capture_key_down` cannot fix this
+  because listeners run after binding dispatch.
+- The correct hook is `App::intercept_keystrokes`, which fires before action
+  dispatch; calling `stop_propagation` there suppresses both the editor's
+  bindings and the macOS IME insertText path (gpui only forwards printable
+  keys to the IME when the GPUI dispatch did not handle them).
+- `VimController::set_cursor` now clamps line and column against the modalkit
+  buffer; modalkit's `set_leader` stores positions unchecked and later edits
+  index the rope with them.
+- The editor cursor is only fed back into modalkit outside visual mode; in
+  visual mode the editor cursor tracks the selection end, not the Vim head.
+
+## M2 spike surface removed (2026-08-05)
+
+- The synthetic 1M-row demo (launcher button, banner panel, generated cells)
+  is gone; the virtualized grid itself lives on as the per-tab results grid,
+  now holding plain columns/rows with an empty initial state.
+
+## M9: search, macros, and the command line (2026-08-05)
+
+- The command bar is now real: `/`, `?`, and `:` focus a dedicated modalkit
+  EditBuffer rendered in the editor status strip, so typed patterns no longer
+  leak into the query buffer. Submit stores the pattern via
+  `set_last_search` and runs the deferred action; `n`/`N` work through the
+  buffer's `Searchable` impl.
+- Macro recording/replay (`q`, `@`, counts) mirrors modalkit's `KeyManager`
+  key-replay loop inline in `VimController`; the wrapper itself is unused
+  because boxing the machine hides `ModalMachine::mode()`. A "recording @x"
+  indicator shows in the status strip.
+- Ex commands parse through `VimCommandMachine`. modalkit's built-in set is
+  mostly window/tab management (surfaced via the unsupported-action notice)
+  and `:substitute` is not yet implemented upstream; both cases surface an
+  explicit message instead of silently doing nothing.
