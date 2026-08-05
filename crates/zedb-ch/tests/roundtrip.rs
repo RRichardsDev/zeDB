@@ -10,7 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, NaiveDate, Utc};
-use zedb_ch::{ChClient, ChConfig, ChError};
+use zedb_ch::{ChClient, ChConfig, ChError, QueryStreamEvent};
 use zedb_core::Value;
 
 fn find_clickhouse() -> Option<PathBuf> {
@@ -324,4 +324,48 @@ async fn query_roundtrip_type_zoo() {
         invalid.test_connection().await.is_err(),
         "invalid credentials must fail the authenticated connection test"
     );
+}
+
+#[tokio::test]
+async fn streaming_query_reports_progress_and_honors_cap() {
+    let Some(binary) = find_clickhouse() else {
+        eprintln!("SKIP: no clickhouse binary found (set ZEDB_CLICKHOUSE_BIN or install one)");
+        return;
+    };
+    let server = EphemeralServer::start(&binary);
+    server.wait_ready().await;
+    let client = server.client();
+
+    let mut columns = 0;
+    let mut rows = 0;
+    let mut batches = 0;
+    let mut received_bytes = 0;
+    let mut saw_server_progress = false;
+    let summary = client
+        .query_stream(
+            "SELECT number, sleepEachRow(0.0001) FROM numbers(10000)",
+            1_000,
+            |event| match event {
+                QueryStreamEvent::Columns(items) => columns = items.len(),
+                QueryStreamEvent::Rows(items) => {
+                    rows += items.len();
+                    batches += 1;
+                }
+                QueryStreamEvent::Progress(progress) => {
+                    received_bytes = received_bytes.max(progress.received_bytes);
+                    saw_server_progress |=
+                        progress.read_rows.is_some() && progress.read_bytes.is_some();
+                }
+            },
+        )
+        .await
+        .expect("stream query");
+
+    assert_eq!(columns, 2);
+    assert_eq!(rows, 1_000);
+    assert!(batches > 0);
+    assert!(received_bytes > 0);
+    assert!(saw_server_progress);
+    assert_eq!(summary.rows, 1_000);
+    assert!(summary.capped);
 }

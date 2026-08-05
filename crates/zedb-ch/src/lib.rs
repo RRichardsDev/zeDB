@@ -14,7 +14,7 @@ mod rowbinary;
 mod schema;
 mod types;
 
-pub use client::{ChClient, ChConfig, QueryStreamEvent, QueryStreamSummary};
+pub use client::{ChClient, ChConfig, QueryProgress, QueryStreamEvent, QueryStreamSummary};
 pub use error::{ChError, Result};
 pub use schema::{ColumnInfo, DatabaseMeta, ObjectDetails, SchemaObjectKind, SchemaObjectMeta};
 pub use types::{parse_type, ChType};

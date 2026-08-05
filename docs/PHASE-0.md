@@ -107,7 +107,9 @@ Done when: type query, run, see error or results; cancel a
 
 Wire M1 streaming into the M2 grid: results stream in and render
 incrementally, grid stays responsive on multi-million-row results, status
-bar shows rows read / bytes / elapsed (from ClickHouse progress headers).
+bar shows rows read, bytes, and elapsed time. Live server metrics are polled
+from `system.processes` by query ID, with received HTTP bytes as a fallback
+when the connected account cannot inspect processes.
 Guardrails: a per-query-tab maximum row picker defaults to 100,000 rows,
 with 1,000, 10,000, 50,000, 1,000,000, and explicit Unlimited options, so a
 careless `SELECT *` on a billion-row table degrades gracefully.

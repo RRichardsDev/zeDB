@@ -168,6 +168,10 @@ struct QueryTab {
     has_result: bool,
     max_rows: MaxRows,
     result_capped: bool,
+    read_rows: Option<u64>,
+    read_bytes: Option<u64>,
+    total_rows: Option<u64>,
+    received_bytes: u64,
     editor_height: f32,
     status_height: f32,
     outcome: QueryOutcome,
@@ -240,6 +244,10 @@ impl Workspace {
             has_result: false,
             max_rows: MaxRows::Rows100k,
             result_capped: false,
+            read_rows: None,
+            read_bytes: None,
+            total_rows: None,
+            received_bytes: 0,
             editor_height: 220.0,
             status_height: 52.0,
             outcome: QueryOutcome::Idle,
@@ -1757,6 +1765,10 @@ impl Workspace {
             has_result: false,
             max_rows: MaxRows::Rows100k,
             result_capped: false,
+            read_rows: None,
+            read_bytes: None,
+            total_rows: None,
+            received_bytes: 0,
             editor_height: 220.0,
             status_height: 52.0,
             outcome: QueryOutcome::Idle,
@@ -1854,6 +1866,10 @@ impl Workspace {
         tab.result_rows = 0;
         tab.has_result = false;
         tab.result_capped = false;
+        tab.read_rows = None;
+        tab.read_bytes = None;
+        tab.total_rows = None;
+        tab.received_bytes = 0;
         tab.started_at = Some(Instant::now());
         tab.elapsed = None;
         let config = connected.client_config.clone();
@@ -1894,6 +1910,18 @@ impl Workspace {
                                 tab.result_rows += rows.len();
                                 tab.result_grid
                                     .update(cx, |grid, cx| grid.append_rows(rows, cx));
+                            }
+                            QueryStreamEvent::Progress(progress) => {
+                                if progress.read_rows.is_some() {
+                                    tab.read_rows = progress.read_rows;
+                                }
+                                if progress.read_bytes.is_some() {
+                                    tab.read_bytes = progress.read_bytes;
+                                }
+                                if progress.total_rows.is_some() {
+                                    tab.total_rows = progress.total_rows;
+                                }
+                                tab.received_bytes = progress.received_bytes;
                             }
                         }
                         cx.notify();
@@ -2644,7 +2672,7 @@ impl Workspace {
         let editor_height = active.editor_height;
         let status_height = active.status_height;
         let result_grid = active.result_grid.clone();
-        let status = match &active.outcome {
+        let mut status = match &active.outcome {
             QueryOutcome::Idle => "Ready".to_string(),
             QueryOutcome::Running => format!("Running: {} row(s)", active.result_rows),
             QueryOutcome::Complete { columns, rows } => {
@@ -2657,7 +2685,29 @@ impl Workspace {
             QueryOutcome::Error(error) => error.clone(),
             QueryOutcome::Cancelled => "Query cancelled".to_string(),
         };
-        let elapsed = active.elapsed.map(format_query_duration);
+        if let Some(read_rows) = active.read_rows {
+            if let Some(total_rows) = active.total_rows {
+                status.push_str(&format!(
+                    "  Read {} of {} rows",
+                    Self::format_count(read_rows),
+                    Self::format_count(total_rows)
+                ));
+            } else {
+                status.push_str(&format!("  Read {} rows", Self::format_count(read_rows)));
+            }
+        }
+        if let Some(read_bytes) = active.read_bytes {
+            status.push_str(&format!("  {} read", Self::format_bytes(read_bytes)));
+        } else if active.received_bytes > 0 {
+            status.push_str(&format!(
+                "  {} received",
+                Self::format_bytes(active.received_bytes)
+            ));
+        }
+        let elapsed = active
+            .elapsed
+            .or_else(|| active.started_at.map(|started| started.elapsed()))
+            .map(format_query_duration);
 
         div()
             .size_full()

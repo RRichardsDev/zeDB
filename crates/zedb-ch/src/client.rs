@@ -4,6 +4,8 @@
 //! incremental batches as their HTTP body arrives.
 
 use futures_util::StreamExt;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zedb_core::QueryResult;
 use zedb_core::{ColumnMeta, Value};
 
@@ -33,6 +35,15 @@ pub struct ChClient {
 pub enum QueryStreamEvent {
     Columns(Vec<ColumnMeta>),
     Rows(Vec<Vec<Value>>),
+    Progress(QueryProgress),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QueryProgress {
+    pub read_rows: Option<u64>,
+    pub read_bytes: Option<u64>,
+    pub total_rows: Option<u64>,
+    pub received_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,9 +91,23 @@ impl ChClient {
         if self.cfg.read_only {
             request = request.query(&[("readonly", "2")]);
         }
+        let query_id = next_query_id();
+        request = request.query(&[("query_id", query_id.as_str())]);
         request = request.query(&[("default_format", "RowBinaryWithNamesAndTypes")]);
 
-        let response = request.send().await?;
+        let mut progress_interval = tokio::time::interval(Duration::from_millis(100));
+        progress_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut response_future = Box::pin(request.send());
+        let response = loop {
+            tokio::select! {
+                response = &mut response_future => break response?,
+                _ = progress_interval.tick() => {
+                    if let Some(progress) = self.query_progress(&query_id).await {
+                        on_event(QueryStreamEvent::Progress(progress));
+                    }
+                }
+            }
+        };
         let status = response.status();
         let code = response
             .headers()
@@ -100,36 +125,81 @@ impl ChClient {
         let mut decoder = rowbinary::StreamingDecoder::new();
         let mut sent_columns = false;
         let mut sent_rows = 0;
+        let mut pending_rows = Vec::new();
+        let mut received_bytes = 0;
         let mut body = response.bytes_stream();
-        while let Some(chunk) = body.next().await {
-            let mut rows = decoder.push(&chunk?)?;
-            if !sent_columns {
-                if let Some(columns) = decoder.columns() {
-                    on_event(QueryStreamEvent::Columns(columns.to_vec()));
-                    sent_columns = true;
-                }
-            }
-            if !rows.is_empty() {
-                let remaining = row_limit.saturating_sub(sent_rows);
-                if rows.len() > remaining {
-                    rows.truncate(remaining);
-                    if !rows.is_empty() {
-                        sent_rows += rows.len();
-                        on_event(QueryStreamEvent::Rows(rows));
+        loop {
+            tokio::select! {
+                chunk = body.next() => {
+                    let Some(chunk) = chunk else {
+                        break;
+                    };
+                    let chunk = chunk?;
+                    received_bytes += chunk.len() as u64;
+                    let mut rows = decoder.push(&chunk)?;
+                    if !sent_columns {
+                        if let Some(columns) = decoder.columns() {
+                            on_event(QueryStreamEvent::Columns(columns.to_vec()));
+                            sent_columns = true;
+                        }
                     }
-                    return Ok(QueryStreamSummary {
-                        rows: sent_rows,
-                        capped: true,
-                    });
+                    if !rows.is_empty() {
+                        let remaining = row_limit.saturating_sub(sent_rows + pending_rows.len());
+                        let capped = rows.len() > remaining;
+                        if capped {
+                            rows.truncate(remaining);
+                        }
+                        pending_rows.extend(rows);
+                        if pending_rows.len() >= 512 || capped {
+                            sent_rows += pending_rows.len();
+                            on_event(QueryStreamEvent::Rows(std::mem::take(&mut pending_rows)));
+                        }
+                        if capped {
+                            on_event(QueryStreamEvent::Progress(QueryProgress {
+                                received_bytes,
+                                ..QueryProgress::default()
+                            }));
+                            return Ok(QueryStreamSummary {
+                                rows: sent_rows,
+                                capped: true,
+                            });
+                        }
+                    }
                 }
-                sent_rows += rows.len();
-                on_event(QueryStreamEvent::Rows(rows));
+                _ = progress_interval.tick() => {
+                    let mut progress = self.query_progress(&query_id).await.unwrap_or_default();
+                    progress.received_bytes = received_bytes;
+                    on_event(QueryStreamEvent::Progress(progress));
+                }
             }
         }
+        if !pending_rows.is_empty() {
+            sent_rows += pending_rows.len();
+            on_event(QueryStreamEvent::Rows(pending_rows));
+        }
+        on_event(QueryStreamEvent::Progress(QueryProgress {
+            received_bytes,
+            ..QueryProgress::default()
+        }));
         decoder.finish()?;
         Ok(QueryStreamSummary {
             rows: sent_rows,
             capped: false,
+        })
+    }
+
+    async fn query_progress(&self, query_id: &str) -> Option<QueryProgress> {
+        let sql = format!(
+            "SELECT read_rows, read_bytes, total_rows_approx FROM system.processes \
+             WHERE query_id = '{query_id}' LIMIT 1"
+        );
+        let result = self.query(&sql).await.ok()?;
+        let row = result.rows.first()?;
+        Some(QueryProgress {
+            read_rows: value_as_u64(row.first()?),
+            read_bytes: value_as_u64(row.get(1)?),
+            total_rows: value_as_u64(row.get(2)?).filter(|total| *total > 0),
+            received_bytes: 0,
         })
     }
 
@@ -194,4 +264,21 @@ impl ChClient {
         }
         Ok(bytes.to_vec())
     }
+}
+
+fn value_as_u64(value: &Value) -> Option<u64> {
+    match value {
+        Value::UInt(value) => Some(*value),
+        Value::Int(value) => u64::try_from(*value).ok(),
+        _ => None,
+    }
+}
+
+fn next_query_id() -> String {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("zedb-{millis}-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed))
 }

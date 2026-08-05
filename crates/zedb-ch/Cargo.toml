@@ -10,8 +10,8 @@ zedb-core.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
 futures-util.workspace = true
+tokio.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
 tempfile = "3"

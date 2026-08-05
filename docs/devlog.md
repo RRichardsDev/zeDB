@@ -192,9 +192,18 @@ Status: complete.
   headers and rows across arbitrary HTTP chunk boundaries.
 - Query tabs stream result batches into their own virtualized grids, preserve
   cancellation, and report fetched rows and elapsed time while running.
+- Streaming queries use unique query IDs and poll `system.processes` while
+  waiting for both response headers and body data. The status strip reports
+  rows read, estimated total rows, bytes read, and live elapsed time. Received
+  HTTP bytes remain available as a permission-safe fallback.
+- Decoded rows are coalesced into batches of up to 512 before crossing into
+  the UI, and progress updates are throttled to 100 ms to avoid unnecessary
+  renders on large results.
 - Each tab owns its maximum-row setting. The picker defaults to 100k and offers
   1k, 10k, 50k, 100k, 1m, and explicit Unlimited modes.
 - The editor, results grid, and query status strip have independent vertical
   resize handles with narrow dividers and forgiving drag targets.
 - Component popovers use the same Menlo font, muted surfaces, borders, and
   hover contrast as the rest of zeDB.
+- The real ClickHouse integration test covers incremental streaming, server
+  progress, the row cap, typed columns, and final byte accounting.
