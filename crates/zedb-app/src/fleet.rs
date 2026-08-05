@@ -92,7 +92,6 @@ impl FleetAction {
 
 pub struct FleetState {
     pub repo_path: Entity<TextInput>,
-    pub filter: Entity<TextInput>,
     pub repo: Option<Arc<MigrationRepo>>,
     pub repo_error: Option<String>,
     pub rows: Vec<FleetRow>,
@@ -107,12 +106,23 @@ pub struct FleetState {
     /// Explicit per-session consent to mutate through this connection;
     /// reset whenever the connection changes.
     pub write_unlocked: bool,
-    pub cluster_input: Entity<TextInput>,
+    /// Cluster names discovered from system.clusters on refresh.
+    pub clusters: Vec<String>,
+    /// The ${cluster} value for fleet operations; None means declustered.
+    pub selected_cluster: Option<String>,
+    /// The cluster dropdown is open.
+    pub cluster_open: bool,
     pub pending_action: Option<FleetAction>,
     pub ack_structural: bool,
     pub confirm_input: Entity<TextInput>,
     pub action_running: bool,
     pub action_result: Option<Result<String, String>>,
+    /// Show the repo path editor instead of the compact repo chip.
+    pub editing_repo_path: bool,
+    /// Databases unchecked in the filter list (hidden from the matrix).
+    pub hidden_databases: HashSet<String>,
+    /// The database checkbox list is open.
+    pub filter_open: bool,
 }
 
 impl FleetState {
@@ -126,16 +136,10 @@ impl FleetState {
         let initial_path = initial_path.to_string();
         let repo_path =
             cx.new(move |cx| TextInput::new(&initial_path, "path to a migration repo", false, cx));
-        let filter = cx.new(|cx| TextInput::new("", "Filter databases", false, cx));
-        cx.observe(&filter, |_, _, cx| cx.notify()).detach();
-        let initial_cluster = initial_cluster.to_string();
-        let cluster_input =
-            cx.new(move |cx| TextInput::new(&initial_cluster, "cluster (blank: none)", false, cx));
         let confirm_input = cx.new(|cx| TextInput::new("", "type to confirm", false, cx));
         cx.observe(&confirm_input, |_, _, cx| cx.notify()).detach();
         Self {
             repo_path,
-            filter,
             repo: None,
             repo_error: None,
             rows: Vec::new(),
@@ -148,12 +152,17 @@ impl FleetState {
             drift_loading: HashSet::new(),
             drift_error: None,
             write_unlocked: false,
-            cluster_input,
+            clusters: Vec::new(),
+            selected_cluster: (!initial_cluster.is_empty()).then(|| initial_cluster.to_string()),
+            cluster_open: false,
             pending_action: None,
             ack_structural: false,
             confirm_input,
             action_running: false,
             action_result: None,
+            editing_repo_path: false,
+            hidden_databases: HashSet::new(),
+            filter_open: false,
         }
     }
 }
@@ -236,6 +245,7 @@ impl Workspace {
             Ok(repo) => {
                 self.fleet.repo = Some(Arc::new(repo));
                 self.fleet.repo_error = None;
+                self.fleet.editing_repo_path = false;
                 self.fleet.rows.clear();
                 self.fleet.fetched_at = None;
                 self.preferences.fleet_repo = Some(path_text);
@@ -291,6 +301,18 @@ impl Workspace {
             databases.extend(excluded.keys().cloned());
             databases.sort();
             databases.dedup();
+            let clusters: Vec<String> = runner
+                .client()
+                .query("SELECT DISTINCT cluster FROM system.clusters ORDER BY cluster")
+                .await
+                .map(|result| {
+                    result
+                        .rows
+                        .iter()
+                        .filter_map(|row| row.first().map(|value| value.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
             let statuses = runner
                 .status(&Targets::Databases(databases))
                 .await
@@ -310,7 +332,7 @@ impl Workspace {
                         .collect(),
                 })
                 .collect();
-            Ok::<_, String>(rows)
+            Ok::<_, String>((rows, clusters))
         });
 
         cx.spawn(async move |this, cx| {
@@ -321,8 +343,9 @@ impl Workspace {
                 }
                 this.fleet.loading = false;
                 match result {
-                    Ok(Ok(rows)) => {
+                    Ok(Ok((rows, clusters))) => {
                         this.fleet.rows = rows;
+                        this.fleet.clusters = clusters;
                         this.fleet.fetched_at = Some(Instant::now());
                     }
                     Ok(Err(error)) => this.fleet.fetch_error = Some(error),
@@ -384,13 +407,7 @@ impl Workspace {
         let Some(connected) = &self.connected else {
             return;
         };
-        let cluster_text = self.fleet.cluster_input.read(cx).text().trim().to_string();
-        let cluster = (!cluster_text.is_empty()).then_some(cluster_text.clone());
-        if self.preferences.fleet_cluster.as_deref() != Some(cluster_text.as_str()) {
-            self.preferences.fleet_cluster =
-                (!cluster_text.is_empty()).then_some(cluster_text.clone());
-            let _ = zedb_core::save_preferences(&self.preferences);
-        }
+        let cluster = self.fleet.selected_cluster.clone();
         let config = connected.client_config.clone();
         self.fleet.action_running = true;
         self.fleet.action_result = None;
@@ -538,12 +555,11 @@ impl Workspace {
         .detach();
     }
 
-    fn fleet_filtered_rows(&self, cx: &Context<Self>) -> Vec<FleetRow> {
-        let needle = self.fleet.filter.read(cx).text().trim().to_lowercase();
+    fn fleet_filtered_rows(&self) -> Vec<FleetRow> {
         self.fleet
             .rows
             .iter()
-            .filter(|row| needle.is_empty() || row.database.to_lowercase().contains(&needle))
+            .filter(|row| !self.fleet.hidden_databases.contains(&row.database))
             .cloned()
             .collect()
     }
@@ -891,9 +907,8 @@ impl Workspace {
                     params.insert(name.clone(), default.clone());
                 }
             }
-            let cluster_text = self.fleet.cluster_input.read(cx).text().trim().to_string();
-            if !cluster_text.is_empty() {
-                params.insert("cluster".into(), cluster_text);
+            if let Some(cluster) = &self.fleet.selected_cluster {
+                params.insert("cluster".into(), cluster.clone());
             }
             let with_db = |database: &str| {
                 let mut params = params.clone();
@@ -1149,7 +1164,7 @@ impl Workspace {
 
     pub(crate) fn fleet_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let repo = self.fleet.repo.clone();
-        let rows = self.fleet_filtered_rows(cx);
+        let rows = self.fleet_filtered_rows();
         let migrations: Vec<(u32, bool)> = repo
             .as_ref()
             .map(|repo| {
@@ -1228,32 +1243,100 @@ impl Workspace {
                             .cursor_pointer()
                     })
                     .on_click(cx.listener(|this, _, _, cx| this.fleet_refresh(cx))),
-            )
-            .child(div().w(px(220.)).child(self.fleet.filter.clone()))
-            .child(div().w(px(150.)).child(self.fleet.cluster_input.clone()))
-            .child({
-                let unlocked = self.fleet.write_unlocked;
+            );
+
+        // Second row: matrix controls, kept apart from the repo source.
+        let hidden_count = self.fleet.hidden_databases.len();
+        let unlocked = self.fleet.write_unlocked;
+        let controls = div()
+            .flex_none()
+            .px_3()
+            .py_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .child(
                 div()
-                    .id("fleet-write-unlock")
+                    .id("fleet-db-filter")
                     .px_3()
                     .py_1()
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(rgb(if unlocked { DANGER } else { BORDER }))
-                    .text_color(rgb(if unlocked { DANGER } else { TEXT_DIM }))
-                    .child(if unlocked {
-                        "Writes unlocked"
+                    .border_color(rgb(BORDER))
+                    .text_color(rgb(if hidden_count > 0 { TEXT } else { TEXT_DIM }))
+                    .child(if hidden_count > 0 {
+                        format!("Databases ({hidden_count} hidden)")
                     } else {
-                        "Writes locked"
+                        "Databases".into()
                     })
                     .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.fleet.write_unlocked = !this.fleet.write_unlocked;
+                        this.fleet.filter_open = !this.fleet.filter_open;
+                        this.fleet.cluster_open = false;
                         cx.notify();
-                    }))
+                    })),
+            )
+            .when(unlocked, |controls| {
+                controls.child(
+                    div()
+                        .id("fleet-cluster")
+                        .px_3()
+                        .py_1()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .text_color(rgb(TEXT_DIM))
+                        .child(format!(
+                            "cluster: {}",
+                            self.fleet.selected_cluster.as_deref().unwrap_or("none")
+                        ))
+                        .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.fleet.cluster_open = !this.fleet.cluster_open;
+                            this.fleet.filter_open = false;
+                            cx.notify();
+                        })),
+                )
             })
-            .when(self.fleet.write_unlocked, |toolbar| {
-                toolbar.child(
+            .child(
+                div()
+                    .id("fleet-write-unlock")
+                    .size(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(rgb(if unlocked { DANGER } else { BORDER }))
+                    .child(
+                        svg()
+                            .path(if unlocked {
+                                "icons/lock-open.svg"
+                            } else {
+                                "icons/lock.svg"
+                            })
+                            .size(px(14.))
+                            .text_color(rgb(if unlocked { DANGER } else { TEXT_DIM })),
+                    )
+                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(if unlocked {
+                            "Writes unlocked; click to lock"
+                        } else {
+                            "Writes locked; click to unlock"
+                        })
+                        .build(window, cx)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.fleet.write_unlocked = !this.fleet.write_unlocked;
+                        this.fleet.cluster_open = false;
+                        cx.notify();
+                    })),
+            )
+            .when(unlocked, |controls| {
+                controls.child(
                     div()
                         .id("fleet-upgrade-all")
                         .px_3()
@@ -1268,17 +1351,6 @@ impl Workspace {
                             this.fleet_request_action(FleetAction::UpgradeAll, cx)
                         })),
                 )
-            })
-            .when_some(repo.as_ref(), |toolbar, repo| {
-                toolbar.child(div().text_color(rgb(TEXT_DIM)).child(format!(
-                            "{}  |  {} migration(s)  |  ClickHouse {}",
-                            repo.root
-                                .file_name()
-                                .map(|name| name.to_string_lossy().to_string())
-                                .unwrap_or_else(|| repo.root.display().to_string()),
-                            repo.migrations.len(),
-                            repo.config.engine.version
-                        )))
             });
 
         let mut header = div()
@@ -1454,6 +1526,7 @@ impl Workspace {
             .text_color(rgb(TEXT))
             .text_sm()
             .child(toolbar)
+            .child(controls)
             .child(header)
             .child(
                 div()
@@ -1470,12 +1543,139 @@ impl Workspace {
                     .px_3()
                     .flex()
                     .items_center()
+                    .justify_between()
                     .bg(rgb(BG_STATUS))
                     .border_t_1()
                     .border_color(rgb(BORDER))
                     .text_xs()
-                    .child(status_line),
+                    .child(status_line)
+                    .when_some(repo.as_ref(), |strip, repo| {
+                        strip.child(div().text_color(rgb(TEXT_DIM)).child(format!(
+                            "{}  |  {} migration(s)  |  ClickHouse {}",
+                            repo.root
+                                .file_name()
+                                .map(|name| name.to_string_lossy().to_string())
+                                .unwrap_or_else(|| repo.root.display().to_string()),
+                            repo.migrations.len(),
+                            repo.config.engine.version
+                        )))
+                    }),
             )
+            .when(self.fleet.filter_open, |root| {
+                let mut card = div()
+                    .id("fleet-db-filter-list")
+                    .absolute()
+                    .top(px(84.))
+                    .left(px(12.))
+                    .w(px(280.))
+                    .max_h(px(360.))
+                    .overflow_y_scroll()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(BG_SIDEBAR))
+                    .p_1()
+                    .flex()
+                    .flex_col();
+                card = card.child(
+                    div()
+                        .id("fleet-db-filter-all")
+                        .px_2()
+                        .py_1()
+                        .rounded(px(3.))
+                        .text_color(rgb(TEXT_DIM))
+                        .child(if hidden_count > 0 {
+                            "Show all"
+                        } else {
+                            "All shown"
+                        })
+                        .hover(|item| item.bg(rgb(0x303640)).cursor_pointer())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.fleet.hidden_databases.clear();
+                            cx.notify();
+                        })),
+                );
+                for (index, row) in self.fleet.rows.iter().enumerate() {
+                    let database = row.database.clone();
+                    let checked = !self.fleet.hidden_databases.contains(&database);
+                    card = card.child(
+                        div()
+                            .id(("fleet-db-filter-item", index))
+                            .px_2()
+                            .py_1()
+                            .rounded(px(3.))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .size(px(12.))
+                                    .rounded(px(2.))
+                                    .border_1()
+                                    .border_color(rgb(BORDER))
+                                    .when(checked, |tick| tick.bg(rgb(SUCCESS))),
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(if checked { TEXT } else { TEXT_DIM }))
+                                    .child(database.clone()),
+                            )
+                            .hover(|item| item.bg(rgb(0x303640)).cursor_pointer())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.fleet.hidden_databases.remove(&database) {
+                                    this.fleet.hidden_databases.insert(database.clone());
+                                }
+                                cx.notify();
+                            })),
+                    );
+                }
+                root.child(card)
+            })
+            .when(self.fleet.cluster_open, |root| {
+                let mut card = div()
+                    .id("fleet-cluster-list")
+                    .absolute()
+                    .top(px(84.))
+                    .left(px(150.))
+                    .w(px(240.))
+                    .max_h(px(300.))
+                    .overflow_y_scroll()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(BG_SIDEBAR))
+                    .p_1()
+                    .flex()
+                    .flex_col();
+                let mut options: Vec<Option<String>> = vec![None];
+                options.extend(self.fleet.clusters.iter().cloned().map(Some));
+                for (index, option) in options.into_iter().enumerate() {
+                    let selected = self.fleet.selected_cluster == option;
+                    let label = option
+                        .clone()
+                        .unwrap_or_else(|| "none (declustered)".into());
+                    card = card.child(
+                        div()
+                            .id(("fleet-cluster-item", index))
+                            .px_2()
+                            .py_1()
+                            .rounded(px(3.))
+                            .text_color(rgb(if selected { TEXT } else { TEXT_DIM }))
+                            .when(selected, |item| item.bg(rgb(0x2c3a4d)))
+                            .child(label)
+                            .hover(|item| item.bg(rgb(0x303640)).cursor_pointer())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.fleet.selected_cluster = option.clone();
+                                this.fleet.cluster_open = false;
+                                this.preferences.fleet_cluster =
+                                    this.fleet.selected_cluster.clone();
+                                let _ = zedb_core::save_preferences(&this.preferences);
+                                cx.notify();
+                            })),
+                    );
+                }
+                root.child(card)
+            })
             .when_some(modal, |root, modal| root.child(modal))
     }
 }
