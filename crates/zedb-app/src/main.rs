@@ -2995,8 +2995,9 @@ impl Workspace {
                                     button
                                         .hover(|button| {
                                             button
-                                                .bg(rgb(0x303640))
-                                                .text_color(rgb(TEXT))
+                                                .bg(rgb(0x294132))
+                                                .border_color(rgb(SUCCESS))
+                                                .text_color(rgb(SUCCESS))
                                                 .cursor_pointer()
                                         })
                                         .on_click(
