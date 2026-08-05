@@ -3,14 +3,16 @@
 mod chain;
 mod config;
 mod exclusions;
+mod import;
 mod scaffold;
 mod template;
 
 use std::path::{Path, PathBuf};
 
 pub use chain::{discover_chain, Migration, RollbackClass};
-pub use config::{ParamConfig, RepoConfig, ScopeConfig};
+pub use config::{ParamConfig, ReplayConfig, RepoConfig, ScopeConfig};
 pub use exclusions::{ExclusionGroup, Exclusions};
+pub use import::{import_repo, ImportReport};
 pub use scaffold::{init_repo, scaffold_migration, ScaffoldOptions};
 pub use template::{placeholders, render, undeclared_placeholders, BUILTIN_PARAMS};
 

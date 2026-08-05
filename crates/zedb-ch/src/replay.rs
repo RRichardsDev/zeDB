@@ -124,10 +124,16 @@ pub fn sentinel_params(config: &RepoConfig) -> BTreeMap<String, String> {
     params.insert("db".into(), "zz_sentinel_db".into());
     params.insert("cluster".into(), "zz_sentinel_cluster".into());
     let mut sentinel = 739_417u64;
-    for name in config.params.keys() {
-        params.insert(name.clone(), sentinel.to_string());
-        // Steps chosen so no sentinel is a substring of another.
-        sentinel += 20;
+    for (name, param) in &config.params {
+        match &param.sentinel {
+            Some(value) => params.insert(name.clone(), value.clone()),
+            None => {
+                let value = sentinel.to_string();
+                // Steps chosen so no sentinel is a substring of another.
+                sentinel += 20;
+                params.insert(name.clone(), value)
+            }
+        };
     }
     params
 }

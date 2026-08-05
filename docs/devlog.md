@@ -346,3 +346,24 @@ Status: implementation complete, awaiting UI acceptance.
   rows say ran and diffs the canonical result against system.tables under
   shared normalization. Databases behind head verify clean at their own
   position, which the fleet view will lean on.
+
+## Phase 1 M8: the importer, and the acceptance gate (2026-08-05)
+
+- zedb import converts an analytics-clickhouse-ddl checkout: migrations
+  copy verbatim, exceptions.toml becomes exclusions.toml, and zedb.toml is
+  synthesized with the ancestor's built-ins made explicit: declared
+  global/org scopes, shared bootstrap databases under [replay], the pinned
+  version parsed from pin.py, and the analytics parameters declared with
+  the ancestor's dummy and sentinel values (new ParamConfig fields; the
+  offset expressions cannot use generated numeric sentinels).
+- The acceptance gate passes on the real repo: import without hand
+  editing, regen byte-stable, sql and equivalence checks green. Beyond
+  the semantic bar, the regenerated current-state is byte-for-byte
+  identical to the ancestor's committed tree, including the Replicated
+  engine transplant with a custom zk path on the ALTERed ConversionFacts
+  and the rv_ naming, generalized to shared-database initials.
+- import-tracking copies default.schema_migrations into zedb_migrations
+  server-side, preserving recorded_at so argMax-latest state (including
+  rollback history) carries over; a second run refuses. Remaining
+  acceptance: zedb status against staging agreeing with ddl status, which
+  needs staging credentials.

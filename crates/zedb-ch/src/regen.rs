@@ -168,8 +168,32 @@ fn snake(text: &str) -> String {
 }
 
 /// Reduce a (possibly qualified/quoted) object name to a stem chunk.
+/// Objects living in a shared (non-templated) database carry that
+/// database's initials as a prefix, so `RefreshableViews.${db}_X` and
+/// `${db}.X` never share a stem (the ancestor hardcoded `rv_`).
 fn bare(name: &str, fallback: &str) -> String {
-    let last = name.split('.').next_back().unwrap_or(name);
+    let (qualifier, last) = match name.rsplit_once('.') {
+        Some((qualifier, last)) => (qualifier, last),
+        None => ("", name),
+    };
+    // Only per-database objects parked in a shared database need the
+    // disambiguating prefix; fully shared objects keep bare stems.
+    let prefix = if !qualifier.is_empty() && !qualifier.contains("${db}") && last.contains("${db}")
+    {
+        let initials: String = qualifier
+            .chars()
+            .filter(|c| c.is_ascii_uppercase())
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        let prefix = if initials.len() >= 2 {
+            initials
+        } else {
+            snake(qualifier)
+        };
+        format!("{prefix}_")
+    } else {
+        String::new()
+    };
     let cleaned = last
         .replace("${db}_", "")
         .replace("${db}", "")
@@ -179,7 +203,7 @@ fn bare(name: &str, fallback: &str) -> String {
     if stem.is_empty() {
         fallback.to_string()
     } else {
-        stem
+        format!("{prefix}{stem}")
     }
 }
 
@@ -277,10 +301,11 @@ impl<'a> Regenerator<'a> {
         global
     }
 
-    /// Literal (non-templated) databases the chain creates: these are
-    /// shared across the fleet and isolated per replay side.
+    /// Databases shared across the fleet: declared in config (created by
+    /// cluster bootstrap) plus literal ones the chain creates itself.
+    /// Ephemeral replays pre-create and isolate them per side.
     fn shared_databases(&self, chain_texts: &[String]) -> Vec<String> {
-        let mut shared = Vec::new();
+        let mut shared = self.repo.config.replay.shared_databases.clone();
         for text in chain_texts {
             for chunk in split_statements(text) {
                 let (_, body) = partition_chunk(&chunk);

@@ -110,6 +110,22 @@ enum Command {
         /// Stamp through this migration number.
         number: u32,
     },
+    /// Convert an analytics-clickhouse-ddl repo into a format-1 repo.
+    Import {
+        /// Path to the ancestor repo.
+        ancestor: PathBuf,
+        /// Destination directory for the new repo.
+        destination: PathBuf,
+    },
+    /// Copy ancestor tracking rows (default.schema_migrations) into the
+    /// format-1 tracking tables.
+    ImportTracking {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        /// Source table holding the ancestor rows.
+        #[arg(long, default_value = "default.schema_migrations")]
+        from: String,
+    },
     /// Diff live schemas against each database's applied chain position.
     Verify {
         #[command(flatten)]
@@ -514,6 +530,32 @@ fn run(cli: Cli) -> Result<(), String> {
             runtime
                 .block_on(runner.stamp(&targets, number))
                 .map_err(|error| error.to_string())
+        }
+        Command::Import {
+            ancestor,
+            destination,
+        } => {
+            let report = zedb_core::repo::import_repo(&ancestor, &destination)
+                .map_err(|error| error.to_string())?;
+            println!(
+                "imported {} migration(s) into {} (ClickHouse {}, {} exclusion group(s))",
+                report.migrations,
+                report.destination.display(),
+                report.engine_version,
+                report.exclusion_groups
+            );
+            println!("next: zedb pin, zedb regen, zedb check");
+            Ok(())
+        }
+        Command::ImportTracking { connection, from } => {
+            let repo = MigrationRepo::open(&cli.repo).map_err(|error| error.to_string())?;
+            let runner = zedb_ch::runner::Runner::new(&repo, connection.options());
+            let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
+            let imported = runtime
+                .block_on(runner.import_tracking(&from))
+                .map_err(|error| error.to_string())?;
+            println!("imported {imported} tracking row(s) from {from}");
+            Ok(())
         }
         Command::Verify {
             connection,

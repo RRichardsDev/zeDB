@@ -41,7 +41,11 @@ pub fn dummy_params(repo: &MigrationRepo) -> BTreeMap<String, String> {
     for (name, config) in &repo.config.params {
         params.insert(
             name.clone(),
-            config.default.clone().unwrap_or_else(|| "42".into()),
+            config
+                .dummy
+                .clone()
+                .or_else(|| config.default.clone())
+                .unwrap_or_else(|| "42".into()),
         );
     }
     params
@@ -244,6 +248,7 @@ pub fn check_equivalence(
         .collect::<Result<_, _>>()?;
 
     let params = dummy_params(repo);
+    let shared = repo.config.replay.shared_databases.clone();
     let replay = LocalReplay::new(binary);
     let dumps = replay
         .dump_objects(
@@ -258,7 +263,7 @@ pub fn check_equivalence(
                 },
             ],
             &params,
-            &[],
+            &shared,
         )
         .map_err(|error| CheckError::Replay(error.to_string()))?;
 

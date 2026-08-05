@@ -45,10 +45,21 @@ registry_query = "SELECT name FROM system.databases WHERE name LIKE 'org_%'"
 global = { }
 db = { param = "db" }
 
+[replay]
+# Databases created by cluster bootstrap rather than the chain; ephemeral
+# replays pre-create them and isolate them per replay side.
+shared_databases = ["org_to_slug_mappings"]
+
 [params]
 # User-declared template parameters. ${db} and ${cluster} are built-in.
 # The ancestor's analytics-specific offsets become declarations like:
-refresh_offset = { default = "0 MINUTE", description = "per-db refresh stagger" }
+refresh_offset_expr = { dummy = "1 HOUR 42 MINUTE", sentinel = "2 HOUR 53 MINUTE", description = "per-db refresh stagger" }
+# Fields: `default` is the runtime value when no --param override is
+# passed (omit to force explicit overrides at apply time); `dummy` is what
+# checks render with (falls back to default, then a number); `sentinel` is
+# the collision-proof value for regen's replay round trip, needed when a
+# generated number is invalid in the parameter's position (for example
+# interval expressions).
 ```
 
 - `${param}` placeholders may appear in identifier or expression position.

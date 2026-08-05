@@ -17,6 +17,8 @@ pub struct RepoConfig {
     #[serde(default)]
     pub fleet: FleetConfig,
     #[serde(default)]
+    pub replay: ReplayConfig,
+    #[serde(default)]
     pub scopes: BTreeMap<String, ScopeConfig>,
     #[serde(default)]
     pub params: BTreeMap<String, ParamConfig>,
@@ -58,6 +60,15 @@ pub struct FleetConfig {
     pub registry_query: Option<String>,
 }
 
+/// Replay assumptions: databases created by cluster bootstrap rather
+/// than the chain, which ephemeral replays must pre-create and isolate.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplayConfig {
+    #[serde(default)]
+    pub shared_databases: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScopeConfig {
@@ -68,8 +79,19 @@ pub struct ScopeConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ParamConfig {
+    /// Runtime value when no override is passed; omit to force explicit
+    /// --param at apply time.
     #[serde(default)]
     pub default: Option<String>,
+    /// Value used by `check sql` and equivalence renders; falls back to
+    /// `default`, then a number.
+    #[serde(default)]
+    pub dummy: Option<String>,
+    /// Collision-proof value for regen's replay round trip; needed when a
+    /// generated number is not valid in the parameter's position (for
+    /// example interval expressions).
+    #[serde(default)]
+    pub sentinel: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
 }

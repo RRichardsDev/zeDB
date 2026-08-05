@@ -117,17 +117,22 @@ impl<'a> Verifier<'a> {
                         texts,
                     }],
                     &params,
-                    &[],
+                    &self.repo.config.replay.shared_databases,
                 )
                 .map_err(|error| VerifyError::Replay(error.to_string()))?;
             dumps[EXPECTED_SIDE]
                 .iter()
                 .map(|(name, create)| {
+                    let stripped = name.replace(&format!("{EXPECTED_SIDE}__"), "");
                     (
-                        name.replace(EXPECTED_SIDE, "${db}"),
+                        stripped.replace(EXPECTED_SIDE, "${db}"),
                         diff_norm(create, EXPECTED_SIDE),
                     )
                 })
+                // Objects in shared bootstrap databases are cluster-level,
+                // not per-database state; comparing them per database is a
+                // fleet-view concern, not drift.
+                .filter(|(name, _)| name.starts_with("${db}."))
                 .collect()
         };
 

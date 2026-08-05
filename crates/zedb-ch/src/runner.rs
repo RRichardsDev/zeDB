@@ -780,6 +780,52 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
+    /// Map ancestor tracking rows (`default.schema_migrations`) into the
+    /// format-1 tables, preserving recorded_at ordering so argMax-latest
+    /// state carries over; returns how many rows moved. Idempotent-ish:
+    /// refuses when zedb_migrations already has rows.
+    pub async fn import_tracking(&self, source_table: &str) -> Result<u64, RunnerError> {
+        self.require_write("import-tracking")?;
+        self.ensure_tracking().await?;
+        let existing = self
+            .client
+            .query(&format!("SELECT count() FROM {}", self.tracking_table()))
+            .await
+            .map_err(|error| RunnerError::Server(error.to_string()))?;
+        let count = existing
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        if count != "0" {
+            return Err(RunnerError::Refused(format!(
+                "{} already has {count} row(s); refusing to import on top",
+                self.tracking_table()
+            )));
+        }
+        self.client
+            .execute(&format!(
+                "INSERT INTO {} (db, migration, action, status, error, recorded_at,                  duration_secs, run_id, params)                  SELECT db, migration, action, status, error, recorded_at,                  duration_secs, run_id, map() FROM {source_table}",
+                self.tracking_table()
+            ))
+            .await
+            .map_err(|error| RunnerError::Server(error.to_string()))?;
+        let imported = self
+            .client
+            .query(&format!("SELECT count() FROM {}", self.tracking_table()))
+            .await
+            .map_err(|error| RunnerError::Server(error.to_string()))?;
+        let imported: u64 = imported
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|value| value.to_string().parse().ok())
+            .unwrap_or(0);
+        self.audit("*", 0, "import-tracking", "success", None);
+        Ok(imported)
+    }
+
     /// Apply one targeted migration to specific databases.
     pub async fn apply_targeted(&self, targets: &Targets, number: u32) -> Result<(), RunnerError> {
         self.require_write("apply")?;
