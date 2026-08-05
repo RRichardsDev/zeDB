@@ -336,3 +336,13 @@ Status: implementation complete, awaiting UI acceptance.
   real server (this had leaked a dozen servers from the ancestor's checks
   on this machine), and /ping responses are chunked, so readiness must
   check the status line, not the body.
+
+## Phase 1 M6-M7: fleet targeting and verify (2026-08-05)
+
+- Target resolution reports what --all skipped (database + owning group)
+  instead of only printing, so both CLI and tests see it; --group and
+  --db reach excluded databases deliberately.
+- zedb verify replays exactly the migrations each database's tracking
+  rows say ran and diffs the canonical result against system.tables under
+  shared normalization. Databases behind head verify clean at their own
+  position, which the fleet view will lean on.
