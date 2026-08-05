@@ -427,3 +427,19 @@ Status: implementation complete, awaiting UI acceptance.
 - Verified live against the seeded demo fleet: twelve databases showing
   every state at once, filter narrowing instantly. Remaining for M1: the
   several-hundred-database scale check. M2 (drift) and M3 (dry-run) next.
+
+## Phase 2 M2-M3: drift and dry-run in the detail panel (2026-08-05)
+
+- Selecting a matrix row opens a detail panel: state summary, an
+  on-demand Verify (the real replay-backed verifier on the tokio runtime,
+  never blocking the matrix) rendering clean-with-age or the full
+  expected/live drift findings, and the dry-run section showing every
+  pending migration's SQL rendered with that database's parameters,
+  unresolved placeholders (like ${cluster}) left visible rather than
+  guessed.
+- Verified in the GUI against the demo fleet: kappa's sneaky column
+  surfaced as a drift finding, eta's pending 00100 rendered per-database.
+  Scale: a 400-database synthetic registry statuses in 0.7s and rows ride
+  the virtualized list proven at 1M rows in the grid spike.
+- Driving gpui with synthetic CGEvents needs a preceding mouse-move and
+  mouseEventClickState=1, or clicks are silently dropped.

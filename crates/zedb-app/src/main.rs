@@ -499,11 +499,7 @@ impl Workspace {
                         .rounded(px(3.))
                         .text_xs()
                         .text_color(rgb(TEXT_DIM))
-                        .hover(|pill| {
-                            pill.bg(rgb(BG))
-                                .text_color(rgb(TEXT))
-                                .cursor_pointer()
-                        })
+                        .hover(|pill| pill.bg(rgb(BG)).text_color(rgb(TEXT)).cursor_pointer())
                         .on_click(cx.listener(move |_, _, _, cx| {
                             cx.open_url(&update.url);
                         }))

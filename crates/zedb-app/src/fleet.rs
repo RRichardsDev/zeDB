@@ -6,13 +6,14 @@
 //! Everything shown here comes from the same zedb-core/zedb-ch calls the
 //! CLI makes; this file only fetches and renders.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{div, prelude::*, px, rgb, svg, uniform_list, Context, Entity, SharedString};
 use zedb_ch::runner::{Runner, RunnerOptions, Targets};
+use zedb_ch::verify::Verifier;
 use zedb_core::repo::MigrationRepo;
 use zedb_core::save_preferences;
 
@@ -37,6 +38,12 @@ pub struct FleetRow {
     pub excluded: Option<String>,
 }
 
+/// Drift findings for one database, from `zedb verify` semantics.
+pub struct DriftInfo {
+    pub findings: Vec<String>,
+    pub checked_at: Instant,
+}
+
 pub struct FleetState {
     pub repo_path: Entity<TextInput>,
     pub filter: Entity<TextInput>,
@@ -48,6 +55,9 @@ pub struct FleetState {
     pub fetched_at: Option<Instant>,
     pub selected: Option<String>,
     pub fetch_generation: u64,
+    pub drift: HashMap<String, DriftInfo>,
+    pub drift_loading: HashSet<String>,
+    pub drift_error: Option<String>,
 }
 
 impl FleetState {
@@ -69,8 +79,22 @@ impl FleetState {
             fetched_at: None,
             selected: None,
             fetch_generation: 0,
+            drift: HashMap::new(),
+            drift_loading: HashSet::new(),
+            drift_error: None,
         }
     }
+}
+
+/// Substitute the parameters we know (the database and declared
+/// defaults), leaving anything unresolved as a visible `${name}`
+/// placeholder: the dry-run shows exactly what is and is not decided yet.
+fn render_lenient(sql: &str, params: &BTreeMap<String, String>) -> String {
+    let mut rendered = sql.to_string();
+    for (name, value) in params {
+        rendered = rendered.replace(&format!("${{{name}}}"), value);
+    }
+    rendered
 }
 
 /// Cell state for one (database, migration) pair.
@@ -219,6 +243,81 @@ impl Workspace {
         .detach();
     }
 
+    pub(crate) fn fleet_verify(&mut self, database: String, cx: &mut Context<Self>) {
+        let Some(repo) = self.fleet.repo.clone() else {
+            return;
+        };
+        let Some(connected) = &self.connected else {
+            return;
+        };
+        let Some(binary) = zedb_ch::cached_binary(&repo.config.engine.version) else {
+            self.fleet.drift_error = Some(format!(
+                "pinned ClickHouse {} is not cached; run `zedb pin` first",
+                repo.config.engine.version
+            ));
+            cx.notify();
+            return;
+        };
+        if self.fleet.drift_loading.contains(&database) {
+            return;
+        }
+        let config = connected.client_config.clone();
+        self.fleet.drift_loading.insert(database.clone());
+        self.fleet.drift_error = None;
+        cx.notify();
+
+        let task_database = database.clone();
+        let handle = rt::tokio().spawn(async move {
+            let runner = Runner::new(
+                &repo,
+                RunnerOptions {
+                    server: config,
+                    admin: None,
+                    cluster: None,
+                    no_cluster: true,
+                    write: false,
+                    dry_run: false,
+                    overrides: BTreeMap::new(),
+                },
+            );
+            let verifier = Verifier::new(&repo, &runner, binary);
+            let drifts = verifier
+                .verify(&Targets::Databases(vec![task_database.clone()]))
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok::<_, String>(
+                drifts
+                    .into_iter()
+                    .next()
+                    .map(|drift| drift.findings)
+                    .unwrap_or_default(),
+            )
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = handle.await;
+            this.update(cx, |this, cx| {
+                this.fleet.drift_loading.remove(&database);
+                match result {
+                    Ok(Ok(findings)) => {
+                        this.fleet.drift.insert(
+                            database,
+                            DriftInfo {
+                                findings,
+                                checked_at: Instant::now(),
+                            },
+                        );
+                    }
+                    Ok(Err(error)) => this.fleet.drift_error = Some(error),
+                    Err(error) => this.fleet.drift_error = Some(error.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn fleet_filtered_rows(&self, cx: &Context<Self>) -> Vec<FleetRow> {
         let needle = self.fleet.filter.read(cx).text().trim().to_lowercase();
         self.fleet
@@ -227,6 +326,204 @@ impl Workspace {
             .filter(|row| needle.is_empty() || row.database.to_lowercase().contains(&needle))
             .cloned()
             .collect()
+    }
+
+    fn fleet_detail_panel(&mut self, row: &FleetRow, cx: &mut Context<Self>) -> impl IntoElement {
+        let database = row.database.clone();
+        let repo = self.fleet.repo.clone();
+        let drift = self.fleet.drift.get(&database);
+        let drift_loading = self.fleet.drift_loading.contains(&database);
+
+        let mut summary: Vec<(String, u32)> = Vec::new();
+        if let Some(group) = &row.excluded {
+            summary.push((format!("excluded by group {group}"), TEXT_DIM));
+        }
+        summary.push((
+            format!(
+                "head {}",
+                row.head
+                    .map(|head| format!("{head:05}"))
+                    .unwrap_or_else(|| "none".into())
+            ),
+            TEXT_DIM,
+        ));
+        if !row.failed.is_empty() {
+            let failed: Vec<String> = row.failed.iter().map(|n| format!("{n:05}")).collect();
+            summary.push((format!("failed: {}", failed.join(", ")), DANGER));
+        }
+        if !row.customised.is_empty() {
+            let customised: Vec<String> =
+                row.customised.iter().map(|n| format!("{n:05}")).collect();
+            summary.push((
+                format!("customised: {}", customised.join(", ")),
+                ACCENT_CUSTOM,
+            ));
+        }
+
+        // Dry-run (M3): every pending migration rendered with this
+        // database's parameters; unresolved placeholders stay visible.
+        let mut pending_sql: Vec<(u32, String)> = Vec::new();
+        if let Some(repo) = &repo {
+            let mut params: BTreeMap<String, String> = BTreeMap::new();
+            params.insert("db".into(), database.clone());
+            for (name, config) in &repo.config.params {
+                if let Some(default) = &config.default {
+                    params.insert(name.clone(), default.clone());
+                }
+            }
+            for migration in &repo.migrations {
+                if row.pending.contains(&migration.number) && migration.targeted.is_none() {
+                    if let Ok(sql) = migration.upgrade_sql() {
+                        pending_sql
+                            .push((migration.number, render_lenient(sql.trim_end(), &params)));
+                    }
+                }
+            }
+        }
+
+        let drift_section: gpui::Div = match (drift_loading, drift) {
+            (true, _) => div()
+                .text_color(rgb(TEXT_DIM))
+                .child("Verifying against replayed chain state..."),
+            (false, Some(info)) if info.findings.is_empty() => {
+                div().text_color(rgb(SUCCESS)).child(format!(
+                    "verified clean {}s ago",
+                    info.checked_at.elapsed().as_secs()
+                ))
+            }
+            (false, Some(info)) => {
+                let mut section = div().flex().flex_col().gap_1();
+                section = section.child(
+                    div()
+                        .text_color(rgb(DANGER))
+                        .child(format!("{} drift finding(s)", info.findings.len())),
+                );
+                for finding in &info.findings {
+                    section = section.child(
+                        div()
+                            .p_2()
+                            .rounded(px(3.))
+                            .bg(rgb(0x2a2126))
+                            .text_xs()
+                            .font_family("Menlo")
+                            .child(finding.clone()),
+                    );
+                }
+                section
+            }
+            (false, None) => div().text_color(rgb(TEXT_DIM)).child("Not verified yet"),
+        };
+
+        let mut panel = div()
+            .w(px(420.))
+            .flex_none()
+            .h_full()
+            .flex()
+            .flex_col()
+            .border_l_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(BG_SIDEBAR))
+            .child(
+                div()
+                    .flex_none()
+                    .px_3()
+                    .py_2()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(div().text_color(rgb(TEXT)).child(database.clone()))
+                    .child(
+                        div()
+                            .id("fleet-detail-close")
+                            .px_2()
+                            .rounded(px(3.))
+                            .text_color(rgb(TEXT_DIM))
+                            .child("✕")
+                            .hover(|button| button.text_color(rgb(TEXT)).cursor_pointer())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.fleet.selected = None;
+                                cx.notify();
+                            })),
+                    ),
+            );
+
+        let mut body = div()
+            .id("fleet-detail-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2();
+        for (text, color) in summary {
+            body = body.child(div().text_color(rgb(color)).child(text));
+        }
+        body = body
+            .child(
+                div()
+                    .id("fleet-verify")
+                    .mt_1()
+                    .px_3()
+                    .py_1()
+                    .w(px(120.))
+                    .text_center()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .text_color(rgb(TEXT))
+                    .child(if drift_loading {
+                        "Verifying..."
+                    } else {
+                        "Verify"
+                    })
+                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                    .on_click({
+                        let database = database.clone();
+                        cx.listener(move |this, _, _, cx| this.fleet_verify(database.clone(), cx))
+                    }),
+            )
+            .child(drift_section);
+        if let Some(error) = &self.fleet.drift_error {
+            body = body.child(div().text_color(rgb(DANGER)).child(error.clone()));
+        }
+
+        if pending_sql.is_empty() && row.excluded.is_none() && row.failed.is_empty() {
+            body = body.child(
+                div()
+                    .mt_2()
+                    .text_color(rgb(TEXT_DIM))
+                    .child("Nothing pending: an upgrade would do no work."),
+            );
+        }
+        for (number, sql) in pending_sql {
+            body = body
+                .child(
+                    div()
+                        .mt_2()
+                        .text_color(rgb(ACCENT_PENDING))
+                        .child(format!("pending {number:05}: an upgrade would run")),
+                )
+                .child(
+                    div()
+                        .id(("fleet-sql", number as usize))
+                        .p_2()
+                        .rounded(px(3.))
+                        .bg(rgb(0x1b1e23))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .text_xs()
+                        .font_family("Menlo")
+                        .whitespace_nowrap()
+                        .overflow_x_scroll()
+                        .child(sql),
+                );
+        }
+
+        panel = panel.child(body);
+        panel
     }
 
     pub(crate) fn fleet_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -248,6 +545,12 @@ impl Workspace {
             .map(|(number, _)| *number);
         let selected = self.fleet.selected.clone();
         let loading = self.fleet.loading;
+        let selected_row = selected
+            .as_deref()
+            .and_then(|name| rows.iter().find(|row| row.database == name).cloned());
+        let detail = selected_row
+            .as_ref()
+            .map(|row| self.fleet_detail_panel(row, cx).into_any_element());
 
         let toolbar = div()
             .flex_none()
@@ -485,7 +788,14 @@ impl Workspace {
             .text_sm()
             .child(toolbar)
             .child(header)
-            .child(div().flex_1().min_h_0().child(list))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(div().flex_1().min_h_0().child(list))
+                    .when_some(detail, |content, detail| content.child(detail)),
+            )
             .child(
                 div()
                     .flex_none()
