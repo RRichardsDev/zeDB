@@ -1,0 +1,3 @@
+[groups.frozen]
+reason = "Demo of a deliberately excluded database; migrate with --group frozen."
+databases = ["zedb_frozen"]

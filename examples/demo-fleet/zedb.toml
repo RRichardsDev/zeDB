@@ -1,0 +1,19 @@
+format = 1
+
+[engine]
+kind = "clickhouse"
+version = "26.3.12.3"
+
+[tracking]
+database = "default"
+cluster_param = "cluster"
+
+[fleet]
+registry_query = "SELECT name FROM system.databases WHERE name LIKE 'zedb_%' ORDER BY name"
+
+[scopes]
+global = { }
+db = { param = "db" }
+
+[params]
+ttl_days = { default = "30", description = "event retention window" }
