@@ -13,6 +13,6 @@ mod value;
 
 pub use connection::{ConnectionConfig, ConnectionNode, EnvTier};
 pub use preferences::{load_preferences, save_preferences, Preferences};
-pub use session::{save_update_session, take_update_session, SavedQueryTab, UpdateSession};
+pub use session::{save_session, take_session, SavedQueryTab, SavedSession};
 pub use store::{load_connections, save_connections, StoreError};
 pub use value::{ColumnMeta, QueryResult, Value};

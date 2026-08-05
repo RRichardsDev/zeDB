@@ -1,8 +1,8 @@
-//! One-shot UI session handoff across an in-app update relaunch.
+//! UI session persistence across launches.
 //!
-//! The workspace saves its open query tabs just before restarting into a new
-//! version; the next launch consumes the file exactly once. This is not
-//! general session restore: a normal quit writes nothing.
+//! The workspace saves its open query tabs on every quit (including the
+//! update restart) and the next launch consumes the file exactly once, so a
+//! stale session can never keep reappearing after the user closes its tabs.
 
 use std::path::PathBuf;
 
@@ -12,7 +12,7 @@ use crate::store::StoreError;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct UpdateSession {
+pub struct SavedSession {
     pub tabs: Vec<SavedQueryTab>,
     pub active_tab: usize,
 }
@@ -30,15 +30,15 @@ fn session_path() -> Result<PathBuf, StoreError> {
             .ok_or(StoreError::NoConfigDir)?
             .join("zedb"),
     };
-    Ok(dir.join("update-session.json"))
+    Ok(dir.join("session.json"))
 }
 
-pub fn save_update_session(session: &UpdateSession) -> Result<(), StoreError> {
+pub fn save_session(session: &SavedSession) -> Result<(), StoreError> {
     let path = session_path()?;
     save_at(session, path)
 }
 
-fn save_at(session: &UpdateSession, path: PathBuf) -> Result<(), StoreError> {
+fn save_at(session: &SavedSession, path: PathBuf) -> Result<(), StoreError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| StoreError::Io {
             path: parent.to_path_buf(),
@@ -56,11 +56,11 @@ fn save_at(session: &UpdateSession, path: PathBuf) -> Result<(), StoreError> {
 
 /// Read and delete the saved session. Returns `None` when there is nothing
 /// to restore or the file is unreadable; either way it will not fire twice.
-pub fn take_update_session() -> Option<UpdateSession> {
+pub fn take_session() -> Option<SavedSession> {
     take_at(session_path().ok()?)
 }
 
-fn take_at(path: PathBuf) -> Option<UpdateSession> {
+fn take_at(path: PathBuf) -> Option<SavedSession> {
     let data = std::fs::read_to_string(&path).ok()?;
     let _ = std::fs::remove_file(&path);
     serde_json::from_str(&data).ok()
@@ -74,7 +74,7 @@ mod tests {
     fn session_round_trips_and_fires_once() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("update-session.json");
-        let session = UpdateSession {
+        let session = SavedSession {
             tabs: vec![
                 SavedQueryTab {
                     sql: "SELECT 1".into(),
