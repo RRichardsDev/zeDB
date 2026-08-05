@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use zedb_core::repo::{placeholders, render, Migration, MigrationRepo, RollbackClass};
 
-use crate::replay::{decluster, is_access_control, split_statements};
+use crate::replay::{decluster, split_statements};
 use crate::{ChClient, ChConfig};
 
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +30,11 @@ pub enum RunnerError {
 
 pub struct RunnerOptions {
     pub server: ChConfig,
+    /// Optional elevated connection: statements needing grants the
+    /// migration user deliberately lacks (OPTIMIZE, TRUNCATE, structural
+    /// ALTER, functions, SYSTEM, definers) route here, exactly as the
+    /// ancestor tooling did.
+    pub admin: Option<ChConfig>,
     pub cluster: Option<String>,
     /// Render for a single node: `ON CLUSTER` dropped, Replicated engines
     /// declustered.
@@ -44,6 +49,7 @@ pub struct RunnerOptions {
 pub struct Runner<'a> {
     repo: &'a MigrationRepo,
     client: ChClient,
+    admin: Option<ChClient>,
     options: RunnerOptions,
     run_id: String,
 }
@@ -108,9 +114,11 @@ fn getrandom(buffer: &mut [u8]) {
 impl<'a> Runner<'a> {
     pub fn new(repo: &'a MigrationRepo, options: RunnerOptions) -> Self {
         let client = ChClient::new(options.server.clone());
+        let admin = options.admin.clone().map(ChClient::new);
         Self {
             repo,
             client,
+            admin,
             options,
             run_id: new_run_id(),
         }
@@ -517,7 +525,11 @@ impl<'a> Runner<'a> {
         .await?;
         let start = Instant::now();
         for (index, statement) in statements.iter().enumerate() {
-            if let Err(error) = self.client.execute(statement.trim()).await {
+            let executor = match &self.admin {
+                Some(admin) if needs_admin(statement) => admin,
+                _ => &self.client,
+            };
+            if let Err(error) = executor.execute(statement.trim()).await {
                 let first_sql = statement
                     .lines()
                     .find(|line| !line.trim().is_empty() && !line.trim().starts_with("--"))
@@ -916,9 +928,43 @@ impl Runner<'_> {
     }
 }
 
-/// Statements that would be routed through admin credentials in the
-/// ancestor tooling. Format v1 does not implement admin routing yet; the
-/// helper exists so callers can warn.
+use std::sync::LazyLock;
+
+static NEEDS_ADMIN: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r"(?i)^(OPTIMIZE|TRUNCATE|ALTER\s+TABLE|CREATE\s+FUNCTION|DROP\s+FUNCTION|SYSTEM)\b",
+    )
+    .expect("static regex")
+});
+static NEEDS_ADMIN_ANYWHERE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)\bDEFINER\b").expect("static regex"));
+
+fn body_lines(statement: &str) -> Vec<&str> {
+    statement
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.trim().starts_with("--"))
+        .collect()
+}
+
+/// Statements needing elevated grants, judged on the statement body.
+/// Definers route to admin as belt and braces (the migration user may
+/// hold SET DEFINER, but admin is the reliable executor).
 pub fn needs_admin(statement: &str) -> bool {
-    is_access_control(statement)
+    let lines = body_lines(statement);
+    let Some(first) = lines.first() else {
+        return false;
+    };
+    NEEDS_ADMIN.is_match(first.trim())
+        || NEEDS_ADMIN_ANYWHERE.is_match(&lines.join(
+            "
+",
+        ))
+}
+
+/// Statements the migration user is genuinely *refused* (not merely
+/// routed): what proves admin routing is load-bearing.
+pub fn refused_without_admin(statement: &str) -> bool {
+    body_lines(statement)
+        .first()
+        .is_some_and(|first| NEEDS_ADMIN.is_match(first.trim()))
 }

@@ -123,6 +123,7 @@ async fn tracking_rows_import_and_preserve_state() {
                 database: None,
                 read_only: false,
             },
+            admin: None,
             cluster: None,
             no_cluster: true,
             write: true,
@@ -152,4 +153,41 @@ async fn tracking_rows_import_and_preserve_state() {
         .expect_err("must refuse on existing rows")
         .to_string();
     assert!(error.contains("refusing"), "{error}");
+}
+
+/// The lifecycle check passes on the real imported repo: clustered
+/// ephemeral server, restricted migrator with admin routing, rollback
+/// walk, and a clean final schema diff.
+#[tokio::test]
+async fn ancestor_repo_passes_the_lifecycle_check() {
+    let Some(ancestor) = ancestor() else {
+        eprintln!("skipping: no analytics-clickhouse-ddl checkout");
+        return;
+    };
+    let Some(binary) = any_cached_binary() else {
+        eprintln!("skipping: no cached clickhouse binary (run `zedb pin`)");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let destination = dir.path().join("imported");
+    import_repo(&ancestor, &destination).unwrap();
+    let repo = MigrationRepo::open_root(&destination).unwrap();
+    let files = Regenerator::new(&repo, binary.clone())
+        .regenerate()
+        .unwrap();
+    write_tree(&repo, &files).unwrap();
+
+    let report = zedb_ch::lifecycle::check_lifecycle(&repo, binary)
+        .await
+        .unwrap();
+    assert!(report.differences.is_empty(), "{:?}", report.differences);
+    assert_eq!(report.expected_objects, report.live_objects);
+    assert!(
+        report
+            .steps
+            .iter()
+            .any(|step| step.contains("without admin credentials failed")),
+        "the real chain must exercise admin routing: {:?}",
+        report.steps
+    );
 }

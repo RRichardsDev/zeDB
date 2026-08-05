@@ -12,6 +12,7 @@ pub mod checks;
 mod client;
 pub mod ephemeral;
 mod error;
+pub mod lifecycle;
 pub mod pin;
 pub mod regen;
 pub mod replay;

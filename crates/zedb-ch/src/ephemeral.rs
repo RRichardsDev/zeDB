@@ -26,8 +26,42 @@ const SERVER_CONFIG: &str = r#"<clickhouse>
     </user_directories>
     <mark_cache_size>268435456</mark_cache_size>
     <logger><level>warning</level><console>1</console></logger>
+    {cluster_config}
 </clickhouse>
 "#;
+
+/// Single-node cluster: the server is its own only replica, with an
+/// embedded Keeper for Replicated coordination and the distributed DDL
+/// queue. This lets checks run SQL exactly as written (ON CLUSTER,
+/// Replicated engines, zk paths) instead of declustering it.
+const CLUSTER_CONFIG: &str = r#"<interserver_http_port>{interserver}</interserver_http_port>
+    <keeper_server>
+        <tcp_port>{keeper}</tcp_port>
+        <server_id>1</server_id>
+        <log_storage_path>{path}/keeper/logs</log_storage_path>
+        <snapshot_storage_path>{path}/keeper/snapshots</snapshot_storage_path>
+        <coordination_settings>
+            <raft_logs_level>warning</raft_logs_level>
+        </coordination_settings>
+        <raft_configuration>
+            <server><id>1</id><hostname>127.0.0.1</hostname><port>{raft}</port></server>
+        </raft_configuration>
+    </keeper_server>
+    <zookeeper>
+        <node><host>127.0.0.1</host><port>{keeper}</port></node>
+    </zookeeper>
+    <remote_servers>
+        <{cluster}>
+            <shard>
+                <replica><host>127.0.0.1</host><port>{tcp}</port></replica>
+            </shard>
+        </{cluster}>
+    </remote_servers>
+    <macros>
+        <shard>01</shard>
+        <replica>replica1</replica>
+    </macros>
+    <distributed_ddl><path>/clickhouse/task_queue/ddl</path></distributed_ddl>"#;
 
 const USERS_CONFIG: &str = r#"<clickhouse>
     <users>
@@ -59,19 +93,41 @@ impl EphemeralServer {
     /// Retries once on a port clash (free ports are probed, then released,
     /// so another process can race for them).
     pub fn start(binary: &Path) -> Result<Self, EphemeralError> {
-        let first = Self::start_once(binary)?;
+        let first = Self::start_once(binary, None)?;
         match first {
             Ok(server) => Ok(server),
-            Err(_) => Self::start_once(binary)?,
+            Err(_) => Self::start_once(binary, None)?,
         }
     }
 
-    fn start_once(binary: &Path) -> Result<Result<Self, EphemeralError>, EphemeralError> {
+    /// Start a single-node *clustered* server (embedded Keeper, real
+    /// distributed DDL) whose cluster is named `cluster`.
+    pub fn start_clustered(binary: &Path, cluster: &str) -> Result<Self, EphemeralError> {
+        let first = Self::start_once(binary, Some(cluster))?;
+        match first {
+            Ok(server) => Ok(server),
+            Err(_) => Self::start_once(binary, Some(cluster))?,
+        }
+    }
+
+    fn start_once(
+        binary: &Path,
+        cluster: Option<&str>,
+    ) -> Result<Result<Self, EphemeralError>, EphemeralError> {
         let dir = tempfile::tempdir()?;
         let root = dir.path();
         let tcp = free_port()?;
         let http = free_port()?;
+        let cluster_config = match cluster {
+            Some(cluster) => CLUSTER_CONFIG
+                .replace("{interserver}", &free_port()?.to_string())
+                .replace("{keeper}", &free_port()?.to_string())
+                .replace("{raft}", &free_port()?.to_string())
+                .replace("{cluster}", cluster),
+            None => String::new(),
+        };
         let config = SERVER_CONFIG
+            .replace("{cluster_config}", &cluster_config)
             .replace("{tcp}", &tcp.to_string())
             .replace("{http}", &http.to_string())
             .replace("{path}", &root.to_string_lossy());

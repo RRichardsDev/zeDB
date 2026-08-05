@@ -63,7 +63,7 @@ enum Command {
     /// Run repo checks against the pinned binary.
     Check {
         /// Which check to run (default: all).
-        #[arg(value_parser = ["sql", "equivalence", "all"], default_value = "all")]
+        #[arg(value_parser = ["sql", "equivalence", "lifecycle", "all"], default_value = "all")]
         kind: String,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -169,6 +169,12 @@ struct ConnectionArgs {
     /// declustered.
     #[arg(long, conflicts_with = "cluster")]
     no_cluster: bool,
+    /// Elevated user for statements the migration user is refused
+    /// (OPTIMIZE, TRUNCATE, structural ALTER, functions, SYSTEM).
+    #[arg(long)]
+    admin_user: Option<String>,
+    #[arg(long, default_value = "")]
+    admin_password: String,
     /// Consent to mutate; without it mutating commands refuse.
     #[arg(long)]
     write: bool,
@@ -209,6 +215,13 @@ impl ConnectionArgs {
                 database: None,
                 read_only: false,
             },
+            admin: self.admin_user.as_ref().map(|user| zedb_ch::ChConfig {
+                url: self.server.clone(),
+                user: user.clone(),
+                password: (!self.admin_password.is_empty()).then(|| self.admin_password.clone()),
+                database: None,
+                read_only: false,
+            }),
             cluster: self.cluster.clone(),
             no_cluster: self.no_cluster,
             write: self.write,
@@ -456,6 +469,37 @@ fn run(cli: Cli) -> Result<(), String> {
                         "equivalence: {} current-state objects vs {} migration-chain objects, {} difference(s)",
                         report.state_objects,
                         report.chain_objects,
+                        report.differences.len()
+                    );
+                }
+                failed |= !report.differences.is_empty();
+            }
+            if kind == "lifecycle" || kind == "all" {
+                let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
+                let report = runtime
+                    .block_on(zedb_ch::lifecycle::check_lifecycle(&repo, binary.clone()))
+                    .map_err(|error| error.to_string())?;
+                if json {
+                    output.insert(
+                        "lifecycle".into(),
+                        serde_json::json!({
+                            "steps": report.steps,
+                            "expected_objects": report.expected_objects,
+                            "live_objects": report.live_objects,
+                            "differences": report.differences,
+                        }),
+                    );
+                } else {
+                    for step in &report.steps {
+                        println!("lifecycle: {step}");
+                    }
+                    for difference in &report.differences {
+                        eprintln!("{difference}");
+                    }
+                    println!(
+                        "lifecycle: {} expected vs {} live objects, {} difference(s)",
+                        report.expected_objects,
+                        report.live_objects,
                         report.differences.len()
                     );
                 }

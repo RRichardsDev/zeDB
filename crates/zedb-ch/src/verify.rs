@@ -48,7 +48,7 @@ static WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").expect(
 /// Normalize a create_table_query for live-vs-expected diffs: the live
 /// side runs clustered engines while expectations are declustered, and
 /// definers differ; none of that is drift.
-fn diff_norm(create: &str, database: &str) -> String {
+pub(crate) fn diff_norm(create: &str, database: &str) -> String {
     let declustered = decluster(create);
     let no_args = EMPTY_ENGINE_ARGS.replace_all(&declustered, "$1");
     let no_definer = DEFINER.replace_all(&no_args, "");

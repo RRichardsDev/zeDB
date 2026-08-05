@@ -381,3 +381,24 @@ Status: implementation complete, awaiting UI acceptance.
   of the clustered ensure_tracking path), and zedb verify reports clean
   at 00100. Remaining for M9: the staging status comparison and one real
   migration end to end, both needing fleet credentials.
+
+## Phase 1 M4 closed: the lifecycle check, and admin routing (2026-08-05)
+
+- zedb check lifecycle ports the ancestor's deepest gate: a throwaway
+  single-node clustered server (embedded Keeper, real distributed DDL),
+  a migrator user with a real provisioning user's restricted grants,
+  baseline provisioning as written (ON CLUSTER, Replicated engines),
+  stamp, upgrade, targeted smoke tests, the full rollback walk, and a
+  final schema diff against replayed current-state.
+- Running it against the real imported repo immediately proved the M5
+  admin-routing deferral wrong: the chain's ALTER ADD COLUMN is refused
+  to the migration user. Admin routing is now ported: statements matching
+  the ancestor's classifier (OPTIMIZE, TRUNCATE, ALTER TABLE, functions,
+  SYSTEM, definers) execute over --admin-user credentials, and the
+  lifecycle check first proves the run fails without them. Deferred
+  still: per-replica fan-out of SYSTEM statements on multi-replica
+  clusters (single-replica servers behave identically without it).
+- The real repo now passes the whole check: 29 vs 29 objects, zero
+  differences. One debugging note for posterity: a Python heredoc turned
+  regex \b into literal backspace bytes, which display as nothing and
+  match nothing.

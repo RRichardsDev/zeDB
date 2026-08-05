@@ -30,6 +30,7 @@ fn options(server: &EphemeralServer, write: bool) -> RunnerOptions {
             database: None,
             read_only: false,
         },
+        admin: None,
         cluster: None,
         no_cluster: true,
         write,
