@@ -28,7 +28,7 @@ use gpui_component::{
 use tokio::task::AbortHandle;
 use zedb_ch::{
     ChClient, ChConfig, ColumnInfo, DatabaseMeta, ObjectDetails, QueryStreamEvent,
-    SchemaObjectKind, SchemaObjectMeta,
+    QueryStreamSummary, SchemaObjectKind, SchemaObjectMeta,
 };
 use zedb_core::{
     load_connections, load_preferences, save_connections, save_preferences, ConnectionConfig,
@@ -81,6 +81,7 @@ actions!(
         OpenPreferences,
         QuitZeDb,
         RunQuery,
+        RunSelection,
         MaxRows1k,
         MaxRows10k,
         MaxRows50k,
@@ -252,9 +253,30 @@ struct QueryTab {
 enum QueryOutcome {
     Idle,
     Running,
-    Complete { columns: usize, rows: usize },
+    Complete {
+        columns: usize,
+        rows: usize,
+        skipped: usize,
+    },
     Error(String),
+    /// A statement in a multi-statement run failed and the run is paused
+    /// waiting for the user to skip it or cancel the rest.
+    StatementError {
+        index: usize,
+        total: usize,
+        message: String,
+    },
     Cancelled,
+}
+
+enum RunEvent {
+    Stream(QueryStreamEvent),
+    StatementFailed {
+        index: usize,
+        total: usize,
+        message: String,
+        decision: tokio::sync::oneshot::Sender<bool>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -290,6 +312,7 @@ struct Workspace {
     next_query_tab_id: usize,
     show_query_editor: bool,
     query_abort: Option<AbortHandle>,
+    query_error_decision: Option<tokio::sync::oneshot::Sender<bool>>,
     query_run_id: u64,
     query_resize: Option<(QueryResizeTarget, f32)>,
     preferences: Preferences,
@@ -374,6 +397,7 @@ impl Workspace {
                 next_query_tab_id: 2,
                 show_query_editor: false,
                 query_abort: None,
+                query_error_decision: None,
                 query_run_id: 0,
                 query_resize: None,
                 preferences,
@@ -406,6 +430,7 @@ impl Workspace {
                 next_query_tab_id: 2,
                 show_query_editor: false,
                 query_abort: None,
+                query_error_decision: None,
                 query_run_id: 0,
                 query_resize: None,
                 preferences,
@@ -2071,7 +2096,10 @@ impl Workspace {
         let Some(index) = self.query_tabs.iter().position(|tab| tab.id == tab_id) else {
             return;
         };
-        if matches!(self.query_tabs[index].outcome, QueryOutcome::Running) {
+        if matches!(
+            self.query_tabs[index].outcome,
+            QueryOutcome::Running | QueryOutcome::StatementError { .. }
+        ) {
             return;
         }
         self.query_tabs.remove(index);
@@ -2083,6 +2111,15 @@ impl Workspace {
 
     fn run_query_action(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
         self.run_query(window, cx);
+    }
+
+    fn run_selection_action(
+        &mut self,
+        _: &RunSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.run_selection(window, cx);
     }
 
     fn modalkit_key(keystroke: &Keystroke) -> Option<String> {
@@ -2141,6 +2178,11 @@ impl Workspace {
         let Some(key) = Self::modalkit_key(keystroke) else {
             return;
         };
+        // Reserved for RunSelection; must reach action dispatch instead of
+        // modalkit (where it would decrement numbers in normal mode).
+        if key == "<C-x>" {
+            return;
+        }
         let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) else {
             return;
         };
@@ -2259,22 +2301,13 @@ impl Workspace {
         cx.notify();
     }
 
-    fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.query_abort.is_some() {
-            return;
-        }
-        let Some(connected) = &self.connected else {
-            self.flash_warning("Connect to a cluster before running a query", cx);
-            return;
-        };
-        let Some(editor) = self
+    /// Text the user has highlighted in the active editor, if any.
+    fn selected_text(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<String> {
+        let editor = self
             .query_tabs
             .get(self.active_query_tab)
-            .map(|tab| tab.editor.clone())
-        else {
-            return;
-        };
-        let sql = editor.update(cx, |editor, cx| {
+            .map(|tab| tab.editor.clone())?;
+        editor.update(cx, |editor, cx| {
             let selection = EntityInputHandler::selected_text_range(editor, false, window, cx);
             selection
                 .filter(|selection| !selection.range.is_empty())
@@ -2288,17 +2321,69 @@ impl Workspace {
                         cx,
                     )
                 })
-                .unwrap_or_else(|| {
-                    let text = editor.value().to_string();
-                    statement_at_cursor(&text, editor.cursor())
-                        .map(str::to_string)
-                        .unwrap_or_default()
+        })
+    }
+
+    /// Run the selection as a single query, or the statement under the cursor
+    /// when nothing is selected.
+    fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.query_abort.is_some() {
+            return;
+        }
+        let sql = self.selected_text(window, cx).unwrap_or_else(|| {
+            self.query_tabs
+                .get(self.active_query_tab)
+                .map(|tab| {
+                    tab.editor.update(cx, |editor, _| {
+                        let text = editor.value().to_string();
+                        statement_at_cursor(&text, editor.cursor())
+                            .map(str::to_string)
+                            .unwrap_or_default()
+                    })
                 })
+                .unwrap_or_default()
         });
+        self.start_statements(vec![sql], cx);
+    }
+
+    /// Run every statement in the selection (or the whole buffer when nothing
+    /// is selected) one after another.
+    fn run_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.query_abort.is_some() {
+            return;
+        }
+        let text = self.selected_text(window, cx).or_else(|| {
+            self.query_tabs
+                .get(self.active_query_tab)
+                .map(|tab| tab.editor.read(cx).value().to_string())
+        });
+        let statements = text
+            .map(|text| {
+                split_statements(&text)
+                    .into_iter()
+                    .filter_map(|(start, end)| {
+                        let statement = text[start..end].trim();
+                        (!statement.is_empty()).then(|| statement.to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.start_statements(statements, cx);
+    }
+
+    fn start_statements(&mut self, mut statements: Vec<String>, cx: &mut Context<Self>) {
+        if self.query_abort.is_some() {
+            return;
+        }
+        let Some(connected) = &self.connected else {
+            self.flash_warning("Connect to a cluster before running a query", cx);
+            return;
+        };
+        statements.retain(|statement| !statement.trim().is_empty());
         let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) else {
             return;
         };
-        if sql.trim().is_empty() {
+        if statements.is_empty() {
             tab.outcome = QueryOutcome::Error("Query is empty".into());
             cx.notify();
             return;
@@ -2322,11 +2407,45 @@ impl Workspace {
         let run_id = self.query_run_id;
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let task = rt::tokio().spawn(async move {
-            ChClient::new(config)
-                .query_stream(&sql, row_limit.unwrap_or(usize::MAX), |event| {
-                    let _ = sender.send(event);
-                })
-                .await
+            let client = ChClient::new(config);
+            let total = statements.len();
+            let mut summary: Option<QueryStreamSummary> = None;
+            let mut skipped = 0usize;
+            for (index, sql) in statements.iter().enumerate() {
+                let outcome = client
+                    .query_stream(sql, row_limit.unwrap_or(usize::MAX), |event| {
+                        let _ = sender.send(RunEvent::Stream(event));
+                    })
+                    .await;
+                match outcome {
+                    Ok(current) => summary = Some(current),
+                    Err(error) => {
+                        let message = if total > 1 {
+                            format!("Statement {} of {total} failed: {error}", index + 1)
+                        } else {
+                            error.to_string()
+                        };
+                        if index + 1 == total {
+                            return Err(message);
+                        }
+                        let (decision, wait) = tokio::sync::oneshot::channel();
+                        let _ = sender.send(RunEvent::StatementFailed {
+                            index,
+                            total,
+                            message: error.to_string(),
+                            decision,
+                        });
+                        // Pause until the user skips this statement or cancels
+                        // the rest of the run. A dropped sender cancels.
+                        if wait.await.unwrap_or(false) {
+                            skipped += 1;
+                        } else {
+                            return Err(message);
+                        }
+                    }
+                }
+            }
+            Ok((summary, skipped))
         });
         self.query_abort = Some(task.abort_handle());
         cx.notify();
@@ -2343,19 +2462,33 @@ impl Workspace {
                             return false;
                         };
                         match event {
-                            QueryStreamEvent::Columns(columns) => {
+                            RunEvent::StatementFailed {
+                                index,
+                                total,
+                                message,
+                                decision,
+                            } => {
+                                this.query_error_decision = Some(decision);
+                                tab.outcome = QueryOutcome::StatementError {
+                                    index,
+                                    total,
+                                    message,
+                                };
+                            }
+                            RunEvent::Stream(QueryStreamEvent::Columns(columns)) => {
                                 tab.result_columns = columns.len();
+                                tab.result_rows = 0;
                                 tab.has_result = true;
                                 tab.result_grid.update(cx, |grid, cx| {
                                     grid.begin_result(columns, row_limit, cx)
                                 });
                             }
-                            QueryStreamEvent::Rows(rows) => {
+                            RunEvent::Stream(QueryStreamEvent::Rows(rows)) => {
                                 tab.result_rows += rows.len();
                                 tab.result_grid
                                     .update(cx, |grid, cx| grid.append_rows(rows, cx));
                             }
-                            QueryStreamEvent::Progress(progress) => {
+                            RunEvent::Stream(QueryStreamEvent::Progress(progress)) => {
                                 if progress.read_rows.is_some() {
                                     tab.read_rows = progress.read_rows;
                                 }
@@ -2382,21 +2515,24 @@ impl Workspace {
                     return;
                 }
                 this.query_abort = None;
+                this.query_error_decision = None;
                 let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
                     return;
                 };
                 tab.elapsed = tab.started_at.take().map(|started| started.elapsed());
                 tab.outcome = match result {
-                    Ok(Ok(summary)) => {
-                        tab.result_capped = summary.capped;
+                    Ok(Ok((summary, skipped))) => {
+                        let capped = summary.map(|summary| summary.capped).unwrap_or(false);
+                        tab.result_capped = capped;
                         tab.result_grid
-                            .update(cx, |grid, cx| grid.finish_result(summary.capped, cx));
+                            .update(cx, |grid, cx| grid.finish_result(capped, cx));
                         QueryOutcome::Complete {
                             columns: tab.result_columns,
                             rows: tab.result_rows,
+                            skipped,
                         }
                     }
-                    Ok(Err(error)) => QueryOutcome::Error(error.to_string()),
+                    Ok(Err(error)) => QueryOutcome::Error(error),
                     Err(error) => QueryOutcome::Error(error.to_string()),
                 };
                 cx.notify();
@@ -2468,17 +2604,38 @@ impl Workspace {
             )
     }
 
+    /// Resume a run paused on a failed statement: skip it and continue, or
+    /// cancel the remaining statements.
+    fn resolve_statement_failure(&mut self, skip: bool, cx: &mut Context<Self>) {
+        let Some(decision) = self.query_error_decision.take() else {
+            return;
+        };
+        let _ = decision.send(skip);
+        if skip {
+            if let Some(tab) = self
+                .query_tabs
+                .iter_mut()
+                .find(|tab| matches!(tab.outcome, QueryOutcome::StatementError { .. }))
+            {
+                tab.outcome = QueryOutcome::Running;
+            }
+        }
+        cx.notify();
+    }
+
     fn cancel_query(&mut self, cx: &mut Context<Self>) {
         let Some(abort) = self.query_abort.take() else {
             return;
         };
         abort.abort();
+        self.query_error_decision = None;
         self.query_run_id += 1;
-        if let Some(tab) = self
-            .query_tabs
-            .iter_mut()
-            .find(|tab| matches!(tab.outcome, QueryOutcome::Running))
-        {
+        if let Some(tab) = self.query_tabs.iter_mut().find(|tab| {
+            matches!(
+                tab.outcome,
+                QueryOutcome::Running | QueryOutcome::StatementError { .. }
+            )
+        }) {
             tab.elapsed = tab.started_at.take().map(|started| started.elapsed());
             tab.outcome = QueryOutcome::Cancelled;
         }
@@ -3178,19 +3335,25 @@ impl Workspace {
                                 .rounded(px(3.))
                                 .text_color(rgb(TEXT_DIM))
                                 .child("×")
-                                .when(!matches!(tab.outcome, QueryOutcome::Running), |close| {
-                                    close
-                                        .hover(|close| {
-                                            close
-                                                .bg(rgb(0x303640))
-                                                .text_color(rgb(TEXT))
-                                                .cursor_pointer()
-                                        })
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            cx.stop_propagation();
-                                            this.close_query_tab(tab_id, cx);
-                                        }))
-                                }),
+                                .when(
+                                    !matches!(
+                                        tab.outcome,
+                                        QueryOutcome::Running | QueryOutcome::StatementError { .. }
+                                    ),
+                                    |close| {
+                                        close
+                                            .hover(|close| {
+                                                close
+                                                    .bg(rgb(0x303640))
+                                                    .text_color(rgb(TEXT))
+                                                    .cursor_pointer()
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                this.close_query_tab(tab_id, cx);
+                                            }))
+                                    },
+                                ),
                         )
                     })
             })
@@ -3199,7 +3362,11 @@ impl Workspace {
             .query_tabs
             .get(self.active_query_tab)
             .expect("query editor requires an active tab");
-        let running = matches!(active.outcome, QueryOutcome::Running);
+        let running = matches!(
+            active.outcome,
+            QueryOutcome::Running | QueryOutcome::StatementError { .. }
+        );
+        let statement_failed = matches!(active.outcome, QueryOutcome::StatementError { .. });
         let has_result = active.has_result;
         let result_capped = active.result_capped;
         let editor_height = active.editor_height;
@@ -3212,14 +3379,29 @@ impl Workspace {
         let mut status = match &active.outcome {
             QueryOutcome::Idle => "Ready".to_string(),
             QueryOutcome::Running => format!("Running: {} row(s)", active.result_rows),
-            QueryOutcome::Complete { columns, rows } => {
-                if result_capped {
+            QueryOutcome::Complete {
+                columns,
+                rows,
+                skipped,
+            } => {
+                let mut text = if result_capped {
                     format!("Showing first {rows} row(s), {columns} column(s)")
                 } else {
                     format!("Complete: {rows} row(s), {columns} column(s)")
+                };
+                if *skipped > 0 {
+                    text.push_str(&format!("  {skipped} statement(s) skipped"));
                 }
+                text
             }
             QueryOutcome::Error(error) => error.clone(),
+            QueryOutcome::StatementError {
+                index,
+                total,
+                message,
+            } => {
+                format!("Statement {} of {total} failed: {message}", index + 1)
+            }
             QueryOutcome::Cancelled => "Query cancelled".to_string(),
         };
         if let Some(read_rows) = active.read_rows {
@@ -3305,6 +3487,27 @@ impl Workspace {
                             )
                             .child(
                                 div()
+                                    .id("run-selection")
+                                    .px_3()
+                                    .py_1()
+                                    .rounded(px(3.))
+                                    .border_1()
+                                    .border_color(rgb(BORDER))
+                                    .text_color(rgb(TEXT_DIM))
+                                    .child("Run all  ⌃X")
+                                    .when(!running, |button| {
+                                        button
+                                            .text_color(rgb(TEXT))
+                                            .hover(|button| {
+                                                button.bg(rgb(0x2c3d4a)).cursor_pointer()
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.run_selection(window, cx)
+                                            }))
+                                    }),
+                            )
+                            .child(
+                                div()
                                     .id("run-query")
                                     .px_3()
                                     .py_1()
@@ -3382,12 +3585,20 @@ impl Workspace {
                     .overflow_y_scrollbar()
                     .border_t_1()
                     .border_color(rgb(BORDER))
-                    .when(matches!(active.outcome, QueryOutcome::Error(_)), |row| {
-                        row.bg(rgb(0x2b2227)).text_color(rgb(DANGER))
-                    })
-                    .when(!matches!(active.outcome, QueryOutcome::Error(_)), |row| {
-                        row.text_color(rgb(TEXT_DIM))
-                    })
+                    .when(
+                        matches!(
+                            active.outcome,
+                            QueryOutcome::Error(_) | QueryOutcome::StatementError { .. }
+                        ),
+                        |row| row.bg(rgb(0x2b2227)).text_color(rgb(DANGER)),
+                    )
+                    .when(
+                        !matches!(
+                            active.outcome,
+                            QueryOutcome::Error(_) | QueryOutcome::StatementError { .. }
+                        ),
+                        |row| row.text_color(rgb(TEXT_DIM)),
+                    )
                     .child(
                         div()
                             .w_full()
@@ -3451,8 +3662,49 @@ impl Workspace {
                                                 )
                                             })
                                     })
-                                    .child(status),
+                                    .child(div().flex_1().min_w_0().child(status)),
                             )
+                            .when(statement_failed, |row| {
+                                row.child(
+                                    div()
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .id("skip-failed-statement")
+                                                .px_2()
+                                                .rounded(px(3.))
+                                                .border_1()
+                                                .border_color(rgb(BORDER))
+                                                .text_color(rgb(TEXT))
+                                                .hover(|button| {
+                                                    button.bg(rgb(0x3d2528)).cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.resolve_statement_failure(true, cx)
+                                                }))
+                                                .child("Skip"),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("cancel-remaining-statements")
+                                                .px_2()
+                                                .rounded(px(3.))
+                                                .border_1()
+                                                .border_color(rgb(BORDER))
+                                                .text_color(rgb(TEXT))
+                                                .hover(|button| {
+                                                    button.bg(rgb(0x3d2528)).cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.resolve_statement_failure(false, cx)
+                                                }))
+                                                .child("Cancel rest"),
+                                        ),
+                                )
+                            })
                             .when_some(elapsed, |row, elapsed| {
                                 row.child(
                                     div().flex_none().text_color(rgb(TEXT_DIM)).child(elapsed),
@@ -3506,6 +3758,7 @@ impl Render for Workspace {
             .font_family("Menlo")
             .text_sm()
             .on_action(cx.listener(Self::run_query_action))
+            .on_action(cx.listener(Self::run_selection_action))
             .on_action(
                 cx.listener(|this, _: &MaxRows1k, _, cx| this.select_max_rows(MaxRows::Rows1k, cx)),
             )
@@ -3631,11 +3884,10 @@ impl Render for Workspace {
     }
 }
 
-/// Split `text` into statements on top-level semicolons (ignoring those inside
-/// strings and comments) and return the statement containing the byte offset
-/// `cursor`. When the cursor sits in blank space between statements, prefer the
-/// nearest non-empty statement before it, then after it.
-fn statement_at_cursor(text: &str, cursor: usize) -> Option<&str> {
+/// Split `text` into statement byte ranges on top-level semicolons, ignoring
+/// semicolons inside strings and comments. Ranges exclude the semicolon and may
+/// be blank; always returns at least one range.
+fn split_statements(text: &str) -> Vec<(usize, usize)> {
     let bytes = text.as_bytes();
     let mut segments: Vec<(usize, usize)> = Vec::new();
     let mut start = 0;
@@ -3679,7 +3931,14 @@ fn statement_at_cursor(text: &str, cursor: usize) -> Option<&str> {
         }
     }
     segments.push((start, text.len()));
+    segments
+}
 
+/// Return the statement containing the byte offset `cursor`. When the cursor
+/// sits in blank space between statements, prefer the nearest non-empty
+/// statement before it, then after it.
+fn statement_at_cursor(text: &str, cursor: usize) -> Option<&str> {
+    let segments = split_statements(text);
     let idx = segments
         .iter()
         .position(|&(start, end)| cursor >= start && cursor <= end)
@@ -3751,6 +4010,7 @@ fn main() {
         cx.on_action(quit_ze_db);
         cx.bind_keys([
             KeyBinding::new("cmd-enter", RunQuery, None),
+            KeyBinding::new("ctrl-x", RunSelection, None),
             KeyBinding::new("cmd-,", OpenPreferences, None),
         ]);
         cx.set_menus(vec![Menu {
@@ -3792,7 +4052,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_engine_definition, statement_at_cursor};
+    use super::{format_engine_definition, split_statements, statement_at_cursor};
 
     #[test]
     fn engine_definition_is_split_at_top_level_clauses() {
@@ -3803,6 +4063,20 @@ mod tests {
         assert_eq!(
             formatted,
             "ENGINE = MergeTree\nORDER BY id\nPARTITION BY toYYYYMM(created_at)\nSETTINGS index_granularity = 8192"
+        );
+    }
+
+    #[test]
+    fn split_statements_yields_every_statement_in_order() {
+        let text = "SELECT 1;\n-- a; comment\nSELECT ';';\n\nSELECT 3";
+        let statements: Vec<&str> = split_statements(text)
+            .into_iter()
+            .map(|(start, end)| text[start..end].trim())
+            .filter(|statement| !statement.is_empty())
+            .collect();
+        assert_eq!(
+            statements,
+            vec!["SELECT 1", "-- a; comment\nSELECT ';'", "SELECT 3"]
         );
     }
 
