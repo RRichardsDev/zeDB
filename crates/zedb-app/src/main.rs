@@ -136,7 +136,10 @@ impl AssetSource for Assets {
             "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
             "icons/close.svg" => Some(include_bytes!("../assets/icons/close.svg")),
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
+            "icons/fleet.svg" => Some(include_bytes!("../assets/icons/fleet.svg")),
             "icons/folder-open.svg" => Some(include_bytes!("../assets/icons/folder-open.svg")),
+            "icons/plug.svg" => Some(include_bytes!("../assets/icons/plug.svg")),
+            "icons/query-plus.svg" => Some(include_bytes!("../assets/icons/query-plus.svg")),
             "icons/refresh.svg" => Some(include_bytes!("../assets/icons/refresh.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             _ => None,
@@ -2879,28 +2882,61 @@ impl Workspace {
                     .child(
                         div()
                             .id("open-fleet")
-                            .px_3()
-                            .py_1()
+                            .size(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .rounded(px(3.))
                             .border_1()
                             .border_color(rgb(BORDER))
-                            .text_color(rgb(TEXT))
-                            .when(self.show_fleet, |button| button.bg(rgb(0x2c3a4d)))
-                            .child("Fleet")
-                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .text_color(rgb(TEXT_DIM))
+                            .when(self.show_fleet, |button| {
+                                button.bg(rgb(0x2c3a4d)).text_color(rgb(TEXT))
+                            })
+                            .child(
+                                svg()
+                                    .path("icons/fleet.svg")
+                                    .size(px(14.))
+                                    .text_color(rgb(if self.show_fleet { TEXT } else { TEXT_DIM })),
+                            )
+                            .hover(|button| {
+                                button
+                                    .bg(rgb(0x303640))
+                                    .text_color(rgb(TEXT))
+                                    .cursor_pointer()
+                            })
+                            .tooltip(|window, cx| {
+                                gpui_component::tooltip::Tooltip::new("Fleet view")
+                                    .build(window, cx)
+                            })
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_fleet(cx))),
                     )
                     .child(
                         div()
                             .id("open-query-editor")
-                            .px_3()
-                            .py_1()
+                            .size(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .rounded(px(3.))
                             .border_1()
                             .border_color(rgb(BORDER))
-                            .text_color(rgb(TEXT))
-                            .child("New query")
-                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .text_color(rgb(TEXT_DIM))
+                            .child(
+                                svg()
+                                    .path("icons/query-plus.svg")
+                                    .size(px(14.))
+                                    .text_color(rgb(TEXT_DIM)),
+                            )
+                            .hover(|button| {
+                                button
+                                    .bg(rgb(0x303640))
+                                    .text_color(rgb(TEXT))
+                                    .cursor_pointer()
+                            })
+                            .tooltip(|window, cx| {
+                                gpui_component::tooltip::Tooltip::new("New query").build(window, cx)
+                            })
                             .on_click(cx.listener(|this, _, _, cx| this.open_query_editor(cx))),
                     )
                     .when(selected_connected, |toolbar| {
@@ -2921,6 +2957,10 @@ impl Workspace {
                                         .text_color(rgb(DANGER)),
                                 )
                                 .hover(|button| button.bg(rgb(0x563034)).cursor_pointer())
+                                .tooltip(|window, cx| {
+                                    gpui_component::tooltip::Tooltip::new("Disconnect")
+                                        .build(window, cx)
+                                })
                                 .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
                         )
                     })
@@ -2928,20 +2968,37 @@ impl Workspace {
                         toolbar.child(
                             div()
                                 .id("connect-toggle")
-                                .px_3()
-                                .py_1()
+                                .size(px(28.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
                                 .rounded(px(3.))
                                 .border_1()
                                 .border_color(rgb(BORDER))
-                                .text_color(rgb(TEXT))
-                                .child(if self.connecting.is_some() {
-                                    "Connecting..."
+                                .text_color(rgb(if self.connecting.is_some() {
+                                    SUCCESS
                                 } else {
-                                    "Connect"
+                                    TEXT_DIM
+                                }))
+                                .child(svg().path("icons/plug.svg").size(px(14.)).text_color(rgb(
+                                    if self.connecting.is_some() {
+                                        SUCCESS
+                                    } else {
+                                        TEXT_DIM
+                                    },
+                                )))
+                                .tooltip(|window, cx| {
+                                    gpui_component::tooltip::Tooltip::new("Connect")
+                                        .build(window, cx)
                                 })
                                 .when(self.connecting.is_none() && selected.is_some(), |button| {
                                     button
-                                        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                        .hover(|button| {
+                                            button
+                                                .bg(rgb(0x303640))
+                                                .text_color(rgb(TEXT))
+                                                .cursor_pointer()
+                                        })
                                         .on_click(
                                             cx.listener(|this, _, _, cx| this.connect_selected(cx)),
                                         )
