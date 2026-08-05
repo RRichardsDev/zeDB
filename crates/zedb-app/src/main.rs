@@ -295,6 +295,7 @@ enum QueryResizeTarget {
 struct Workspace {
     fleet: FleetState,
     show_fleet: bool,
+    health_poll_generation: u64,
     connections: Vec<ConnectionConfig>,
     selected: Option<usize>,
     connected: Option<ConnectedCluster>,
@@ -437,6 +438,7 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
+                health_poll_generation: 0,
                 query_abort: None,
                 query_error_decision: None,
                 query_run_id: 0,
@@ -479,6 +481,7 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
+                health_poll_generation: 0,
                 query_abort: None,
                 query_error_decision: None,
                 query_run_id: 0,
@@ -1724,6 +1727,7 @@ impl Workspace {
                 });
                 this.password_cache
                     .insert(name.clone(), connected_password.clone());
+                this.start_health_poll(cx);
                 this.notice = Some(format!(
                     "Connected to {name} via {} ({reachable}/{total} nodes reachable)",
                     active_node.name
@@ -1736,7 +1740,71 @@ impl Workspace {
         .detach();
     }
 
+    /// Health poll: every five minutes run SELECT 1 through the active
+    /// node; on failure flip to disconnected and mark the node unhealthy,
+    /// so the next query attempt gets the usual connect-first warning.
+    fn start_health_poll(&mut self, cx: &mut Context<Self>) {
+        self.health_poll_generation += 1;
+        let generation = self.health_poll_generation;
+        let Some(connected) = &self.connected else {
+            return;
+        };
+        let config = connected.client_config.clone();
+        let name = connected.name.clone();
+        let node_index = connected.active_node;
+        cx.spawn(async move |this, cx| loop {
+            Timer::after(Duration::from_secs(300)).await;
+            let stale = this
+                .update(cx, |this, _| this.health_poll_generation != generation)
+                .unwrap_or(true);
+            if stale {
+                break;
+            }
+            let probe = config.clone();
+            let healthy = rt::tokio()
+                .spawn(async move { ChClient::new(probe).query("SELECT 1").await.is_ok() })
+                .await
+                .unwrap_or(false);
+            if healthy {
+                continue;
+            }
+            let stop = this
+                .update(cx, |this, cx| {
+                    if this.health_poll_generation != generation {
+                        return true;
+                    }
+                    let still_here = this
+                        .connected
+                        .as_ref()
+                        .is_some_and(|connected| connected.name == name);
+                    if !still_here {
+                        return true;
+                    }
+                    this.connected = None;
+                    this.fleet.write_unlocked = false;
+                    if let Some(health) = this.endpoint_health.get_mut(&name) {
+                        if let Some(node) =
+                            health.iter_mut().find(|node| node.node_index == node_index)
+                        {
+                            node.reachable = false;
+                        }
+                    }
+                    this.flash_warning(
+                        format!("Lost connection to {name}: health check failed"),
+                        cx,
+                    );
+                    true
+                })
+                .unwrap_or(true);
+            if stop {
+                break;
+            }
+        })
+        .detach();
+    }
+
     fn disconnect(&mut self, cx: &mut Context<Self>) {
+        self.health_poll_generation += 1;
         if let Some(connected) = self.connected.take() {
             self.notice = Some(format!("Disconnected from {}", connected.name));
         }
