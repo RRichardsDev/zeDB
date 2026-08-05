@@ -4,6 +4,7 @@
 
 mod connection;
 mod preferences;
+pub mod repo;
 pub mod secrets;
 mod store;
 mod value;

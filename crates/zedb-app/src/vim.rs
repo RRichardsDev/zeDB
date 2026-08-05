@@ -349,10 +349,9 @@ impl VimController {
             return Err(format!("macro loops (depth {})", self.macro_exec_depth));
         }
         for _ in 0..count {
-            let mut keys =
-                VecDeque::from(TerminalKey::from_macro_str(mstr.as_ref()).map_err(|error| {
-                    error.to_string()
-                })?);
+            let mut keys = VecDeque::from(
+                TerminalKey::from_macro_str(mstr.as_ref()).map_err(|error| error.to_string())?,
+            );
             keys.append(&mut self.keystack);
             self.keystack = keys;
         }
@@ -576,7 +575,9 @@ mod tests {
         // the app must surface that as an explicit error, not silence.
         let mut vim = VimController::new("alpha beta\nalpha");
         vim.input(":").unwrap();
-        for key in ["s", "/", "a", "l", "p", "h", "a", "/", "o", "m", "e", "g", "a", "/"] {
+        for key in [
+            "s", "/", "a", "l", "p", "h", "a", "/", "o", "m", "e", "g", "a", "/",
+        ] {
             vim.input(key).unwrap();
         }
         let error = vim.input("<Enter>").map(|_| ()).unwrap_err();

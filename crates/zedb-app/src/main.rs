@@ -2129,7 +2129,12 @@ impl Workspace {
         }
     }
 
-    fn vim_keystroke(&mut self, keystroke: &Keystroke, window: &mut Window, cx: &mut Context<Self>) {
+    fn vim_keystroke(
+        &mut self,
+        keystroke: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.preferences.vim_mode {
             return;
         }
@@ -2283,7 +2288,12 @@ impl Workspace {
                         cx,
                     )
                 })
-                .unwrap_or_else(|| editor.value().to_string())
+                .unwrap_or_else(|| {
+                    let text = editor.value().to_string();
+                    statement_at_cursor(&text, editor.cursor())
+                        .map(str::to_string)
+                        .unwrap_or_default()
+                })
         });
         let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) else {
             return;
@@ -3422,12 +3432,13 @@ impl Workspace {
                                                         .unwrap_or(text.len());
                                                     text.insert(byte, '▌');
                                                     status_row.child(
-                                                        div().flex_none().text_color(rgb(TEXT)).child(
-                                                            format!(
+                                                        div()
+                                                            .flex_none()
+                                                            .text_color(rgb(TEXT))
+                                                            .child(format!(
                                                                 "{}{text}",
                                                                 command_line.prompt
-                                                            ),
-                                                        ),
+                                                            )),
                                                     )
                                                 },
                                             )
@@ -3595,34 +3606,92 @@ impl Render for Workspace {
                                         .when(self.show_query_editor, |content| {
                                             content.child(self.query_editor_panel(cx))
                                         })
-                                        .when(
-                                            !self.show_query_editor,
-                                            |content| {
-                                                content
-                                                    .when(
-                                                        self.selected_schema_object.is_some(),
-                                                        |content| {
-                                                            content.child(
-                                                                self.schema_object_panel(
-                                                                    window, cx,
-                                                                ),
-                                                            )
-                                                        },
-                                                    )
-                                                    .when(
-                                                        self.selected_schema_object.is_none(),
-                                                        |content| {
-                                                            content.child(self.cluster_overview())
-                                                        },
-                                                    )
-                                            },
-                                        ),
+                                        .when(!self.show_query_editor, |content| {
+                                            content
+                                                .when(
+                                                    self.selected_schema_object.is_some(),
+                                                    |content| {
+                                                        content.child(
+                                                            self.schema_object_panel(window, cx),
+                                                        )
+                                                    },
+                                                )
+                                                .when(
+                                                    self.selected_schema_object.is_none(),
+                                                    |content| {
+                                                        content.child(self.cluster_overview())
+                                                    },
+                                                )
+                                        }),
                                 )
                             }),
                     ),
             )
             .child(self.status_bar())
     }
+}
+
+/// Split `text` into statements on top-level semicolons (ignoring those inside
+/// strings and comments) and return the statement containing the byte offset
+/// `cursor`. When the cursor sits in blank space between statements, prefer the
+/// nearest non-empty statement before it, then after it.
+fn statement_at_cursor(text: &str, cursor: usize) -> Option<&str> {
+    let bytes = text.as_bytes();
+    let mut segments: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            quote @ (b'\'' | b'"' | b'`') => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' && quote != b'`' {
+                        i += 2;
+                    } else if bytes[i] == quote {
+                        i += 1;
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i < bytes.len() {
+                    if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b';' => {
+                segments.push((start, i));
+                i += 1;
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    segments.push((start, text.len()));
+
+    let idx = segments
+        .iter()
+        .position(|&(start, end)| cursor >= start && cursor <= end)
+        .unwrap_or(segments.len() - 1);
+    let pick = |i: usize| {
+        let (start, end) = segments[i];
+        let statement = text[start..end.min(text.len())].trim();
+        (!statement.is_empty()).then_some(statement)
+    };
+    pick(idx)
+        .or_else(|| (0..idx).rev().find_map(pick))
+        .or_else(|| ((idx + 1)..segments.len()).find_map(pick))
 }
 
 fn format_query_duration(duration: Duration) -> String {
@@ -3723,7 +3792,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::format_engine_definition;
+    use super::{format_engine_definition, statement_at_cursor};
 
     #[test]
     fn engine_definition_is_split_at_top_level_clauses() {
@@ -3735,5 +3804,38 @@ mod tests {
             formatted,
             "ENGINE = MergeTree\nORDER BY id\nPARTITION BY toYYYYMM(created_at)\nSETTINGS index_granularity = 8192"
         );
+    }
+
+    #[test]
+    fn statement_at_cursor_picks_statement_under_cursor() {
+        let text = "SELECT 1;\nSELECT 2;\nSELECT 3";
+        assert_eq!(statement_at_cursor(text, 3), Some("SELECT 1"));
+        assert_eq!(statement_at_cursor(text, 12), Some("SELECT 2"));
+        assert_eq!(statement_at_cursor(text, text.len()), Some("SELECT 3"));
+    }
+
+    #[test]
+    fn statement_at_cursor_handles_single_statement() {
+        assert_eq!(statement_at_cursor("SELECT 1", 4), Some("SELECT 1"));
+        assert_eq!(statement_at_cursor("", 0), None);
+        assert_eq!(statement_at_cursor("  \n ; ; ", 3), None);
+    }
+
+    #[test]
+    fn statement_at_cursor_ignores_semicolons_in_strings_and_comments() {
+        let text = "SELECT ';' AS a; -- trailing; comment\nSELECT /* not; here */ 2";
+        assert_eq!(statement_at_cursor(text, 4), Some("SELECT ';' AS a"));
+        assert_eq!(
+            statement_at_cursor(text, text.len()),
+            Some("-- trailing; comment\nSELECT /* not; here */ 2")
+        );
+    }
+
+    #[test]
+    fn statement_at_cursor_falls_back_to_nearest_statement_from_blank_space() {
+        let text = "SELECT 1;\n\n  \nSELECT 2;\n\n";
+        assert_eq!(statement_at_cursor(text, text.len()), Some("SELECT 2"));
+        let leading = ";\nSELECT 9";
+        assert_eq!(statement_at_cursor(leading, 0), Some("SELECT 9"));
     }
 }
