@@ -2275,7 +2275,12 @@ impl Workspace {
         cx.notify();
     }
 
-    fn make_query_tab(id: usize, sql: &str, window: &mut Window, cx: &mut Context<Self>) -> QueryTab {
+    fn make_query_tab(
+        id: usize,
+        sql: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> QueryTab {
         let default_value = sql.to_string();
         QueryTab {
             id,
@@ -2972,28 +2977,43 @@ impl Workspace {
                             .justify_center()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(rgb(BORDER))
-                            .text_color(rgb(TEXT_DIM))
-                            .when(self.show_fleet, |button| {
-                                button.bg(rgb(0x2c3a4d)).text_color(rgb(TEXT))
-                            })
-                            .child(
-                                svg()
-                                    .path("icons/fleet.svg")
-                                    .size(px(14.))
-                                    .text_color(rgb(if self.show_fleet { TEXT } else { TEXT_DIM })),
-                            )
-                            .hover(|button| {
-                                button
-                                    .bg(rgb(0x303640))
-                                    .text_color(rgb(TEXT))
-                                    .cursor_pointer()
-                            })
-                            .tooltip(|window, cx| {
-                                gpui_component::tooltip::Tooltip::new("Fleet view")
-                                    .build(window, cx)
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_fleet(cx))),
+                            .child(svg().path("icons/fleet.svg").size(px(14.)))
+                            .map(|button| {
+                                if self.connected.is_none() {
+                                    // Disabled: the fleet view is per-connection.
+                                    button
+                                        .border_color(rgb(0x22262c))
+                                        .text_color(rgb(0x454b55))
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(
+                                                "Connect to a cluster first",
+                                            )
+                                            .build(window, cx)
+                                        })
+                                } else {
+                                    button
+                                        .border_color(rgb(BORDER))
+                                        .text_color(rgb(if self.show_fleet {
+                                            TEXT
+                                        } else {
+                                            TEXT_DIM
+                                        }))
+                                        .when(self.show_fleet, |button| button.bg(rgb(0x2c3a4d)))
+                                        .hover(|button| {
+                                            button
+                                                .bg(rgb(0x303640))
+                                                .text_color(rgb(TEXT))
+                                                .cursor_pointer()
+                                        })
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new("Fleet view")
+                                                .build(window, cx)
+                                        })
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.toggle_fleet(cx)),
+                                        )
+                                }
+                            }),
                     )
                     .child(
                         div()
@@ -3004,24 +3024,41 @@ impl Workspace {
                             .justify_center()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(rgb(BORDER))
-                            .text_color(rgb(TEXT_DIM))
-                            .child(
-                                svg()
-                                    .path("icons/query-plus.svg")
-                                    .size(px(14.))
-                                    .text_color(rgb(TEXT_DIM)),
-                            )
-                            .hover(|button| {
-                                button
-                                    .bg(rgb(0x303640))
-                                    .text_color(rgb(TEXT))
-                                    .cursor_pointer()
-                            })
-                            .tooltip(|window, cx| {
-                                gpui_component::tooltip::Tooltip::new("New query").build(window, cx)
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| this.open_query_editor(cx))),
+                            .child(svg().path("icons/query-plus.svg").size(px(14.)))
+                            .map(|button| {
+                                if self.connected.is_none() {
+                                    // Disabled; running from an existing tab
+                                    // still gets the connect-first warning.
+                                    button
+                                        .border_color(rgb(0x22262c))
+                                        .text_color(rgb(0x454b55))
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(
+                                                "Connect to a cluster first",
+                                            )
+                                            .build(window, cx)
+                                        })
+                                } else {
+                                    button
+                                        .border_color(rgb(BORDER))
+                                        .text_color(rgb(TEXT_DIM))
+                                        .hover(|button| {
+                                            button
+                                                .bg(rgb(0x303640))
+                                                .text_color(rgb(TEXT))
+                                                .cursor_pointer()
+                                        })
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new("New query")
+                                                .build(window, cx)
+                                        })
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.open_query_editor(cx)
+                                            }),
+                                        )
+                                }
+                            }),
                     )
                     .when(selected_connected, |toolbar| {
                         toolbar.child(
