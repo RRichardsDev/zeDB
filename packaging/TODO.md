@@ -66,10 +66,10 @@ entitlements so they can launch unprofiled.
 - [ ] DMG window polish: background image with a drag-to-Applications
       arrow and fixed icon layout (do together with the app icon work;
       `create-dmg` handles the layout).
-- [x] Hand-rolled update check: the app queries the GitHub Releases feed at
-      startup (`zedb-app/src/updates.rs`) and shows a quiet title-bar pill
-      linking to the release page. Silent on any failure; needs the repo
-      public (or `ZEDB_GITHUB_TOKEN`) to see releases.
-- [ ] In-place update install (download, swap, relaunch) if the
-      open-release-page flow ever feels like too much friction.
+- [x] Hand-rolled auto-update (`zedb-app/src/updates.rs`): the app checks the
+      GitHub Releases feed at startup; the title-bar pill downloads the
+      release zip, verifies the new bundle is signed by our team, swaps it
+      in place, and relaunches on click. Bare `cargo run` builds fall back
+      to opening the release page. Needs the repo public (or
+      `ZEDB_GITHUB_TOKEN`) to see releases and download assets.
 - [ ] Bump `LSMinimumSystemVersion` intentionally (currently 13.0).

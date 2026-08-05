@@ -310,6 +310,7 @@ struct Workspace {
     notice_warning: bool,
     notice_flash_id: u64,
     update_available: Option<updates::UpdateInfo>,
+    update_phase: UpdatePhase,
     sidebar_width: f32,
     resizing_sidebar: bool,
     connections_pane_height: f32,
@@ -324,6 +325,13 @@ struct Workspace {
     query_resize: Option<(QueryResizeTarget, f32)>,
     preferences: Preferences,
     show_preferences: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UpdatePhase {
+    Available,
+    Installing,
+    Ready,
 }
 
 impl Workspace {
@@ -409,6 +417,7 @@ impl Workspace {
                 notice_warning: false,
                 notice_flash_id: 0,
                 update_available: None,
+                update_phase: UpdatePhase::Available,
                 sidebar_width: 240.0,
                 resizing_sidebar: false,
                 connections_pane_height: 430.0,
@@ -445,6 +454,7 @@ impl Workspace {
                 notice_warning: false,
                 notice_flash_id: 0,
                 update_available: None,
+                update_phase: UpdatePhase::Available,
                 sidebar_width: 240.0,
                 resizing_sidebar: false,
                 connections_pane_height: 430.0,
@@ -490,7 +500,12 @@ impl Workspace {
             .child("zeDB")
             .child(div().flex_1())
             .when_some(self.update_available.clone(), |bar, update| {
-                let label = format!("Update available: v{}", update.version);
+                let phase = self.update_phase;
+                let label = match phase {
+                    UpdatePhase::Available => format!("Update available: v{}", update.version),
+                    UpdatePhase::Installing => format!("Downloading v{}...", update.version),
+                    UpdatePhase::Ready => "Restart to update".to_string(),
+                };
                 bar.child(
                     div()
                         .id("update-available")
@@ -499,13 +514,63 @@ impl Workspace {
                         .rounded(px(3.))
                         .text_xs()
                         .text_color(rgb(TEXT_DIM))
-                        .hover(|pill| pill.bg(rgb(BG)).text_color(rgb(TEXT)).cursor_pointer())
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.open_url(&update.url);
-                        }))
+                        .when(phase != UpdatePhase::Installing, |pill| {
+                            pill.hover(|pill| {
+                                pill.bg(rgb(BG)).text_color(rgb(TEXT)).cursor_pointer()
+                            })
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| match this.update_phase {
+                                    UpdatePhase::Available => this.start_update_install(cx),
+                                    UpdatePhase::Ready => this.relaunch_updated(cx),
+                                    UpdatePhase::Installing => {}
+                                },
+                            ))
+                        })
                         .child(label),
                 )
             })
+    }
+
+    fn start_update_install(&mut self, cx: &mut Context<Self>) {
+        let Some(update) = self.update_available.clone() else {
+            return;
+        };
+        // Bare-binary runs (cargo run) have nothing to swap; hand over to the
+        // release page instead.
+        if updates::current_bundle().is_none() || update.asset.is_none() {
+            cx.open_url(&update.url);
+            return;
+        }
+        self.update_phase = UpdatePhase::Installing;
+        cx.notify();
+        let task = rt::tokio().spawn(async move { updates::download_and_install(&update).await });
+        cx.spawn(async move |this, cx| {
+            let result = task
+                .await
+                .unwrap_or_else(|error| Err(format!("update task failed: {error}")));
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => this.update_phase = UpdatePhase::Ready,
+                    Err(error) => {
+                        this.update_phase = UpdatePhase::Available;
+                        this.flash_warning(format!("Update failed: {error}"), cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn relaunch_updated(&mut self, cx: &mut Context<Self>) {
+        if let Some(bundle) = updates::current_bundle() {
+            let _ = std::process::Command::new("open")
+                .arg("-n")
+                .arg(bundle)
+                .spawn();
+        }
+        cx.quit();
     }
 
     fn open_preferences(&mut self, cx: &mut Context<Self>) {
