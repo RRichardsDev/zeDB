@@ -2,8 +2,8 @@ mod grid_spike;
 mod theme;
 
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, Window,
-    WindowBounds, WindowOptions,
+    div, point, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity,
+    TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 
 use grid_spike::GridSpike;
@@ -22,10 +22,18 @@ impl Workspace {
             .bg(rgb(BG_SIDEBAR))
             .border_r_1()
             .border_color(rgb(BORDER))
-            .p_3()
-            .text_sm()
-            .text_color(rgb(TEXT_DIM))
-            .child("connections")
+            .flex()
+            .flex_col()
+            // Clear the overlaid traffic lights; this strip doubles as the
+            // window drag area.
+            .child(div().h(px(36.)).flex_none())
+            .child(
+                div()
+                    .p_3()
+                    .text_sm()
+                    .text_color(rgb(TEXT_DIM))
+                    .child("connections"),
+            )
     }
 
     fn status_bar(&self) -> impl IntoElement {
@@ -76,6 +84,11 @@ fn main() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("zeDB".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(12.), px(12.))),
+                }),
                 ..Default::default()
             },
             |_, cx| {

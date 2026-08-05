@@ -186,7 +186,19 @@ impl Render for GridSpike {
                 None => "click a cell to select".to_string(),
             });
 
-        let scroll_x = self.scroll.0.borrow().base_handle.offset().x;
+        // Mirror the list's horizontal offset, clamped to its scrollable
+        // range: the raw handle offset overshoots during overscroll.
+        let scroll_x = {
+            let state = self.scroll.0.borrow();
+            let x = state.base_handle.offset().x;
+            match state.last_item_size {
+                Some(size) => {
+                    let min_x = -(size.contents.width - size.item.width).max(px(0.));
+                    x.max(min_x).min(px(0.))
+                }
+                None => x,
+            }
+        };
 
         div()
             .size_full()
