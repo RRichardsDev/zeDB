@@ -30,7 +30,7 @@ impl Workspace {
             .pl(px(90.))
             .pr_3()
             .text_sm()
-            .text_color(rgb(TEXT_DIM))
+            .text_color(rgb(TEXT))
             .child("zeDB")
     }
 
