@@ -353,6 +353,53 @@ impl<'a> Runner<'a> {
             .collect())
     }
 
+    /// One executor per replica of the configured cluster, for node-local
+    /// SYSTEM statements. Replicas come from system.clusters on the
+    /// connected node and are reached on the same HTTP port and
+    /// credentials; the connected node keeps its existing client. A
+    /// single-replica cluster returns empty, meaning "use the current
+    /// executor, no extra connections".
+    async fn system_executors(&self, admin_routed: bool) -> Result<Vec<ChClient>, RunnerError> {
+        let Some(cluster) = &self.options.cluster else {
+            return Ok(Vec::new());
+        };
+        let rows = self
+            .client
+            .query(&format!(
+                "SELECT DISTINCT host_name FROM system.clusters WHERE cluster = {}",
+                quote(cluster)
+            ))
+            .await
+            .map_err(|error| RunnerError::Server(error.to_string()))?;
+        let hosts: Vec<String> = rows
+            .rows
+            .iter()
+            .filter_map(|row| row.first().map(|value| value.to_string()))
+            .collect();
+        if hosts.len() <= 1 {
+            return Ok(Vec::new());
+        }
+        let base = if admin_routed {
+            self.options
+                .admin
+                .as_ref()
+                .expect("admin_routed implies admin")
+        } else {
+            &self.options.server
+        };
+        let connected_host = host_of(&base.url);
+        Ok(hosts
+            .iter()
+            .map(|host| {
+                let mut config = base.clone();
+                if Some(host.as_str()) != connected_host.as_deref() {
+                    config.url = replace_host(&base.url, host);
+                }
+                ChClient::new(config)
+            })
+            .collect())
+    }
+
     fn resolve_params(
         &self,
         database: &str,
@@ -524,12 +571,41 @@ impl<'a> Runner<'a> {
         )
         .await?;
         let start = Instant::now();
+        // SYSTEM statements (START/REFRESH VIEW, ...) take no ON CLUSTER
+        // and act on the connected node only, but each replica keeps its
+        // own refresh scheduler, so they must run on every replica of the
+        // cluster. Executors are discovered once per run.
+        let mut system_executors: Option<Vec<ChClient>> = None;
         for (index, statement) in statements.iter().enumerate() {
+            let routed_admin = self.admin.is_some() && needs_admin(statement);
             let executor = match &self.admin {
-                Some(admin) if needs_admin(statement) => admin,
+                Some(admin) if routed_admin => admin,
                 _ => &self.client,
             };
-            if let Err(error) = executor.execute(statement.trim()).await {
+            let fan_out = is_system(statement) && !self.options.no_cluster;
+            let result = if fan_out {
+                if system_executors.is_none() {
+                    system_executors = Some(self.system_executors(routed_admin).await?);
+                }
+                let mut outcome = Ok(());
+                match system_executors.as_ref().expect("populated above") {
+                    replicas if replicas.is_empty() => {
+                        outcome = executor.execute(statement.trim()).await;
+                    }
+                    replicas => {
+                        for replica in replicas {
+                            outcome = replica.execute(statement.trim()).await;
+                            if outcome.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+                outcome
+            } else {
+                executor.execute(statement.trim()).await
+            };
+            if let Err(error) = result {
                 let first_sql = statement
                     .lines()
                     .find(|line| !line.trim().is_empty() && !line.trim().starts_with("--"))
@@ -961,10 +1037,82 @@ pub fn needs_admin(statement: &str) -> bool {
         ))
 }
 
+/// SYSTEM statements act on the connected node only (no ON CLUSTER on
+/// the target servers), so the runner fans them out per replica.
+pub fn is_system(statement: &str) -> bool {
+    body_lines(statement).first().is_some_and(|first| {
+        let trimmed = first.trim();
+        trimmed.len() >= 6
+            && trimmed[..6].eq_ignore_ascii_case("SYSTEM")
+            && !trimmed
+                .as_bytes()
+                .get(6)
+                .is_some_and(|c| c.is_ascii_alphanumeric())
+    })
+}
+
+/// The host part of an `http://host:port` URL.
+fn host_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let authority = rest.split('/').next().unwrap_or(rest);
+    Some(
+        authority
+            .rsplit_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(authority)
+            .to_string(),
+    )
+}
+
+/// Swap the host in an `http://host:port` URL, keeping scheme and port.
+fn replace_host(url: &str, host: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("http", url));
+    let (authority, path) = rest
+        .split_once('/')
+        .map(|(a, p)| (a, format!("/{p}")))
+        .unwrap_or((rest, String::new()));
+    let port = authority
+        .rsplit_once(':')
+        .map(|(_, port)| format!(":{port}"))
+        .unwrap_or_default();
+    format!("{scheme}://{host}{port}{path}")
+}
+
 /// Statements the migration user is genuinely *refused* (not merely
 /// routed): what proves admin routing is load-bearing.
 pub fn refused_without_admin(statement: &str) -> bool {
     body_lines(statement)
         .first()
         .is_some_and(|first| NEEDS_ADMIN.is_match(first.trim()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_statements_are_classified_by_first_body_line() {
+        assert!(is_system("-- restart the scheduler\nSYSTEM START VIEW x"));
+        assert!(is_system("SYSTEM REFRESH VIEW RefreshableViews.db_X"));
+        assert!(!is_system(
+            "CREATE TABLE system_log (x UInt8) ENGINE = Memory"
+        ));
+        assert!(!is_system("SELECT * FROM system.tables"));
+    }
+
+    #[test]
+    fn replica_urls_keep_scheme_and_port() {
+        assert_eq!(
+            host_of("http://localhost:8123").as_deref(),
+            Some("localhost")
+        );
+        assert_eq!(
+            replace_host("http://localhost:8123", "clickhouse-2"),
+            "http://clickhouse-2:8123"
+        );
+        assert_eq!(
+            replace_host("http://10.0.0.1:8443/path", "node-b"),
+            "http://node-b:8443/path"
+        );
+    }
 }

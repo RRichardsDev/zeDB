@@ -402,3 +402,15 @@ Status: implementation complete, awaiting UI acceptance.
   differences. One debugging note for posterity: a Python heredoc turned
   regex \b into literal backspace bytes, which display as nothing and
   match nothing.
+
+## SYSTEM statement fan-out (2026-08-05)
+
+- SYSTEM statements (START/REFRESH VIEW, ...) take no ON CLUSTER and act
+  on the connected node only, but every replica keeps its own refresh
+  scheduler, so the runner now fans them out: replicas are discovered
+  from system.clusters on the connected node and reached on the same
+  HTTP port and credentials (the ancestor's assumption; port-mapped
+  docker topologies where each node maps to a different host port cannot
+  satisfy it, which is why the fan-out test bed is the single-replica
+  lifecycle server short-circuiting to the connected executor). Failures
+  on any replica fail the migration loudly.
