@@ -78,6 +78,8 @@ GPUI findings, in rough order of hours cost:
 
 ## M3: connections (2026-08-05)
 
+Status: complete.
+
 - GPUI 0.2.2 has no built-in text input control. The connection form uses
   a small single-line input adapted from GPUI's `examples/input.rs`,
   including IME ranges, Unicode grapheme navigation, selection, and
@@ -108,3 +110,8 @@ GPUI findings, in rough order of hours cost:
   minimal `zeDB.app` bundle with the stable `dev.zedb.app` identifier. The
   script selects the valid Apple Development certificate with the latest
   expiry, signs and verifies the bundle, then launches it.
+- Bare GPUI renders SVG assets but does not include Zed's icon library. zeDB
+  embeds its own monochrome utility icons and uses compact footer toolbars.
+  Environment identity stays next to the connection name, using muted tinted
+  pills instead of saturated status colors. The durable rules live in
+  `docs/UI-DESIGN.md`.

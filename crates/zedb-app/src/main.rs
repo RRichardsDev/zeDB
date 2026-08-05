@@ -3,18 +3,38 @@ mod grid_spike;
 mod rt;
 mod theme;
 
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use gpui::{
-    div, point, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, IntoElement,
-    TitlebarOptions, Window, WindowBounds, WindowOptions,
+    div, point, prelude::*, px, rgb, size, svg, App, Application, AssetSource, Bounds, Context,
+    Entity, IntoElement, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use zedb_ch::{ChClient, ChConfig};
 use zedb_core::{load_connections, save_connections, ConnectionConfig, EnvTier};
 
 use components::text_input::{self, TextInput};
 use grid_spike::GridSpike;
-use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, TEXT, TEXT_DIM};
+use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
+
+struct Assets;
+
+impl AssetSource for Assets {
+    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        let bytes: Option<&'static [u8]> = match path {
+            "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
+            "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
+            _ => None,
+        };
+        Ok(bytes.map(Cow::Borrowed))
+    }
+
+    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
+        Ok(match path {
+            "icons" => vec!["edit.svg".into(), "trash.svg".into()],
+            _ => Vec::new(),
+        })
+    }
+}
 
 struct ConnectionForm {
     editing: Option<usize>,
@@ -107,21 +127,22 @@ impl Workspace {
             .child("zeDB")
     }
 
-    fn tier_color(tier: EnvTier) -> u32 {
+    fn tier_colors(tier: EnvTier) -> (u32, u32) {
         match tier {
-            EnvTier::Dev => 0x3fb950,
-            EnvTier::Staging => 0xd29922,
-            EnvTier::Production => 0xf85149,
+            EnvTier::Dev => (0x294132, 0x8abe94),
+            EnvTier::Staging => (0x463b28, 0xc7a969),
+            EnvTier::Production => (0x472d31, 0xd4868d),
         }
     }
 
     fn tier_badge(tier: EnvTier) -> impl IntoElement {
+        let (background, foreground) = Self::tier_colors(tier);
         div()
             .px_2()
             .py(px(2.))
             .rounded(px(3.))
-            .bg(rgb(Self::tier_color(tier)))
-            .text_color(rgb(0x101215))
+            .bg(rgb(background))
+            .text_color(rgb(foreground))
             .text_xs()
             .child(tier.label().to_uppercase())
     }
@@ -162,17 +183,17 @@ impl Workspace {
                             .justify_between()
                             .text_color(rgb(TEXT))
                             .child(connection.name.clone())
-                            .when(connected, |row| {
-                                row.child(div().size(px(7.)).rounded_full().bg(rgb(0x3fb950)))
-                            }),
+                            .child(Self::tier_badge(connection.tier)),
                     )
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(Self::tier_badge(connection.tier))
-                            .child(format!("{} node(s)", connection.endpoints.len())),
+                            .child(format!("{} node(s)", connection.endpoints.len()))
+                            .when(connected, |row| {
+                                row.child(div().size(px(7.)).rounded_full().bg(rgb(SUCCESS)))
+                            }),
                     )
             })
             .collect::<Vec<_>>();
@@ -233,26 +254,28 @@ impl Workspace {
                         .gap_2()
                         .when_some(self.pending_delete.as_ref(), |panel, name| {
                             panel
-                                .child(div().text_xs().text_color(rgb(0xf85149)).child(format!(
+                                .child(div().text_xs().text_color(rgb(DANGER)).child(format!(
                                     "Delete {name}? This also removes its saved password."
                                 )))
                                 .child(
                                     div()
                                         .flex()
-                                        .gap_2()
+                                        .justify_end()
+                                        .gap_1()
                                         .child(
                                             div()
                                                 .id("cancel-delete-connection")
-                                                .flex_1()
-                                                .py_2()
-                                                .flex()
-                                                .justify_center()
+                                                .px_2()
+                                                .py_1()
                                                 .rounded(px(3.))
-                                                .border_1()
-                                                .border_color(rgb(BORDER))
+                                                .text_xs()
+                                                .text_color(rgb(TEXT_DIM))
                                                 .child("Cancel")
                                                 .hover(|button| {
-                                                    button.bg(rgb(0x303640)).cursor_pointer()
+                                                    button
+                                                        .bg(rgb(0x303640))
+                                                        .text_color(rgb(TEXT))
+                                                        .cursor_pointer()
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.cancel_delete(cx)
@@ -261,16 +284,18 @@ impl Workspace {
                                         .child(
                                             div()
                                                 .id("confirm-delete-connection")
-                                                .flex_1()
-                                                .py_2()
-                                                .flex()
-                                                .justify_center()
+                                                .px_2()
+                                                .py_1()
                                                 .rounded(px(3.))
-                                                .bg(rgb(0x8b2d2d))
-                                                .text_color(rgb(0xffffff))
+                                                .text_xs()
+                                                .bg(rgb(0x6f2929))
+                                                .text_color(rgb(0xffb4ad))
                                                 .child("Delete")
                                                 .hover(|button| {
-                                                    button.bg(rgb(0xa43a3a)).cursor_pointer()
+                                                    button
+                                                        .bg(rgb(0x8b3434))
+                                                        .text_color(rgb(0xffffff))
+                                                        .cursor_pointer()
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.confirm_delete(cx)
@@ -281,22 +306,36 @@ impl Workspace {
                         .when(self.pending_delete.is_none(), |panel| {
                             panel.child(
                                 div()
+                                    .h(px(32.))
+                                    .mx(px(-12.))
+                                    .mb(px(-12.))
+                                    .px_2()
                                     .flex()
-                                    .gap_2()
+                                    .items_center()
+                                    .justify_end()
+                                    .gap_1()
+                                    .border_t_1()
+                                    .border_color(rgb(BORDER))
                                     .child(
                                         div()
                                             .id("edit-connection")
-                                            .flex_1()
-                                            .py_2()
+                                            .size(px(24.))
                                             .flex()
+                                            .items_center()
                                             .justify_center()
                                             .rounded(px(3.))
-                                            .border_1()
-                                            .border_color(rgb(BORDER))
-                                            .text_color(rgb(TEXT))
-                                            .child("Edit")
+                                            .text_color(rgb(TEXT_DIM))
+                                            .child(
+                                                svg()
+                                                    .path("icons/edit.svg")
+                                                    .size(px(14.))
+                                                    .text_color(rgb(TEXT_DIM)),
+                                            )
                                             .hover(|button| {
-                                                button.bg(rgb(0x303640)).cursor_pointer()
+                                                button
+                                                    .bg(rgb(0x303640))
+                                                    .text_color(rgb(TEXT))
+                                                    .cursor_pointer()
                                             })
                                             .on_click(
                                                 cx.listener(|this, _, _, cx| this.start_edit(cx)),
@@ -305,19 +344,25 @@ impl Workspace {
                                     .child(
                                         div()
                                             .id("delete-connection")
-                                            .flex_1()
-                                            .py_2()
+                                            .size(px(24.))
                                             .flex()
+                                            .items_center()
                                             .justify_center()
                                             .rounded(px(3.))
-                                            .border_1()
-                                            .border_color(rgb(0x8b2d2d))
-                                            .text_color(rgb(0xf85149))
-                                            .child("Delete")
+                                            .text_color(rgb(TEXT_DIM))
+                                            .child(
+                                                svg()
+                                                    .path("icons/trash.svg")
+                                                    .size(px(14.))
+                                                    .text_color(rgb(TEXT_DIM)),
+                                            )
                                             .when(self.connecting.is_none(), |button| {
                                                 button
                                                     .hover(|button| {
-                                                        button.bg(rgb(0x3d2528)).cursor_pointer()
+                                                        button
+                                                            .bg(rgb(0x3d2528))
+                                                            .text_color(rgb(DANGER))
+                                                            .cursor_pointer()
                                                     })
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.request_delete(cx)
@@ -829,7 +874,36 @@ impl Workspace {
                     .flex_col()
                     .gap_4()
                     .child(div().text_lg().text_color(rgb(TEXT)).child(heading))
-                    .child(Self::field("NAME", form.name.clone()))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_xs().text_color(rgb(TEXT_DIM)).child("NAME"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().flex_1().child(form.name.clone()))
+                                    .child(
+                                        div()
+                                            .id("cycle-tier")
+                                            .h(px(34.))
+                                            .px_1()
+                                            .flex()
+                                            .items_center()
+                                            .rounded(px(3.))
+                                            .child(Self::tier_badge(form.tier))
+                                            .hover(|button| {
+                                                button.bg(rgb(BG_SIDEBAR)).cursor_pointer()
+                                            })
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.cycle_tier(cx)),
+                                            ),
+                                    ),
+                            ),
+                    )
                     .child(
                         div()
                             .flex()
@@ -869,46 +943,24 @@ impl Workspace {
                     .child(Self::field("DATABASE", form.database.clone()))
                     .child(Self::field("PASSWORD", form.password.clone()))
                     .child(
-                        div()
-                            .flex()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .id("cycle-tier")
-                                    .flex_1()
-                                    .h(px(34.))
-                                    .px_3()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .rounded(px(3.))
-                                    .border_1()
-                                    .border_color(rgb(BORDER))
-                                    .child("Environment")
-                                    .child(Self::tier_badge(form.tier))
-                                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
-                                    .on_click(cx.listener(|this, _, _, cx| this.cycle_tier(cx))),
-                            )
-                            .child(
-                                div()
-                                    .id("toggle-read-only")
-                                    .flex_1()
-                                    .h(px(34.))
-                                    .px_3()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .rounded(px(3.))
-                                    .border_1()
-                                    .border_color(rgb(BORDER))
-                                    .child("Read only")
-                                    .child(if form.read_only { "ON" } else { "OFF" })
-                                    .when(form.read_only, |button| button.text_color(rgb(0x3fb950)))
-                                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.toggle_read_only(cx)),
-                                    ),
-                            ),
+                        div().flex().justify_end().child(
+                            div()
+                                .id("toggle-read-only")
+                                .w(px(250.))
+                                .h(px(34.))
+                                .px_3()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .rounded(px(3.))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .child("Read only")
+                                .child(if form.read_only { "ON" } else { "OFF" })
+                                .when(form.read_only, |button| button.text_color(rgb(SUCCESS)))
+                                .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_read_only(cx))),
+                        ),
                     )
                     .child(
                         div()
@@ -1072,8 +1124,8 @@ impl Workspace {
                                         .map(|node| node.reachable)
                                 });
                         let (label, color) = match reachable {
-                            Some(true) => ("reachable", 0x3fb950),
-                            Some(false) => ("failed", 0xf85149),
+                            Some(true) => ("reachable", SUCCESS),
+                            Some(false) => ("failed", DANGER),
                             None => ("not tested", TEXT_DIM),
                         };
                         div()
@@ -1241,7 +1293,7 @@ impl Render for Workspace {
 }
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
+    Application::new().with_assets(Assets).run(|cx: &mut App| {
         text_input::init(cx);
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(

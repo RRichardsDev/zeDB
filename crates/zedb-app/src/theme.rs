@@ -6,3 +6,5 @@ pub const BG_STATUS: u32 = 0x191c20;
 pub const BORDER: u32 = 0x33383f;
 pub const TEXT: u32 = 0xaab2bd;
 pub const TEXT_DIM: u32 = 0x6b7380;
+pub const SUCCESS: u32 = 0x76a981;
+pub const DANGER: u32 = 0xc4737b;

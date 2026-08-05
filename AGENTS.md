@@ -37,3 +37,8 @@ This project is indexed by GitNexus as **zeDB** (440 symbols, 1244 relationships
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+## UI work
+
+- Before changing the user interface, read and follow `docs/UI-DESIGN.md`.
+- Reuse or extend existing UI primitives before introducing one-off controls.
