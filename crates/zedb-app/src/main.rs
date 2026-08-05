@@ -122,6 +122,7 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
             "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
+            "icons/close.svg" => Some(include_bytes!("../assets/icons/close.svg")),
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
             "icons/refresh.svg" => Some(include_bytes!("../assets/icons/refresh.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
@@ -134,6 +135,7 @@ impl AssetSource for Assets {
         Ok(match path {
             "icons" => vec![
                 "chevron-down.svg".into(),
+                "close.svg".into(),
                 "edit.svg".into(),
                 "refresh.svg".into(),
                 "trash.svg".into(),
@@ -2277,34 +2279,51 @@ impl Workspace {
                             .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
                             .on_click(cx.listener(|this, _, _, cx| this.open_query_editor(cx))),
                     )
-                    .child(
-                        div()
-                            .id("connect-toggle")
-                            .px_3()
-                            .py_1()
-                            .rounded(px(3.))
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .text_color(rgb(TEXT))
-                            .child(if self.connecting.is_some() {
-                                "Connecting..."
-                            } else if selected_connected {
-                                "Disconnect"
-                            } else {
-                                "Connect"
-                            })
-                            .when(self.connecting.is_none() && selected.is_some(), |button| {
-                                button
-                                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if selected_connected {
-                                            this.disconnect(cx);
-                                        } else {
-                                            this.connect_selected(cx);
-                                        }
-                                    }))
-                            }),
-                    ),
+                    .when(selected_connected, |toolbar| {
+                        toolbar.child(
+                            div()
+                                .id("disconnect")
+                                .size(px(28.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(3.))
+                                .bg(rgb(0x3d2528))
+                                .text_color(rgb(DANGER))
+                                .child(
+                                    svg()
+                                        .path("icons/close.svg")
+                                        .size(px(14.))
+                                        .text_color(rgb(DANGER)),
+                                )
+                                .hover(|button| button.bg(rgb(0x563034)).cursor_pointer())
+                                .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
+                        )
+                    })
+                    .when(!selected_connected, |toolbar| {
+                        toolbar.child(
+                            div()
+                                .id("connect-toggle")
+                                .px_3()
+                                .py_1()
+                                .rounded(px(3.))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .text_color(rgb(TEXT))
+                                .child(if self.connecting.is_some() {
+                                    "Connecting..."
+                                } else {
+                                    "Connect"
+                                })
+                                .when(self.connecting.is_none() && selected.is_some(), |button| {
+                                    button
+                                        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.connect_selected(cx)),
+                                        )
+                                }),
+                        )
+                    }),
             )
     }
 
@@ -2423,7 +2442,7 @@ impl Workspace {
         }
     }
 
-    fn schema_object_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn schema_object_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self
             .selected_schema_object
             .as_ref()
@@ -2469,6 +2488,11 @@ impl Workspace {
         let details = selected.details.clone();
         let ddl_editor = selected.ddl_editor.clone();
         let engine_editor = selected.engine_editor.clone();
+        if ddl_editor.focus_handle(cx).is_focused(window)
+            || engine_editor.focus_handle(cx).is_focused(window)
+        {
+            window.blur();
+        }
         let tab = selected.tab;
         let tab_bar = div()
             .h(px(34.))
@@ -2597,6 +2621,7 @@ impl Workspace {
                                                     .bordered(false)
                                                     .focus_bordered(false)
                                                     .disabled(true)
+                                                    .tab_index(-1)
                                                     .h_full(),
                                             ),
                                     ),
@@ -2726,6 +2751,7 @@ impl Workspace {
                                         .bordered(false)
                                         .focus_bordered(false)
                                         .disabled(true)
+                                        .tab_index(-1)
                                         .h_full(),
                                 )
                             }),
@@ -2775,13 +2801,42 @@ impl Workspace {
                             .items_center()
                             .gap_4()
                             .text_xs()
-                            .text_color(rgb(TEXT_DIM))
-                            .child(format!("Engine  {}", selected.object.engine))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_1()
+                                    .child(div().text_color(rgb(TEXT)).child("Engine:"))
+                                    .child(
+                                        div()
+                                            .text_color(rgb(TEXT_DIM))
+                                            .child(selected.object.engine.clone()),
+                                    ),
+                            )
                             .when_some(selected.object.total_rows, |row, rows| {
-                                row.child(format!("Rows  {}", Self::format_count(rows)))
+                                row.child(
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .child(div().text_color(rgb(TEXT)).child("Rows:"))
+                                        .child(
+                                            div()
+                                                .text_color(rgb(TEXT_DIM))
+                                                .child(Self::format_count(rows)),
+                                        ),
+                                )
                             })
                             .when_some(selected.object.total_bytes, |row, bytes| {
-                                row.child(format!("Size  {}", Self::format_bytes(bytes)))
+                                row.child(
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .child(div().text_color(rgb(TEXT)).child("Size:"))
+                                        .child(
+                                            div()
+                                                .text_color(rgb(TEXT_DIM))
+                                                .child(Self::format_bytes(bytes)),
+                                        ),
+                                )
                             }),
                     ),
             )
@@ -3115,7 +3170,7 @@ impl Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .flex()
@@ -3231,8 +3286,11 @@ impl Render for Workspace {
                                                     .when(
                                                         self.selected_schema_object.is_some(),
                                                         |content| {
-                                                            content
-                                                                .child(self.schema_object_panel(cx))
+                                                            content.child(
+                                                                self.schema_object_panel(
+                                                                    window, cx,
+                                                                ),
+                                                            )
                                                         },
                                                     )
                                                     .when(
