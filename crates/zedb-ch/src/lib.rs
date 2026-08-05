@@ -11,8 +11,10 @@
 mod client;
 mod error;
 mod rowbinary;
+mod schema;
 mod types;
 
 pub use client::{ChClient, ChConfig};
 pub use error::{ChError, Result};
+pub use schema::{ColumnInfo, DatabaseMeta, SchemaObjectKind, SchemaObjectMeta};
 pub use types::{parse_type, ChType};

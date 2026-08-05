@@ -37,6 +37,20 @@ closer to Zed than to a web dashboard or mobile application.
 - Preserve consistent control heights, gaps, borders, and hover states.
 - Keep optional and destructive paths subordinate to the primary workflow.
 
+## Structural panes
+
+- Structural panes are resizable unless a fixed size is essential to their
+  purpose.
+- Show a crisp 1-pixel divider, but center a wider invisible drag target on it.
+  Use an 8-pixel target by default so the divider is easy to acquire without
+  adding visual weight.
+- Use the platform column or row resize cursor while the pointer is over a
+  splitter.
+- Clamp pane sizes to keep both sides useful. Preserve the chosen size in view
+  state for the lifetime of the workspace.
+- Reuse the shared splitter pattern for future sidebars, inspectors, consoles,
+  and other structural panes.
+
 ## Review checklist
 
 Before accepting UI work, check that it:

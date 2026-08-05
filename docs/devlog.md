@@ -115,3 +115,32 @@ Status: complete.
   Environment identity stays next to the connection name, using muted tinted
   pills instead of saturated status colors. The durable rules live in
   `docs/UI-DESIGN.md`.
+
+## M4: schema tree (2026-08-05)
+
+Status: implementation complete, awaiting UI acceptance.
+
+- Schema discovery uses `system.databases`, `system.tables`, and
+  `system.columns`. The client exposes typed database, object, and column
+  metadata instead of leaking query-result indexing into the UI.
+- Database names load on connection. Object lists load only when their
+  database is expanded, and columns load only when an object is selected.
+  Network work stays on the shared Tokio runtime, so expanding the tree never
+  blocks GPUI.
+- Filtering is local and immediate over the metadata already loaded into the
+  tree. It does not issue a query per keystroke.
+- GPUI has the cursor and mouse primitives needed for pane resizing, but no
+  ready-made Zed splitter. The connection and schema sidebar uses a 1-pixel
+  divider with an 8-pixel centered drag target and a clamped width. This is now
+  the contract for future structural panes in `docs/UI-DESIGN.md`.
+- The M4 object view deliberately stops at engine, row/size metadata, columns,
+  and types. DDL, keys, and richer summaries remain M5 work.
+- The original macOS credential backend used `keyring`, whose Apple backend
+  reads legacy generic-password items and gives poor control over authorization
+  prompts. zeDB now uses Security framework `SecItem` operations directly and
+  caches an unlocked credential for the workspace session. The intended final
+  setup is the data-protection Keychain with user-presence access control. That
+  requires an active Apple Developer membership, an explicit `dev.zedb.app`
+  identifier, a development provisioning profile, matching entitlements, and
+  an embedded profile. Restore the data-protection option when that profile is
+  available; raw `cargo run` builds must not be used for credential testing.

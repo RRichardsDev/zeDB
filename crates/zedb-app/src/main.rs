@@ -7,9 +7,10 @@ use std::{borrow::Cow, collections::HashMap};
 
 use gpui::{
     div, point, prelude::*, px, rgb, size, svg, App, Application, AssetSource, Bounds, Context,
-    Entity, IntoElement, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    Entity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, SharedString,
+    TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
-use zedb_ch::{ChClient, ChConfig};
+use zedb_ch::{ChClient, ChConfig, ColumnInfo, DatabaseMeta, SchemaObjectKind, SchemaObjectMeta};
 use zedb_core::{load_connections, save_connections, ConnectionConfig, EnvTier};
 
 use components::text_input::{self, TextInput};
@@ -22,6 +23,7 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
+            "icons/refresh.svg" => Some(include_bytes!("../assets/icons/refresh.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             _ => None,
         };
@@ -30,7 +32,7 @@ impl AssetSource for Assets {
 
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(match path {
-            "icons" => vec!["edit.svg".into(), "trash.svg".into()],
+            "icons" => vec!["edit.svg".into(), "refresh.svg".into(), "trash.svg".into()],
             _ => Vec::new(),
         })
     }
@@ -59,12 +61,29 @@ struct ConnectionDraft {
 struct ConnectedCluster {
     name: String,
     active_endpoint: String,
+    client_config: ChConfig,
 }
 
 #[derive(Clone)]
 struct EndpointHealth {
     endpoint: String,
     reachable: bool,
+}
+
+struct DatabaseNode {
+    meta: DatabaseMeta,
+    expanded: bool,
+    loading: bool,
+    objects: Option<Vec<SchemaObjectMeta>>,
+    error: Option<String>,
+}
+
+struct SelectedSchemaObject {
+    database: String,
+    object: SchemaObjectMeta,
+    loading: bool,
+    columns: Vec<ColumnInfo>,
+    error: Option<String>,
 }
 
 struct Workspace {
@@ -74,14 +93,25 @@ struct Workspace {
     connected: Option<ConnectedCluster>,
     connecting: Option<String>,
     endpoint_health: HashMap<String, Vec<EndpointHealth>>,
+    password_cache: HashMap<String, Option<String>>,
     form: Option<ConnectionForm>,
     pending_delete: Option<String>,
+    schema_filter: Entity<TextInput>,
+    schema_connection: Option<String>,
+    schema_loading: bool,
+    schema_databases: Vec<DatabaseNode>,
+    schema_error: Option<String>,
+    selected_schema_object: Option<SelectedSchemaObject>,
     notice: Option<String>,
     show_grid_spike: bool,
+    sidebar_width: f32,
+    resizing_sidebar: bool,
 }
 
 impl Workspace {
-    fn new(grid: Entity<GridSpike>) -> Self {
+    fn new(grid: Entity<GridSpike>, cx: &mut Context<Self>) -> Self {
+        let schema_filter = Self::input("", "Filter schema", false, cx);
+        cx.observe(&schema_filter, |_, _, cx| cx.notify()).detach();
         match load_connections() {
             Ok(connections) => Self {
                 selected: (!connections.is_empty()).then_some(0),
@@ -90,10 +120,19 @@ impl Workspace {
                 connected: None,
                 connecting: None,
                 endpoint_health: HashMap::new(),
+                password_cache: HashMap::new(),
                 form: None,
                 pending_delete: None,
+                schema_filter,
+                schema_connection: None,
+                schema_loading: false,
+                schema_databases: Vec::new(),
+                schema_error: None,
+                selected_schema_object: None,
                 notice: None,
                 show_grid_spike: false,
+                sidebar_width: 240.0,
+                resizing_sidebar: false,
             },
             Err(error) => Self {
                 grid,
@@ -102,10 +141,19 @@ impl Workspace {
                 connected: None,
                 connecting: None,
                 endpoint_health: HashMap::new(),
+                password_cache: HashMap::new(),
                 form: None,
                 pending_delete: None,
+                schema_filter,
+                schema_connection: None,
+                schema_loading: false,
+                schema_databases: Vec::new(),
+                schema_error: None,
+                selected_schema_object: None,
                 notice: Some(format!("Could not load connections: {error}")),
                 show_grid_spike: false,
+                sidebar_width: 240.0,
+                resizing_sidebar: false,
             },
         }
     }
@@ -199,12 +247,10 @@ impl Workspace {
             .collect::<Vec<_>>();
 
         div()
-            .w(px(240.))
+            .w(px(self.sidebar_width))
             .flex_none()
             .h_full()
             .bg(rgb(BG_SIDEBAR))
-            .border_r_1()
-            .border_color(rgb(BORDER))
             .p_3()
             .flex()
             .flex_col()
@@ -231,8 +277,9 @@ impl Workspace {
             )
             .child(
                 div()
-                    .flex_1()
-                    .min_h_0()
+                    .id("connection-list")
+                    .max_h(px(220.))
+                    .overflow_y_scroll()
                     .flex()
                     .flex_col()
                     .gap_1()
@@ -308,7 +355,6 @@ impl Workspace {
                                 div()
                                     .h(px(32.))
                                     .mx(px(-12.))
-                                    .mb(px(-12.))
                                     .px_2()
                                     .flex()
                                     .items_center()
@@ -373,6 +419,234 @@ impl Workspace {
                         }),
                 )
             })
+            .child(self.schema_sidebar(cx))
+    }
+
+    fn schema_kind_label(kind: SchemaObjectKind) -> &'static str {
+        match kind {
+            SchemaObjectKind::Table => "T",
+            SchemaObjectKind::View => "V",
+            SchemaObjectKind::MaterializedView => "MV",
+            SchemaObjectKind::Dictionary => "D",
+        }
+    }
+
+    fn schema_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let filter = self.schema_filter.read(cx).text().to_lowercase();
+        let selected = self
+            .selected_schema_object
+            .as_ref()
+            .map(|selected| (selected.database.as_str(), selected.object.name.as_str()));
+        let database_rows = self
+            .schema_databases
+            .iter()
+            .enumerate()
+            .filter_map(|(database_index, database)| {
+                let database_matches = database.meta.name.to_lowercase().contains(&filter);
+                let matching_objects = database
+                    .objects
+                    .as_ref()
+                    .map(|objects| {
+                        objects
+                            .iter()
+                            .filter(|object| {
+                                filter.is_empty()
+                                    || database_matches
+                                    || object.name.to_lowercase().contains(&filter)
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if !filter.is_empty() && !database_matches && matching_objects.is_empty() {
+                    return None;
+                }
+
+                let database_name = database.meta.name.clone();
+                let show_objects = database.expanded || !filter.is_empty();
+                let object_rows = matching_objects
+                    .into_iter()
+                    .enumerate()
+                    .map(|(object_index, object)| {
+                        let is_selected =
+                            selected == Some((database_name.as_str(), object.name.as_str()));
+                        let row_database = database_name.clone();
+                        let row_object = object.clone();
+                        div()
+                            .id((
+                                "schema-object",
+                                database_index.saturating_mul(100_000) + object_index,
+                            ))
+                            .h(px(26.))
+                            .pl_5()
+                            .pr_2()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .rounded(px(3.))
+                            .when(is_selected, |row| row.bg(rgb(0x303640)))
+                            .hover(|row| row.bg(rgb(0x2a2f37)).cursor_pointer())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.select_schema_object(
+                                    row_database.clone(),
+                                    row_object.clone(),
+                                    cx,
+                                )
+                            }))
+                            .child(
+                                div()
+                                    .w(px(20.))
+                                    .text_xs()
+                                    .text_color(rgb(TEXT_DIM))
+                                    .child(Self::schema_kind_label(object.kind)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_color(rgb(TEXT))
+                                    .child(object.name),
+                            )
+                    })
+                    .collect::<Vec<_>>();
+
+                Some(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .id(("schema-database", database_index))
+                                .h(px(26.))
+                                .px_2()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .rounded(px(3.))
+                                .hover(|row| row.bg(rgb(0x2a2f37)).cursor_pointer())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.toggle_schema_database(database_index, cx)
+                                }))
+                                .child(if database.expanded { "▾" } else { "▸" })
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_color(rgb(TEXT))
+                                        .child(database.meta.name.clone()),
+                                ),
+                        )
+                        .when(database.loading, |node| {
+                            node.child(
+                                div()
+                                    .pl_5()
+                                    .h(px(24.))
+                                    .flex()
+                                    .items_center()
+                                    .text_xs()
+                                    .child("Loading..."),
+                            )
+                        })
+                        .when_some(database.error.as_ref(), |node, error| {
+                            node.child(
+                                div()
+                                    .pl_5()
+                                    .pr_2()
+                                    .py_1()
+                                    .text_xs()
+                                    .text_color(rgb(DANGER))
+                                    .child(error.clone()),
+                            )
+                        })
+                        .when(show_objects, |node| node.children(object_rows)),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        div()
+            .mx(px(-12.))
+            .mb(px(-12.))
+            .flex_1()
+            .min_h_0()
+            .border_t_1()
+            .border_color(rgb(BORDER))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(34.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .text_xs()
+                    .child("SCHEMA")
+                    .when(self.connected.is_some(), |header| {
+                        header.child(
+                            div()
+                                .id("refresh-schema")
+                                .size(px(24.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(3.))
+                                .text_color(rgb(TEXT_DIM))
+                                .child(
+                                    svg()
+                                        .path("icons/refresh.svg")
+                                        .size(px(14.))
+                                        .text_color(rgb(TEXT_DIM)),
+                                )
+                                .hover(|button| {
+                                    button
+                                        .bg(rgb(0x303640))
+                                        .text_color(rgb(TEXT))
+                                        .cursor_pointer()
+                                })
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.load_schema_databases(cx)),
+                                ),
+                        )
+                    }),
+            )
+            .when(self.connected.is_some(), |panel| {
+                panel.child(div().px_2().pb_2().child(self.schema_filter.clone()))
+            })
+            .child(
+                div()
+                    .id("schema-tree")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_1()
+                    .when(self.connected.is_none(), |tree| {
+                        tree.child(
+                            div()
+                                .px_2()
+                                .py_2()
+                                .text_xs()
+                                .child("Connect to browse schema"),
+                        )
+                    })
+                    .when(self.schema_loading, |tree| {
+                        tree.child(div().px_2().py_2().text_xs().child("Loading databases..."))
+                    })
+                    .when_some(self.schema_error.as_ref(), |tree, error| {
+                        tree.child(
+                            div()
+                                .px_2()
+                                .py_2()
+                                .text_xs()
+                                .text_color(rgb(DANGER))
+                                .child(error.clone()),
+                        )
+                    })
+                    .children(database_rows),
+            )
     }
 
     fn input(
@@ -507,6 +781,7 @@ impl Workspace {
 
         self.connections = updated;
         self.endpoint_health.remove(&connection.name);
+        self.password_cache.remove(&connection.name);
         if self
             .connected
             .as_ref()
@@ -514,6 +789,7 @@ impl Workspace {
             == Some(connection.name.as_str())
         {
             self.connected = None;
+            self.clear_schema();
         }
         self.selected = if self.connections.is_empty() {
             None
@@ -597,6 +873,34 @@ impl Workspace {
         })
     }
 
+    fn sidebar_resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("sidebar-resize-handle")
+            .w(px(8.))
+            .h_full()
+            .ml(px(-4.))
+            .mr(px(-4.))
+            .flex_none()
+            .relative()
+            .cursor_col_resize()
+            .child(
+                div()
+                    .absolute()
+                    .left(px(3.))
+                    .top_0()
+                    .bottom_0()
+                    .w(px(1.))
+                    .bg(rgb(BORDER)),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.resizing_sidebar = true;
+                    cx.notify();
+                }),
+            )
+    }
+
     fn password_for_draft(&self, draft: &ConnectionDraft) -> Result<Option<String>, String> {
         if !draft.password.is_empty() {
             return Ok(Some(draft.password.clone()));
@@ -606,16 +910,21 @@ impl Workspace {
             .map_err(|error| format!("Could not read macOS Keychain: {error}"))
     }
 
-    fn persist_draft(&mut self, draft: &ConnectionDraft) -> Result<usize, String> {
+    fn persist_draft(
+        &mut self,
+        draft: &ConnectionDraft,
+        unlocked_previous_password: Option<&Option<String>>,
+    ) -> Result<usize, String> {
         let name = &draft.config.name;
         let previous_connections = self.connections.clone();
-        let previous_password = draft
-            .original_name
-            .as_deref()
-            .map(zedb_core::secrets::get_password)
-            .transpose()
-            .map_err(|error| format!("Could not read macOS Keychain: {error}"))?
-            .flatten();
+        let previous_password = match draft.original_name.as_deref() {
+            None => None,
+            Some(_) if unlocked_previous_password.is_some() => {
+                unlocked_previous_password.cloned().flatten()
+            }
+            Some(old_name) => zedb_core::secrets::get_password(old_name)
+                .map_err(|error| format!("Could not read macOS Keychain: {error}"))?,
+        };
         let mut updated = previous_connections.clone();
         let index = match draft.editing {
             Some(index) => {
@@ -670,6 +979,7 @@ impl Workspace {
                 == Some(old_name)
             {
                 self.connected = None;
+                self.clear_schema();
             }
         }
         self.connections = updated;
@@ -680,7 +990,7 @@ impl Workspace {
     fn save_form(&mut self, cx: &mut Context<Self>) {
         let result = self
             .draft_from_form(cx)
-            .and_then(|draft| self.persist_draft(&draft).map(|_| draft.config.name));
+            .and_then(|draft| self.persist_draft(&draft, None).map(|_| draft.config.name));
         match result {
             Ok(name) => {
                 self.form = None;
@@ -716,13 +1026,16 @@ impl Workspace {
             return;
         };
         let connection = self.connections[index].clone();
-        let password = match zedb_core::secrets::get_password(&connection.name) {
-            Ok(password) => password,
-            Err(error) => {
-                self.notice = Some(format!("Could not read macOS Keychain: {error}"));
-                cx.notify();
-                return;
-            }
+        let password = match self.password_cache.get(&connection.name).cloned() {
+            Some(password) => password,
+            None => match zedb_core::secrets::get_password(&connection.name) {
+                Ok(password) => password,
+                Err(error) => {
+                    self.notice = Some(format!("Could not read macOS Keychain: {error}"));
+                    cx.notify();
+                    return;
+                }
+            },
         };
         self.probe_connection(connection, password, None, cx);
     }
@@ -739,6 +1052,7 @@ impl Workspace {
         let user = connection.user.clone();
         let database = connection.database.clone();
         let read_only = connection.read_only;
+        let connected_password = password.clone();
         self.connecting = Some(name.clone());
         self.notice = Some(format!("Testing {} node(s) for {name}...", endpoints.len()));
         cx.notify();
@@ -781,7 +1095,11 @@ impl Workspace {
                 };
 
                 if let Some(draft) = &draft {
-                    if let Err(error) = this.persist_draft(draft) {
+                    let unlocked_previous_password =
+                        draft.password.is_empty().then_some(&connected_password);
+                    if let Err(error) =
+                        this.persist_draft(draft, unlocked_previous_password)
+                    {
                         this.notice = Some(error);
                         cx.notify();
                         return;
@@ -792,10 +1110,20 @@ impl Workspace {
                 this.connected = Some(ConnectedCluster {
                     name: name.clone(),
                     active_endpoint: active_endpoint.clone(),
+                    client_config: ChConfig {
+                        url: active_endpoint.clone(),
+                        user: connection.user.clone(),
+                        password: connected_password.clone(),
+                        database: connection.database.clone(),
+                        read_only: connection.read_only,
+                    },
                 });
+                this.password_cache
+                    .insert(name.clone(), connected_password.clone());
                 this.notice = Some(format!(
                     "Connected to {name} via {active_endpoint} ({reachable}/{total} nodes reachable)"
                 ));
+                this.load_schema_databases(cx);
                 cx.notify();
             })
             .ok();
@@ -807,7 +1135,176 @@ impl Workspace {
         if let Some(connected) = self.connected.take() {
             self.notice = Some(format!("Disconnected from {}", connected.name));
         }
+        self.clear_schema();
         cx.notify();
+    }
+
+    fn clear_schema(&mut self) {
+        self.schema_connection = None;
+        self.schema_loading = false;
+        self.schema_databases.clear();
+        self.schema_error = None;
+        self.selected_schema_object = None;
+    }
+
+    fn load_schema_databases(&mut self, cx: &mut Context<Self>) {
+        let Some(connected) = &self.connected else {
+            self.clear_schema();
+            return;
+        };
+        let connection_name = connected.name.clone();
+        let config = connected.client_config.clone();
+        self.schema_connection = Some(connection_name.clone());
+        self.schema_loading = true;
+        self.schema_databases.clear();
+        self.schema_error = None;
+        self.selected_schema_object = None;
+        cx.notify();
+
+        let task = rt::tokio().spawn(async move { ChClient::new(config).list_databases().await });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                    != Some(connection_name.as_str())
+                {
+                    return;
+                }
+                this.schema_loading = false;
+                match result {
+                    Ok(Ok(databases)) => {
+                        this.schema_databases = databases
+                            .into_iter()
+                            .map(|meta| DatabaseNode {
+                                meta,
+                                expanded: false,
+                                loading: false,
+                                objects: None,
+                                error: None,
+                            })
+                            .collect();
+                    }
+                    Ok(Err(error)) => this.schema_error = Some(error.to_string()),
+                    Err(error) => this.schema_error = Some(error.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn toggle_schema_database(&mut self, database_index: usize, cx: &mut Context<Self>) {
+        let Some(database) = self.schema_databases.get_mut(database_index) else {
+            return;
+        };
+        database.expanded = !database.expanded;
+        if !database.expanded || database.objects.is_some() || database.loading {
+            cx.notify();
+            return;
+        }
+        let Some(connected) = &self.connected else {
+            return;
+        };
+        let connection_name = connected.name.clone();
+        let config = connected.client_config.clone();
+        let database_name = database.meta.name.clone();
+        database.loading = true;
+        database.error = None;
+        cx.notify();
+
+        let task = rt::tokio().spawn({
+            let database_name = database_name.clone();
+            async move {
+                ChClient::new(config)
+                    .list_schema_objects(&database_name)
+                    .await
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                    != Some(connection_name.as_str())
+                {
+                    return;
+                }
+                let Some(database) = this
+                    .schema_databases
+                    .iter_mut()
+                    .find(|database| database.meta.name == database_name)
+                else {
+                    return;
+                };
+                database.loading = false;
+                match result {
+                    Ok(Ok(objects)) => database.objects = Some(objects),
+                    Ok(Err(error)) => database.error = Some(error.to_string()),
+                    Err(error) => database.error = Some(error.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn select_schema_object(
+        &mut self,
+        database_name: String,
+        object: SchemaObjectMeta,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(connected) = &self.connected else {
+            return;
+        };
+        let connection_name = connected.name.clone();
+        let config = connected.client_config.clone();
+        let object_name = object.name.clone();
+        self.selected_schema_object = Some(SelectedSchemaObject {
+            database: database_name.clone(),
+            object,
+            loading: true,
+            columns: Vec::new(),
+            error: None,
+        });
+        self.show_grid_spike = false;
+        cx.notify();
+
+        let task = rt::tokio().spawn({
+            let database_name = database_name.clone();
+            let object_name = object_name.clone();
+            async move {
+                ChClient::new(config)
+                    .list_columns(&database_name, &object_name)
+                    .await
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                    != Some(connection_name.as_str())
+                {
+                    return;
+                }
+                let Some(selected) = &mut this.selected_schema_object else {
+                    return;
+                };
+                if selected.database != database_name || selected.object.name != object_name {
+                    return;
+                }
+                selected.loading = false;
+                match result {
+                    Ok(Ok(columns)) => selected.columns = columns,
+                    Ok(Err(error)) => selected.error = Some(error.to_string()),
+                    Err(error) => selected.error = Some(error.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn field(label: &'static str, input: Entity<TextInput>) -> impl IntoElement {
@@ -1168,11 +1665,6 @@ impl Workspace {
                     panel.child("Add or select a cluster connection to begin.")
                 })
                 .child(
-                    div().pt_2().text_color(rgb(TEXT_DIM)).child(
-                        "The live schema tree arrives in M4. Real query results arrive in M7.",
-                    ),
-                )
-                .child(
                     div()
                         .id("open-grid-spike")
                         .w(px(250.))
@@ -1186,6 +1678,170 @@ impl Workspace {
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_grid_spike(cx))),
                 ),
         )
+    }
+
+    fn format_count(value: u64) -> String {
+        let digits = value.to_string();
+        let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+        for (index, character) in digits.chars().enumerate() {
+            if index > 0 && (digits.len() - index).is_multiple_of(3) {
+                formatted.push(',');
+            }
+            formatted.push(character);
+        }
+        formatted
+    }
+
+    fn format_bytes(bytes: u64) -> String {
+        const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+        let mut value = bytes as f64;
+        let mut unit = 0;
+        while value >= 1000.0 && unit < UNITS.len() - 1 {
+            value /= 1000.0;
+            unit += 1;
+        }
+        if unit == 0 {
+            format!("{bytes} {}", UNITS[unit])
+        } else {
+            format!("{value:.1} {}", UNITS[unit])
+        }
+    }
+
+    fn schema_object_panel(&self) -> impl IntoElement {
+        let selected = self
+            .selected_schema_object
+            .as_ref()
+            .expect("schema object panel requires a selection");
+        let column_rows = selected
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(index, column)| {
+                div()
+                    .id(("schema-column", index))
+                    .h(px(30.))
+                    .flex_none()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .when(index % 2 == 1, |row| row.bg(rgb(0x1f2329)))
+                    .child(
+                        div()
+                            .w_1_3()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_color(rgb(TEXT))
+                            .child(column.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_color(rgb(TEXT_DIM))
+                            .child(column.type_name.clone()),
+                    )
+            })
+            .collect::<Vec<_>>();
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex_none()
+                    .px_4()
+                    .py_3()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div().text_lg().text_color(rgb(TEXT)).child(format!(
+                                    "{}.{}",
+                                    selected.database, selected.object.name
+                                )),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py(px(2.))
+                                    .rounded(px(3.))
+                                    .bg(rgb(0x303640))
+                                    .text_xs()
+                                    .text_color(rgb(TEXT_DIM))
+                                    .child(selected.object.kind.label()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .text_xs()
+                            .text_color(rgb(TEXT_DIM))
+                            .child(format!("Engine  {}", selected.object.engine))
+                            .when_some(selected.object.total_rows, |row, rows| {
+                                row.child(format!("Rows  {}", Self::format_count(rows)))
+                            })
+                            .when_some(selected.object.total_bytes, |row, bytes| {
+                                row.child(format!("Size  {}", Self::format_bytes(bytes)))
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(28.))
+                    .flex_none()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .bg(rgb(BG_SIDEBAR))
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .text_xs()
+                    .text_color(rgb(TEXT_DIM))
+                    .child(div().w_1_3().child("COLUMN"))
+                    .child(div().flex_1().child("TYPE")),
+            )
+            .child(
+                div()
+                    .id("schema-columns")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .when(selected.loading, |columns| {
+                        columns.child(
+                            div()
+                                .p_3()
+                                .text_color(rgb(TEXT_DIM))
+                                .child("Loading columns..."),
+                        )
+                    })
+                    .when_some(selected.error.as_ref(), |columns, error| {
+                        columns.child(div().p_3().text_color(rgb(DANGER)).child(error.clone()))
+                    })
+                    .when(
+                        !selected.loading
+                            && selected.error.is_none()
+                            && selected.columns.is_empty(),
+                        |columns| {
+                            columns.child(div().p_3().text_color(rgb(TEXT_DIM)).child("No columns"))
+                        },
+                    )
+                    .children(column_rows),
+            )
     }
 
     fn grid_spike_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1243,7 +1899,7 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(TEXT_DIM))
             .child(status)
-            .child(concat!("zedb ", env!("CARGO_PKG_VERSION"), " | M3"))
+            .child(concat!("zedb ", env!("CARGO_PKG_VERSION"), " | M4"))
     }
 }
 
@@ -1257,6 +1913,24 @@ impl Render for Workspace {
             .text_color(rgb(TEXT))
             .font_family("Menlo")
             .text_sm()
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if this.resizing_sidebar {
+                    this.sidebar_width = f32::from(event.position.x).clamp(180.0, 480.0);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| {
+                    this.resizing_sidebar = false;
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| {
+                    this.resizing_sidebar = false;
+                }),
+            )
             .child(self.title_bar())
             .child(
                 div()
@@ -1265,6 +1939,7 @@ impl Render for Workspace {
                     .min_h_0()
                     .flex()
                     .child(self.sidebar(cx))
+                    .child(self.sidebar_resize_handle(cx))
                     .child(
                         div()
                             .flex_1()
@@ -1282,7 +1957,19 @@ impl Render for Workspace {
                                             content.child(self.grid_spike_panel(cx))
                                         })
                                         .when(!self.show_grid_spike, |content| {
-                                            content.child(self.cluster_overview(cx))
+                                            content
+                                                .when(
+                                                    self.selected_schema_object.is_some(),
+                                                    |content| {
+                                                        content.child(self.schema_object_panel())
+                                                    },
+                                                )
+                                                .when(
+                                                    self.selected_schema_object.is_none(),
+                                                    |content| {
+                                                        content.child(self.cluster_overview(cx))
+                                                    },
+                                                )
                                         }),
                                 )
                             }),
@@ -1308,7 +1995,7 @@ fn main() {
             },
             |_, cx| {
                 let grid = cx.new(GridSpike::new);
-                cx.new(|_| Workspace::new(grid))
+                cx.new(|cx| Workspace::new(grid, cx))
             },
         )
         .expect("failed to open window");

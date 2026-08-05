@@ -202,6 +202,29 @@ async fn query_roundtrip_type_zoo() {
         .await
         .expect("insert row");
 
+    let databases = client.list_databases().await.expect("list databases");
+    assert!(databases.iter().any(|database| database.name == "default"));
+
+    let objects = client
+        .list_schema_objects("default")
+        .await
+        .expect("list schema objects");
+    let zoo = objects
+        .iter()
+        .find(|object| object.name == "zoo")
+        .expect("zoo table appears in schema discovery");
+    assert_eq!(zoo.engine, "MergeTree");
+    assert_eq!(zoo.kind.label(), "table");
+
+    let columns = client
+        .list_columns("default", "zoo")
+        .await
+        .expect("list columns");
+    assert_eq!(columns.len(), 20);
+    assert_eq!(columns[0].name, "id");
+    assert_eq!(columns[0].type_name, "UInt64");
+    assert_eq!(columns[9].type_name, "DateTime64(3, 'UTC')");
+
     let result = client.query("SELECT * FROM zoo").await.expect("select");
 
     assert_eq!(result.rows.len(), 1);
