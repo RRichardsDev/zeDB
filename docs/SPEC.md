@@ -146,7 +146,7 @@ Phased; each phase is usable on its own.
 - Connect to ClickHouse (multiple saved connections, environment tiers,
   read-only by default).
 - Schema tree (databases, tables, views, MVs) with DDL view.
-- Query editor with tree-sitter SQL highlighting.
+- Query editor with tree-sitter SQL highlighting and optional full Vim mode.
 - Virtualized results grid that stays responsive on millions of rows.
 
 **Phase 1: the migration engine (headless).**

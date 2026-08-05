@@ -160,3 +160,28 @@ Status: implementation complete, awaiting UI acceptance.
 - M8 must use one Tree-sitter SQL rendering path for the query editor, full DDL
   documents, and engine-definition fragments. The engine block wraps in M5 so
   its content never depends on a hidden horizontal scrollbar.
+
+## M6: query editor v1 (2026-08-05)
+
+Status: complete.
+
+- Full Vim support is a product requirement, enabled through a persistent
+  Preferences toggle. M6 therefore starts with a command-driven multiline
+  editor core instead of extending the connection form's single-line input.
+- M9 is the explicit Vim-mode milestone, including modal editing, operators,
+  motions, text objects, registers, search, repeat, counts, macros, and relevant
+  command-line actions. Daily-driver polish moves to M10.
+- Query tabs use `gpui-component`'s multiline code editor. `Cmd+Enter` runs the
+  selection when present and otherwise runs the full buffer. Tabs can be added
+  and closed, while the final tab and an actively running tab are protected.
+- Query execution stays on the shared Tokio runtime. Cancellation aborts the
+  task and drops the in-flight HTTP request. Success, failure, and cancellation
+  retain a per-tab elapsed time with sub-millisecond precision where useful.
+- The SQL Tree-sitter bundle landed early for the query editor because the
+  editor dependency already supplies it. It uses a general SQL grammar, so
+  ClickHouse-specific constructs may be highlighted incompletely. M8 still
+  owns the shared highlighted DDL and engine-definition renderer.
+- The editor uses the zeDB palette, a compact gutter, and a contained error
+  surface. Connections and Schema now share a vertically draggable divider,
+  using the same 1-pixel line and forgiving 8-pixel hit target as the main
+  sidebar splitter.

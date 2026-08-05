@@ -96,7 +96,9 @@ Plain-text multiline editor pane (GPUI text input primitives; highlighting
 is M8, completion is not Phase 0). Cmd+Enter runs the buffer (or
 selection) against the active connection. Server errors render readably
 (ClickHouse error codes and messages, not a debug dump). Cancel button
-that actually kills the HTTP request. Multiple editor tabs.
+that actually kills the HTTP request. Multiple editor tabs. The editor model
+and actions must be command-driven so the default keymap and Vim mode share
+one editing core rather than becoming separate editors.
 
 Done when: type query, run, see error or results; cancel a
 `SELECT sleep(3)` mid-flight.
@@ -122,7 +124,19 @@ Phase 0 work).
 Done when: editor and inspector are highlighted and typing latency is
 unchanged.
 
-### M9. Daily-driver polish
+### M9. Vim mode and preferences
+
+A Preferences surface with a persistent Vim-mode toggle. Vim support covers
+normal, insert, visual, visual-line, and visual-block modes; counts; motions;
+operators; text objects; registers; marks; search; repeat; macros; and the
+command-line actions relevant to editing query buffers. Unsupported Vim
+features must be documented explicitly rather than silently behaving
+differently.
+
+Done when: an experienced Vim user can edit query buffers for a full week
+without switching Vim mode off to work around missing core editing behavior.
+
+### M10. Daily-driver polish
 
 The gap-closing milestone, driven by a week of real use. Expected
 contents: keyboard-first navigation (palette or shortcuts for connection
@@ -139,7 +153,7 @@ fixed or explicitly parked in IDEAS.md.
 
 M0 → M1 and M2 in either order (M1 is pure Rust, M2 is pure GPUI; good
 parallel tracks) → M3 → M4 → M5/M6 in either order → M7 (needs M1+M2+M6)
-→ M8 → M9.
+→ M8 → M9 → M10.
 
 ## Explicitly not in Phase 0
 
@@ -150,6 +164,6 @@ waits).
 
 ## Phase exit
 
-Phase 0 is done when M9's done-condition holds. The next step after that
+Phase 0 is done when M10's done-condition holds. The next step after that
 is Phase 1 (headless migration engine), which starts with finalizing the
 new repo format: see SPEC.md open decisions.

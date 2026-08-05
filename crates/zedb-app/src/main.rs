@@ -3,13 +3,25 @@ mod grid_spike;
 mod rt;
 mod theme;
 
-use std::{borrow::Cow, collections::HashMap};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use gpui::{
-    div, point, prelude::*, px, rgb, size, svg, App, Application, AssetSource, Bounds,
-    ClipboardItem, Context, Entity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    actions, div, point, prelude::*, px, rgb, rgba, size, svg, App, Application, AssetSource,
+    Bounds, ClipboardItem, Context, Entity, EntityInputHandler, IntoElement, KeyBinding,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, SharedString, TitlebarOptions,
+    Window, WindowBounds, WindowOptions,
 };
+use gpui_component::{
+    highlighter::HighlightTheme,
+    input::{Input, InputState},
+    scroll::ScrollableElement,
+    Root, Theme,
+};
+use tokio::task::AbortHandle;
 use zedb_ch::{
     ChClient, ChConfig, ColumnInfo, DatabaseMeta, ObjectDetails, SchemaObjectKind, SchemaObjectMeta,
 };
@@ -18,6 +30,8 @@ use zedb_core::{load_connections, save_connections, ConnectionConfig, EnvTier};
 use components::text_input::{self, TextInput};
 use grid_spike::GridSpike;
 use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
+
+actions!(query_editor, [RunQuery]);
 
 struct Assets;
 
@@ -97,6 +111,22 @@ enum ObjectInspectorTab {
     Ddl,
 }
 
+struct QueryTab {
+    id: usize,
+    editor: Entity<InputState>,
+    outcome: QueryOutcome,
+    started_at: Option<Instant>,
+    elapsed: Option<Duration>,
+}
+
+enum QueryOutcome {
+    Idle,
+    Running,
+    Complete { columns: usize, rows: usize },
+    Error(String),
+    Cancelled,
+}
+
 struct Workspace {
     grid: Entity<GridSpike>,
     connections: Vec<ConnectionConfig>,
@@ -117,12 +147,32 @@ struct Workspace {
     show_grid_spike: bool,
     sidebar_width: f32,
     resizing_sidebar: bool,
+    connections_pane_height: f32,
+    resizing_sidebar_sections: bool,
+    query_tabs: Vec<QueryTab>,
+    active_query_tab: usize,
+    next_query_tab_id: usize,
+    show_query_editor: bool,
+    query_abort: Option<AbortHandle>,
+    query_run_id: u64,
 }
 
 impl Workspace {
-    fn new(grid: Entity<GridSpike>, cx: &mut Context<Self>) -> Self {
+    fn new(grid: Entity<GridSpike>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let schema_filter = Self::input("", "Filter schema", false, cx);
         cx.observe(&schema_filter, |_, _, cx| cx.notify()).detach();
+        let query_editor = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor("sql")
+                .default_value("SELECT 1;")
+        });
+        let query_tabs = vec![QueryTab {
+            id: 1,
+            editor: query_editor,
+            outcome: QueryOutcome::Idle,
+            started_at: None,
+            elapsed: None,
+        }];
         match load_connections() {
             Ok(connections) => Self {
                 selected: (!connections.is_empty()).then_some(0),
@@ -144,6 +194,14 @@ impl Workspace {
                 show_grid_spike: false,
                 sidebar_width: 240.0,
                 resizing_sidebar: false,
+                connections_pane_height: 430.0,
+                resizing_sidebar_sections: false,
+                query_tabs,
+                active_query_tab: 0,
+                next_query_tab_id: 2,
+                show_query_editor: false,
+                query_abort: None,
+                query_run_id: 0,
             },
             Err(error) => Self {
                 grid,
@@ -165,6 +223,14 @@ impl Workspace {
                 show_grid_spike: false,
                 sidebar_width: 240.0,
                 resizing_sidebar: false,
+                connections_pane_height: 430.0,
+                resizing_sidebar_sections: false,
+                query_tabs,
+                active_query_tab: 0,
+                next_query_tab_id: 2,
+                show_query_editor: false,
+                query_abort: None,
+                query_run_id: 0,
             },
         }
     }
@@ -262,174 +328,193 @@ impl Workspace {
             .flex_none()
             .h_full()
             .bg(rgb(BG_SIDEBAR))
-            .p_3()
             .flex()
             .flex_col()
-            .gap_2()
             .text_sm()
             .text_color(rgb(TEXT_DIM))
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child("CONNECTIONS")
-                    .child(
-                        div()
-                            .id("add-connection")
-                            .px_2()
-                            .py_1()
-                            .rounded(px(3.))
-                            .text_color(rgb(TEXT))
-                            .child("+")
-                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
-                            .on_click(cx.listener(|this, _, _, cx| this.start_add(cx))),
-                    ),
-            )
-            .child(
-                div()
-                    .id("connection-list")
-                    .max_h(px(220.))
-                    .overflow_y_scroll()
+                    .h(px(self.connections_pane_height))
+                    .min_h_0()
+                    .flex_none()
+                    .p_3()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .when(rows.is_empty(), |list| {
-                        list.child(
-                            div()
-                                .pt_3()
-                                .text_color(rgb(TEXT_DIM))
-                                .child("No saved connections"),
-                        )
-                    })
-                    .children(rows),
-            )
-            .when(self.selected.is_some(), |sidebar| {
-                sidebar.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .when_some(self.pending_delete.as_ref(), |panel, name| {
-                            panel
-                                .child(div().text_xs().text_color(rgb(DANGER)).child(format!(
-                                    "Delete {name}? This also removes its saved password."
-                                )))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .justify_end()
-                                        .gap_1()
-                                        .child(
-                                            div()
-                                                .id("cancel-delete-connection")
-                                                .px_2()
-                                                .py_1()
-                                                .rounded(px(3.))
-                                                .text_xs()
-                                                .text_color(rgb(TEXT_DIM))
-                                                .child("Cancel")
-                                                .hover(|button| {
-                                                    button
-                                                        .bg(rgb(0x303640))
-                                                        .text_color(rgb(TEXT))
-                                                        .cursor_pointer()
-                                                })
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.cancel_delete(cx)
-                                                })),
-                                        )
-                                        .child(
-                                            div()
-                                                .id("confirm-delete-connection")
-                                                .px_2()
-                                                .py_1()
-                                                .rounded(px(3.))
-                                                .text_xs()
-                                                .bg(rgb(0x6f2929))
-                                                .text_color(rgb(0xffb4ad))
-                                                .child("Delete")
-                                                .hover(|button| {
-                                                    button
-                                                        .bg(rgb(0x8b3434))
-                                                        .text_color(rgb(0xffffff))
-                                                        .cursor_pointer()
-                                                })
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.confirm_delete(cx)
-                                                })),
-                                        ),
-                                )
-                        })
-                        .when(self.pending_delete.is_none(), |panel| {
-                            panel.child(
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child("CONNECTIONS")
+                            .child(
                                 div()
-                                    .h(px(32.))
-                                    .mx(px(-12.))
+                                    .id("add-connection")
                                     .px_2()
-                                    .flex()
-                                    .items_center()
-                                    .justify_end()
-                                    .gap_1()
-                                    .border_t_1()
-                                    .border_color(rgb(BORDER))
-                                    .child(
-                                        div()
-                                            .id("edit-connection")
-                                            .size(px(24.))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(px(3.))
-                                            .text_color(rgb(TEXT_DIM))
-                                            .child(
-                                                svg()
-                                                    .path("icons/edit.svg")
-                                                    .size(px(14.))
-                                                    .text_color(rgb(TEXT_DIM)),
-                                            )
-                                            .hover(|button| {
-                                                button
-                                                    .bg(rgb(0x303640))
-                                                    .text_color(rgb(TEXT))
-                                                    .cursor_pointer()
-                                            })
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| this.start_edit(cx)),
+                                    .py_1()
+                                    .rounded(px(3.))
+                                    .text_color(rgb(TEXT))
+                                    .child("+")
+                                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                    .on_click(cx.listener(|this, _, _, cx| this.start_add(cx))),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("connection-list")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .when(rows.is_empty(), |list| {
+                                list.child(
+                                    div()
+                                        .pt_3()
+                                        .text_color(rgb(TEXT_DIM))
+                                        .child("No saved connections"),
+                                )
+                            })
+                            .children(rows),
+                    )
+                    .when(self.selected.is_some(), |sidebar| {
+                        sidebar.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .when_some(self.pending_delete.as_ref(), |panel, name| {
+                                    panel
+                                        .child(div().text_xs().text_color(rgb(DANGER)).child(
+                                            format!(
+                                                "Delete {name}? This also removes its saved password."
                                             ),
-                                    )
-                                    .child(
+                                        ))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .justify_end()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .id("cancel-delete-connection")
+                                                        .px_2()
+                                                        .py_1()
+                                                        .rounded(px(3.))
+                                                        .text_xs()
+                                                        .text_color(rgb(TEXT_DIM))
+                                                        .child("Cancel")
+                                                        .hover(|button| {
+                                                            button
+                                                                .bg(rgb(0x303640))
+                                                                .text_color(rgb(TEXT))
+                                                                .cursor_pointer()
+                                                        })
+                                                        .on_click(cx.listener(
+                                                            |this, _, _, cx| {
+                                                                this.cancel_delete(cx)
+                                                            },
+                                                        )),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id("confirm-delete-connection")
+                                                        .px_2()
+                                                        .py_1()
+                                                        .rounded(px(3.))
+                                                        .text_xs()
+                                                        .bg(rgb(0x6f2929))
+                                                        .text_color(rgb(0xffb4ad))
+                                                        .child("Delete")
+                                                        .hover(|button| {
+                                                            button
+                                                                .bg(rgb(0x8b3434))
+                                                                .text_color(rgb(0xffffff))
+                                                                .cursor_pointer()
+                                                        })
+                                                        .on_click(cx.listener(
+                                                            |this, _, _, cx| {
+                                                                this.confirm_delete(cx)
+                                                            },
+                                                        )),
+                                                ),
+                                        )
+                                })
+                                .when(self.pending_delete.is_none(), |panel| {
+                                    panel.child(
                                         div()
-                                            .id("delete-connection")
-                                            .size(px(24.))
+                                            .h(px(32.))
+                                            .mx(px(-12.))
+                                            .mb(px(-12.))
+                                            .px_2()
                                             .flex()
                                             .items_center()
-                                            .justify_center()
-                                            .rounded(px(3.))
-                                            .text_color(rgb(TEXT_DIM))
+                                            .justify_end()
+                                            .gap_1()
+                                            .border_t_1()
+                                            .border_color(rgb(BORDER))
                                             .child(
-                                                svg()
-                                                    .path("icons/trash.svg")
-                                                    .size(px(14.))
-                                                    .text_color(rgb(TEXT_DIM)),
-                                            )
-                                            .when(self.connecting.is_none(), |button| {
-                                                button
+                                                div()
+                                                    .id("edit-connection")
+                                                    .size(px(24.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded(px(3.))
+                                                    .text_color(rgb(TEXT_DIM))
+                                                    .child(
+                                                        svg()
+                                                            .path("icons/edit.svg")
+                                                            .size(px(14.))
+                                                            .text_color(rgb(TEXT_DIM)),
+                                                    )
                                                     .hover(|button| {
                                                         button
-                                                            .bg(rgb(0x3d2528))
-                                                            .text_color(rgb(DANGER))
+                                                            .bg(rgb(0x303640))
+                                                            .text_color(rgb(TEXT))
                                                             .cursor_pointer()
                                                     })
                                                     .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.request_delete(cx)
-                                                    }))
-                                            }),
-                                    ),
-                            )
-                        }),
-                )
-            })
+                                                        this.start_edit(cx)
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("delete-connection")
+                                                    .size(px(24.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded(px(3.))
+                                                    .text_color(rgb(TEXT_DIM))
+                                                    .child(
+                                                        svg()
+                                                            .path("icons/trash.svg")
+                                                            .size(px(14.))
+                                                            .text_color(rgb(TEXT_DIM)),
+                                                    )
+                                                    .when(self.connecting.is_none(), |button| {
+                                                        button
+                                                            .hover(|button| {
+                                                                button
+                                                                    .bg(rgb(0x3d2528))
+                                                                    .text_color(rgb(DANGER))
+                                                                    .cursor_pointer()
+                                                            })
+                                                            .on_click(cx.listener(
+                                                                |this, _, _, cx| {
+                                                                    this.request_delete(cx)
+                                                                },
+                                                            ))
+                                                    }),
+                                            ),
+                                    )
+                                }),
+                        )
+                    }),
+            )
+            .child(self.sidebar_section_resize_handle(cx))
             .child(self.schema_sidebar(cx))
     }
 
@@ -579,12 +664,8 @@ impl Workspace {
             .collect::<Vec<_>>();
 
         div()
-            .mx(px(-12.))
-            .mb(px(-12.))
             .flex_1()
             .min_h_0()
-            .border_t_1()
-            .border_color(rgb(BORDER))
             .flex()
             .flex_col()
             .child(
@@ -907,6 +988,34 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
                     this.resizing_sidebar = true;
+                    cx.notify();
+                }),
+            )
+    }
+
+    fn sidebar_section_resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("sidebar-section-resize-handle")
+            .h(px(8.))
+            .w_full()
+            .mt(px(-4.))
+            .mb(px(-4.))
+            .flex_none()
+            .relative()
+            .cursor_row_resize()
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(3.))
+                    .h(px(1.))
+                    .bg(rgb(BORDER)),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.resizing_sidebar_sections = true;
                     cx.notify();
                 }),
             )
@@ -1282,6 +1391,7 @@ impl Workspace {
             error: None,
         });
         self.show_grid_spike = false;
+        self.show_query_editor = false;
         cx.notify();
 
         let task = rt::tokio().spawn({
@@ -1549,6 +1659,144 @@ impl Workspace {
             )
     }
 
+    fn open_query_editor(&mut self, cx: &mut Context<Self>) {
+        self.show_query_editor = true;
+        self.show_grid_spike = false;
+        cx.notify();
+    }
+
+    fn add_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self.next_query_tab_id;
+        self.next_query_tab_id += 1;
+        let editor = cx.new(|cx| InputState::new(window, cx).code_editor("sql"));
+        self.query_tabs.push(QueryTab {
+            id,
+            editor,
+            outcome: QueryOutcome::Idle,
+            started_at: None,
+            elapsed: None,
+        });
+        self.active_query_tab = self.query_tabs.len() - 1;
+        self.show_query_editor = true;
+        cx.notify();
+    }
+
+    fn close_query_tab(&mut self, tab_id: usize, cx: &mut Context<Self>) {
+        if self.query_tabs.len() == 1 {
+            return;
+        }
+        let Some(index) = self.query_tabs.iter().position(|tab| tab.id == tab_id) else {
+            return;
+        };
+        if matches!(self.query_tabs[index].outcome, QueryOutcome::Running) {
+            return;
+        }
+        self.query_tabs.remove(index);
+        self.active_query_tab = self
+            .active_query_tab
+            .min(self.query_tabs.len().saturating_sub(1));
+        cx.notify();
+    }
+
+    fn run_query_action(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
+        self.run_query(window, cx);
+    }
+
+    fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.query_abort.is_some() {
+            return;
+        }
+        let Some(connected) = &self.connected else {
+            self.notice = Some("Connect to a cluster before running a query".into());
+            cx.notify();
+            return;
+        };
+        let Some(editor) = self
+            .query_tabs
+            .get(self.active_query_tab)
+            .map(|tab| tab.editor.clone())
+        else {
+            return;
+        };
+        let sql = editor.update(cx, |editor, cx| {
+            let selection = EntityInputHandler::selected_text_range(editor, false, window, cx);
+            selection
+                .filter(|selection| !selection.range.is_empty())
+                .and_then(|selection| {
+                    let mut adjusted_range = None;
+                    EntityInputHandler::text_for_range(
+                        editor,
+                        selection.range,
+                        &mut adjusted_range,
+                        window,
+                        cx,
+                    )
+                })
+                .unwrap_or_else(|| editor.value().to_string())
+        });
+        let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) else {
+            return;
+        };
+        if sql.trim().is_empty() {
+            tab.outcome = QueryOutcome::Error("Query is empty".into());
+            cx.notify();
+            return;
+        }
+
+        let tab_id = tab.id;
+        tab.outcome = QueryOutcome::Running;
+        tab.started_at = Some(Instant::now());
+        tab.elapsed = None;
+        let config = connected.client_config.clone();
+        self.query_run_id += 1;
+        let run_id = self.query_run_id;
+        let task = rt::tokio().spawn(async move { ChClient::new(config).query(&sql).await });
+        self.query_abort = Some(task.abort_handle());
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if this.query_run_id != run_id {
+                    return;
+                }
+                this.query_abort = None;
+                let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+                    return;
+                };
+                tab.elapsed = tab.started_at.take().map(|started| started.elapsed());
+                tab.outcome = match result {
+                    Ok(Ok(result)) => QueryOutcome::Complete {
+                        columns: result.columns.len(),
+                        rows: result.rows.len(),
+                    },
+                    Ok(Err(error)) => QueryOutcome::Error(error.to_string()),
+                    Err(error) => QueryOutcome::Error(error.to_string()),
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn cancel_query(&mut self, cx: &mut Context<Self>) {
+        let Some(abort) = self.query_abort.take() else {
+            return;
+        };
+        abort.abort();
+        self.query_run_id += 1;
+        if let Some(tab) = self
+            .query_tabs
+            .iter_mut()
+            .find(|tab| matches!(tab.outcome, QueryOutcome::Running))
+        {
+            tab.elapsed = tab.started_at.take().map(|started| started.elapsed());
+            tab.outcome = QueryOutcome::Cancelled;
+        }
+        cx.notify();
+    }
+
     fn connection_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.selected.and_then(|index| self.connections.get(index));
         let selected_connected = selected
@@ -1590,31 +1838,50 @@ impl Workspace {
             )
             .child(
                 div()
-                    .id("connect-toggle")
-                    .px_3()
-                    .py_1()
-                    .rounded(px(3.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(TEXT))
-                    .child(if self.connecting.is_some() {
-                        "Connecting..."
-                    } else if selected_connected {
-                        "Disconnect"
-                    } else {
-                        "Connect"
-                    })
-                    .when(self.connecting.is_none() && selected.is_some(), |button| {
-                        button
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("open-query-editor")
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .text_color(rgb(TEXT))
+                            .child("New query")
                             .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if selected_connected {
-                                    this.disconnect(cx);
-                                } else {
-                                    this.connect_selected(cx);
-                                }
-                            }))
-                    }),
+                            .on_click(cx.listener(|this, _, _, cx| this.open_query_editor(cx))),
+                    )
+                    .child(
+                        div()
+                            .id("connect-toggle")
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .text_color(rgb(TEXT))
+                            .child(if self.connecting.is_some() {
+                                "Connecting..."
+                            } else if selected_connected {
+                                "Disconnect"
+                            } else {
+                                "Connect"
+                            })
+                            .when(self.connecting.is_none() && selected.is_some(), |button| {
+                                button
+                                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if selected_connected {
+                                            this.disconnect(cx);
+                                        } else {
+                                            this.connect_selected(cx);
+                                        }
+                                    }))
+                            }),
+                    ),
             )
     }
 
@@ -2095,6 +2362,214 @@ impl Workspace {
             .child(content)
     }
 
+    fn query_editor_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tab_rows = self
+            .query_tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                let tab_id = tab.id;
+                div()
+                    .id(("query-tab", tab_id))
+                    .h_full()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .border_b_2()
+                    .when(index == self.active_query_tab, |tab| {
+                        tab.border_color(rgb(0x6f8fac)).text_color(rgb(TEXT))
+                    })
+                    .when(index != self.active_query_tab, |tab| {
+                        tab.border_color(rgb(BG_SIDEBAR))
+                            .text_color(rgb(TEXT_DIM))
+                            .hover(|tab| tab.text_color(rgb(TEXT)).cursor_pointer())
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.active_query_tab = index;
+                        cx.notify();
+                    }))
+                    .gap_2()
+                    .child(format!("Query {tab_id}"))
+                    .when(self.query_tabs.len() > 1, |tab_row| {
+                        tab_row.child(
+                            div()
+                                .id(("close-query-tab", tab_id))
+                                .size(px(18.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(3.))
+                                .text_color(rgb(TEXT_DIM))
+                                .child("×")
+                                .when(!matches!(tab.outcome, QueryOutcome::Running), |close| {
+                                    close
+                                        .hover(|close| {
+                                            close
+                                                .bg(rgb(0x303640))
+                                                .text_color(rgb(TEXT))
+                                                .cursor_pointer()
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.close_query_tab(tab_id, cx);
+                                        }))
+                                }),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        let active = self
+            .query_tabs
+            .get(self.active_query_tab)
+            .expect("query editor requires an active tab");
+        let running = matches!(active.outcome, QueryOutcome::Running);
+        let status = match &active.outcome {
+            QueryOutcome::Idle => "Ready".to_string(),
+            QueryOutcome::Running => "Running query...".to_string(),
+            QueryOutcome::Complete { columns, rows } => {
+                format!("Complete: {rows} row(s), {columns} column(s). Results arrive in M7.")
+            }
+            QueryOutcome::Error(error) => error.clone(),
+            QueryOutcome::Cancelled => "Query cancelled".to_string(),
+        };
+        let elapsed = active.elapsed.map(format_query_duration);
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(36.))
+                    .flex_none()
+                    .flex()
+                    .items_end()
+                    .justify_between()
+                    .bg(rgb(BG_SIDEBAR))
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div().h_full().flex().items_end().children(tab_rows).child(
+                            div()
+                                .id("add-query-tab")
+                                .h_full()
+                                .px_3()
+                                .flex()
+                                .items_center()
+                                .text_color(rgb(TEXT_DIM))
+                                .child("+")
+                                .hover(|button| button.text_color(rgb(TEXT)).cursor_pointer())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.add_query_tab(window, cx)
+                                })),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .h_full()
+                            .pr_2()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("cancel-query")
+                                    .px_3()
+                                    .py_1()
+                                    .rounded(px(3.))
+                                    .text_color(rgb(TEXT_DIM))
+                                    .when(running, |button| {
+                                        button
+                                            .text_color(rgb(DANGER))
+                                            .hover(|button| {
+                                                button.bg(rgb(0x3d2528)).cursor_pointer()
+                                            })
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.cancel_query(cx)),
+                                            )
+                                    })
+                                    .child("Cancel"),
+                            )
+                            .child(
+                                div()
+                                    .id("run-query")
+                                    .px_3()
+                                    .py_1()
+                                    .rounded(px(3.))
+                                    .bg(rgb(0x2f6f9f))
+                                    .text_color(rgb(0xffffff))
+                                    .child("Run  ⌘↵")
+                                    .when(!running, |button| {
+                                        button
+                                            .hover(|button| {
+                                                button.bg(rgb(0x3884bd)).cursor_pointer()
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.run_query(window, cx)
+                                            }))
+                                    }),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .bg(rgb(BG))
+                    .child(
+                        Input::new(&active.editor)
+                            .appearance(false)
+                            .bordered(false)
+                            .focus_bordered(false)
+                            .pl(px(4.))
+                            .h_full(),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(50.))
+                            .bg(rgba(0x15181c48))
+                            .border_r_1()
+                            .border_color(rgb(0x2b3037)),
+                    ),
+            )
+            .child(
+                div()
+                    .min_h(px(34.))
+                    .max_h(px(112.))
+                    .flex_none()
+                    .px_3()
+                    .py_2()
+                    .overflow_y_scrollbar()
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .when(matches!(active.outcome, QueryOutcome::Error(_)), |row| {
+                        row.bg(rgb(0x2b2227)).text_color(rgb(DANGER))
+                    })
+                    .when(!matches!(active.outcome, QueryOutcome::Error(_)), |row| {
+                        row.text_color(rgb(TEXT_DIM))
+                    })
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_start()
+                            .justify_between()
+                            .gap_4()
+                            .child(div().flex_1().min_w_0().child(status))
+                            .when_some(elapsed, |row, elapsed| {
+                                row.child(
+                                    div().flex_none().text_color(rgb(TEXT_DIM)).child(elapsed),
+                                )
+                            }),
+                    ),
+            )
+    }
+
     fn grid_spike_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
@@ -2164,9 +2639,17 @@ impl Render for Workspace {
             .text_color(rgb(TEXT))
             .font_family("Menlo")
             .text_sm()
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+            .on_action(cx.listener(Self::run_query_action))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.resizing_sidebar {
                     this.sidebar_width = f32::from(event.position.x).clamp(180.0, 480.0);
+                    cx.notify();
+                }
+                if this.resizing_sidebar_sections {
+                    let viewport_height = f32::from(window.viewport_size().height);
+                    let maximum = (viewport_height - 220.0).max(140.0);
+                    this.connections_pane_height =
+                        (f32::from(event.position.y) - 36.0).clamp(140.0, maximum);
                     cx.notify();
                 }
             }))
@@ -2174,12 +2657,14 @@ impl Render for Workspace {
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _, _| {
                     this.resizing_sidebar = false;
+                    this.resizing_sidebar_sections = false;
                 }),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _, _| {
                     this.resizing_sidebar = false;
+                    this.resizing_sidebar_sections = false;
                 }),
             )
             .child(self.title_bar())
@@ -2204,24 +2689,32 @@ impl Render for Workspace {
                                     div()
                                         .flex_1()
                                         .min_h_0()
-                                        .when(self.show_grid_spike, |content| {
-                                            content.child(self.grid_spike_panel(cx))
+                                        .when(self.show_query_editor, |content| {
+                                            content.child(self.query_editor_panel(cx))
                                         })
-                                        .when(!self.show_grid_spike, |content| {
-                                            content
-                                                .when(
-                                                    self.selected_schema_object.is_some(),
-                                                    |content| {
-                                                        content.child(self.schema_object_panel(cx))
-                                                    },
-                                                )
-                                                .when(
-                                                    self.selected_schema_object.is_none(),
-                                                    |content| {
-                                                        content.child(self.cluster_overview(cx))
-                                                    },
-                                                )
-                                        }),
+                                        .when(
+                                            !self.show_query_editor && self.show_grid_spike,
+                                            |content| content.child(self.grid_spike_panel(cx)),
+                                        )
+                                        .when(
+                                            !self.show_query_editor && !self.show_grid_spike,
+                                            |content| {
+                                                content
+                                                    .when(
+                                                        self.selected_schema_object.is_some(),
+                                                        |content| {
+                                                            content
+                                                                .child(self.schema_object_panel(cx))
+                                                        },
+                                                    )
+                                                    .when(
+                                                        self.selected_schema_object.is_none(),
+                                                        |content| {
+                                                            content.child(self.cluster_overview(cx))
+                                                        },
+                                                    )
+                                            },
+                                        ),
                                 )
                             }),
                     ),
@@ -2230,9 +2723,52 @@ impl Render for Workspace {
     }
 }
 
+fn format_query_duration(duration: Duration) -> String {
+    if duration.as_secs() >= 60 {
+        let minutes = duration.as_secs() / 60;
+        let seconds = duration.as_secs() % 60;
+        format!("{minutes}m {seconds:02}s")
+    } else if duration.as_millis() >= 1_000 {
+        format!("{:.2} s", duration.as_secs_f64())
+    } else if duration.as_millis() < 1 {
+        format!("{:.3} ms", duration.as_secs_f64() * 1_000.)
+    } else if duration.as_millis() < 100 {
+        format!("{:.1} ms", duration.as_secs_f64() * 1_000.)
+    } else {
+        format!("{} ms", duration.as_millis())
+    }
+}
+
+fn configure_component_theme(cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+    theme.font_family = "Berkeley Mono".into();
+    theme.mono_font_family = "Berkeley Mono".into();
+    theme.font_size = px(14.);
+    theme.mono_font_size = px(14.);
+    theme.colors.background = rgb(BG).into();
+    theme.colors.foreground = rgb(TEXT).into();
+    theme.colors.border = rgb(BORDER).into();
+    theme.colors.input = rgb(BORDER).into();
+    theme.colors.muted = rgb(BG_SIDEBAR).into();
+    theme.colors.muted_foreground = rgb(TEXT_DIM).into();
+    theme.colors.caret = rgb(0x9bb8d1).into();
+    theme.colors.selection = rgb(0x3b5063).into();
+    theme.colors.ring = rgb(0x6f8fac).into();
+    theme.highlight_theme = HighlightTheme::default_dark();
+    let highlight = std::sync::Arc::make_mut(&mut theme.highlight_theme);
+    highlight.style.editor_background = Some(rgb(BG).into());
+    highlight.style.editor_foreground = Some(rgb(TEXT).into());
+    highlight.style.editor_active_line = Some(rgb(0x23282f).into());
+    highlight.style.editor_line_number = Some(rgb(TEXT_DIM).into());
+    highlight.style.editor_active_line_number = Some(rgb(TEXT).into());
+}
+
 fn main() {
     Application::new().with_assets(Assets).run(|cx: &mut App| {
+        gpui_component::init(cx);
+        configure_component_theme(cx);
         text_input::init(cx);
+        cx.bind_keys([KeyBinding::new("cmd-enter", RunQuery, None)]);
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
             WindowOptions {
@@ -2244,9 +2780,10 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| {
+            |window, cx| {
                 let grid = cx.new(GridSpike::new);
-                cx.new(|cx| Workspace::new(grid, cx))
+                let workspace = cx.new(|cx| Workspace::new(grid, window, cx));
+                cx.new(|cx| Root::new(workspace, window, cx))
             },
         )
         .expect("failed to open window");

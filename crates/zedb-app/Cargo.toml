@@ -13,5 +13,6 @@ path = "src/main.rs"
 zedb-core.workspace = true
 zedb-ch.workspace = true
 gpui.workspace = true
+gpui-component = { version = "0.5.1", features = ["tree-sitter-languages"] }
 tokio.workspace = true
 unicode-segmentation = "1"

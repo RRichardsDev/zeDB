@@ -51,6 +51,17 @@ closer to Zed than to a web dashboard or mobile application.
 - Reuse the shared splitter pattern for future sidebars, inspectors, consoles,
   and other structural panes.
 
+## Preferences and editor modes
+
+- Editor behavior that persists across launches belongs in Preferences, not in
+  an ad hoc toolbar toggle.
+- Vim mode is optional and disabled by default. Its preference is global and
+  applies consistently to every editable SQL buffer.
+- Editor commands are the stable interaction layer. Default shortcuts, Vim
+  mappings, menus, and future command-palette actions invoke the same commands.
+- Mode state must be visible when Vim mode is active without consuming a large
+  permanent toolbar.
+
 ## Review checklist
 
 Before accepting UI work, check that it:
