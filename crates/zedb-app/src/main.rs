@@ -375,9 +375,16 @@ impl Workspace {
             }
         })
         .detach();
-        // Tabs saved by an update restart come back; otherwise start with the
-        // sample query.
-        let saved_session = zedb_core::take_update_session();
+        // Tabs from the previous session come back; first launch starts with
+        // the sample query.
+        let saved_session = zedb_core::take_session();
+        cx.on_app_quit(|this: &mut Self, cx| {
+            let session = this.session_snapshot(cx);
+            async move {
+                let _ = zedb_core::save_session(&session);
+            }
+        })
+        .detach();
         let tab_contents: Vec<String> = match &saved_session {
             Some(session) if !session.tabs.is_empty() => {
                 session.tabs.iter().map(|tab| tab.sql.clone()).collect()
@@ -572,8 +579,8 @@ impl Workspace {
         .detach();
     }
 
-    fn relaunch_updated(&mut self, cx: &mut Context<Self>) {
-        let session = zedb_core::UpdateSession {
+    fn session_snapshot(&self, cx: &Context<Self>) -> zedb_core::SavedSession {
+        zedb_core::SavedSession {
             tabs: self
                 .query_tabs
                 .iter()
@@ -582,8 +589,14 @@ impl Workspace {
                 })
                 .collect(),
             active_tab: self.active_query_tab,
-        };
-        if let Err(error) = zedb_core::save_update_session(&session) {
+        }
+    }
+
+    fn relaunch_updated(&mut self, cx: &mut Context<Self>) {
+        // The quit hook would save too, but saving up front means a failure
+        // can stop the restart instead of losing tabs.
+        let session = self.session_snapshot(cx);
+        if let Err(error) = zedb_core::save_session(&session) {
             // Losing open tabs is worse than delaying the restart.
             self.flash_warning(format!("Could not save open tabs: {error}"), cx);
             return;
@@ -2971,19 +2984,24 @@ impl Workspace {
                     .child(
                         div()
                             .id("open-fleet")
+                            .group("btn-fleet")
                             .size(px(28.))
                             .flex()
                             .items_center()
                             .justify_center()
                             .rounded(px(3.))
                             .border_1()
-                            .child(svg().path("icons/fleet.svg").size(px(14.)))
                             .map(|button| {
                                 if self.connected.is_none() {
                                     // Disabled: the fleet view is per-connection.
                                     button
                                         .border_color(rgb(0x22262c))
-                                        .text_color(rgb(0x454b55))
+                                        .child(
+                                            svg()
+                                                .path("icons/fleet.svg")
+                                                .size(px(14.))
+                                                .text_color(rgb(0x454b55)),
+                                        )
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new(
                                                 "Connect to a cluster first",
@@ -2993,18 +3011,21 @@ impl Workspace {
                                 } else {
                                     button
                                         .border_color(rgb(BORDER))
-                                        .text_color(rgb(if self.show_fleet {
-                                            TEXT
-                                        } else {
-                                            TEXT_DIM
-                                        }))
                                         .when(self.show_fleet, |button| button.bg(rgb(0x2c3a4d)))
-                                        .hover(|button| {
-                                            button
-                                                .bg(rgb(0x303640))
-                                                .text_color(rgb(TEXT))
-                                                .cursor_pointer()
-                                        })
+                                        .child(
+                                            svg()
+                                                .path("icons/fleet.svg")
+                                                .size(px(14.))
+                                                .text_color(rgb(if self.show_fleet {
+                                                    TEXT
+                                                } else {
+                                                    TEXT_DIM
+                                                }))
+                                                .group_hover("btn-fleet", |icon| {
+                                                    icon.text_color(rgb(TEXT))
+                                                }),
+                                        )
+                                        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new("Fleet view")
                                                 .build(window, cx)
@@ -3018,20 +3039,25 @@ impl Workspace {
                     .child(
                         div()
                             .id("open-query-editor")
+                            .group("btn-query")
                             .size(px(28.))
                             .flex()
                             .items_center()
                             .justify_center()
                             .rounded(px(3.))
                             .border_1()
-                            .child(svg().path("icons/query-plus.svg").size(px(14.)))
                             .map(|button| {
                                 if self.connected.is_none() {
                                     // Disabled; running from an existing tab
                                     // still gets the connect-first warning.
                                     button
                                         .border_color(rgb(0x22262c))
-                                        .text_color(rgb(0x454b55))
+                                        .child(
+                                            svg()
+                                                .path("icons/query-plus.svg")
+                                                .size(px(14.))
+                                                .text_color(rgb(0x454b55)),
+                                        )
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new(
                                                 "Connect to a cluster first",
@@ -3041,13 +3067,16 @@ impl Workspace {
                                 } else {
                                     button
                                         .border_color(rgb(BORDER))
-                                        .text_color(rgb(TEXT_DIM))
-                                        .hover(|button| {
-                                            button
-                                                .bg(rgb(0x303640))
-                                                .text_color(rgb(TEXT))
-                                                .cursor_pointer()
-                                        })
+                                        .child(
+                                            svg()
+                                                .path("icons/query-plus.svg")
+                                                .size(px(14.))
+                                                .text_color(rgb(TEXT_DIM))
+                                                .group_hover("btn-query", |icon| {
+                                                    icon.text_color(rgb(TEXT))
+                                                }),
+                                        )
+                                        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new("New query")
                                                 .build(window, cx)
@@ -3089,41 +3118,71 @@ impl Workspace {
                         toolbar.child(
                             div()
                                 .id("connect-toggle")
+                                .group("btn-connect")
                                 .size(px(28.))
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .rounded(px(3.))
                                 .border_1()
-                                .border_color(rgb(BORDER))
-                                .text_color(rgb(if self.connecting.is_some() {
-                                    SUCCESS
-                                } else {
-                                    TEXT_DIM
-                                }))
-                                .child(svg().path("icons/plug.svg").size(px(14.)).text_color(rgb(
+                                .map(|button| {
                                     if self.connecting.is_some() {
-                                        SUCCESS
+                                        button
+                                            .border_color(rgb(BORDER))
+                                            .child(
+                                                svg()
+                                                    .path("icons/plug.svg")
+                                                    .size(px(14.))
+                                                    .text_color(rgb(SUCCESS)),
+                                            )
+                                            .tooltip(|window, cx| {
+                                                gpui_component::tooltip::Tooltip::new(
+                                                    "Connecting...",
+                                                )
+                                                .build(window, cx)
+                                            })
+                                    } else if selected.is_some() {
+                                        button
+                                            .border_color(rgb(BORDER))
+                                            .child(
+                                                svg()
+                                                    .path("icons/plug.svg")
+                                                    .size(px(14.))
+                                                    .text_color(rgb(TEXT_DIM))
+                                                    .group_hover("btn-connect", |icon| {
+                                                        icon.text_color(rgb(SUCCESS))
+                                                    }),
+                                            )
+                                            .hover(|button| {
+                                                button
+                                                    .bg(rgb(0x294132))
+                                                    .border_color(rgb(SUCCESS))
+                                                    .cursor_pointer()
+                                            })
+                                            .tooltip(|window, cx| {
+                                                gpui_component::tooltip::Tooltip::new("Connect")
+                                                    .build(window, cx)
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.connect_selected(cx)
+                                            }))
                                     } else {
-                                        TEXT_DIM
-                                    },
-                                )))
-                                .tooltip(|window, cx| {
-                                    gpui_component::tooltip::Tooltip::new("Connect")
-                                        .build(window, cx)
-                                })
-                                .when(self.connecting.is_none() && selected.is_some(), |button| {
-                                    button
-                                        .hover(|button| {
-                                            button
-                                                .bg(rgb(0x294132))
-                                                .border_color(rgb(SUCCESS))
-                                                .text_color(rgb(SUCCESS))
-                                                .cursor_pointer()
-                                        })
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.connect_selected(cx)),
-                                        )
+                                        // Disabled: nothing selected to connect to.
+                                        button
+                                            .border_color(rgb(0x22262c))
+                                            .child(
+                                                svg()
+                                                    .path("icons/plug.svg")
+                                                    .size(px(14.))
+                                                    .text_color(rgb(0x454b55)),
+                                            )
+                                            .tooltip(|window, cx| {
+                                                gpui_component::tooltip::Tooltip::new(
+                                                    "Select a connection first",
+                                                )
+                                                .build(window, cx)
+                                            })
+                                    }
                                 }),
                         )
                     }),
