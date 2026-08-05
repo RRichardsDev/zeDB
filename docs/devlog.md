@@ -414,3 +414,16 @@ Status: implementation complete, awaiting UI acceptance.
   satisfy it, which is why the fan-out test bed is the single-replica
   lifecycle server short-circuiting to the connected executor). Failures
   on any replica fail the migration loudly.
+
+## Phase 2 M0-M1: fleet view first light (2026-08-05)
+
+- The app opens a migration repo (path input with ~ expansion, remembered
+  in preferences) and renders the databases x migrations matrix: applied,
+  pending, failed, customised (targeted columns marked *), and excluded
+  databases parked in-line with their group named. Filter-by-typing
+  narrows rows. Status fetch runs on the shared tokio runtime through the
+  same Runner the CLI uses, with a generation counter so stale responses
+  cannot clobber newer ones.
+- Verified live against the seeded demo fleet: twelve databases showing
+  every state at once, filter narrowing instantly. Remaining for M1: the
+  several-hundred-database scale check. M2 (drift) and M3 (dry-run) next.

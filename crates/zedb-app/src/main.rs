@@ -1,4 +1,5 @@
 mod components;
+mod fleet;
 mod grid_spike;
 mod rt;
 mod theme;
@@ -36,6 +37,7 @@ use zedb_core::{
 };
 
 use components::text_input::{self, TextInput};
+use fleet::FleetState;
 use grid_spike::GridSpike;
 use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
 use vim::{CommandLineSnapshot, VimController};
@@ -286,6 +288,8 @@ enum QueryResizeTarget {
 }
 
 struct Workspace {
+    fleet: FleetState,
+    show_fleet: bool,
     connections: Vec<ConnectionConfig>,
     selected: Option<usize>,
     connected: Option<ConnectedCluster>,
@@ -328,6 +332,7 @@ impl Workspace {
                 Some(format!("Could not load preferences: {error}")),
             ),
         };
+        let fleet_repo_path = preferences.fleet_repo.clone();
         let schema_filter = Self::input("", "Filter schema", false, cx);
         cx.observe(&schema_filter, |_, _, cx| cx.notify()).detach();
         let query_editor = cx.new(|cx| {
@@ -396,6 +401,8 @@ impl Workspace {
                 active_query_tab: 0,
                 next_query_tab_id: 2,
                 show_query_editor: false,
+                fleet: FleetState::new(fleet_repo_path.as_deref().unwrap_or(""), window, cx),
+                show_fleet: false,
                 query_abort: None,
                 query_error_decision: None,
                 query_run_id: 0,
@@ -429,6 +436,8 @@ impl Workspace {
                 active_query_tab: 0,
                 next_query_tab_id: 2,
                 show_query_editor: false,
+                fleet: FleetState::new(fleet_repo_path.as_deref().unwrap_or(""), window, cx),
+                show_fleet: false,
                 query_abort: None,
                 query_error_decision: None,
                 query_run_id: 0,
@@ -472,6 +481,20 @@ impl Workspace {
 
     fn close_preferences(&mut self, cx: &mut Context<Self>) {
         self.show_preferences = false;
+        cx.notify();
+    }
+
+    fn toggle_fleet(&mut self, cx: &mut Context<Self>) {
+        self.show_fleet = !self.show_fleet;
+        if self.show_fleet {
+            self.show_query_editor = false;
+            if self.fleet.repo.is_none() && !self.fleet.repo_path.read(cx).text().trim().is_empty()
+            {
+                self.fleet_open_repo(cx);
+            } else if self.fleet.rows.is_empty() {
+                self.fleet_refresh(cx);
+            }
+        }
         cx.notify();
     }
 
@@ -2055,6 +2078,7 @@ impl Workspace {
 
     fn open_query_editor(&mut self, cx: &mut Context<Self>) {
         self.show_query_editor = true;
+        self.show_fleet = false;
         cx.notify();
     }
 
@@ -2086,6 +2110,7 @@ impl Workspace {
         });
         self.active_query_tab = self.query_tabs.len() - 1;
         self.show_query_editor = true;
+        self.show_fleet = false;
         cx.notify();
     }
 
@@ -2736,6 +2761,20 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .child(
+                        div()
+                            .id("open-fleet")
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .text_color(rgb(TEXT))
+                            .when(self.show_fleet, |button| button.bg(rgb(0x2c3a4d)))
+                            .child("Fleet")
+                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_fleet(cx))),
+                    )
                     .child(
                         div()
                             .id("open-query-editor")
@@ -3859,23 +3898,32 @@ impl Render for Workspace {
                                         .when(self.show_query_editor, |content| {
                                             content.child(self.query_editor_panel(cx))
                                         })
-                                        .when(!self.show_query_editor, |content| {
-                                            content
-                                                .when(
-                                                    self.selected_schema_object.is_some(),
-                                                    |content| {
-                                                        content.child(
-                                                            self.schema_object_panel(window, cx),
-                                                        )
-                                                    },
-                                                )
-                                                .when(
-                                                    self.selected_schema_object.is_none(),
-                                                    |content| {
-                                                        content.child(self.cluster_overview())
-                                                    },
-                                                )
-                                        }),
+                                        .when(
+                                            !self.show_query_editor && self.show_fleet,
+                                            |content| content.child(self.fleet_panel(cx)),
+                                        )
+                                        .when(
+                                            !self.show_query_editor && !self.show_fleet,
+                                            |content| {
+                                                content
+                                                    .when(
+                                                        self.selected_schema_object.is_some(),
+                                                        |content| {
+                                                            content.child(
+                                                                self.schema_object_panel(
+                                                                    window, cx,
+                                                                ),
+                                                            )
+                                                        },
+                                                    )
+                                                    .when(
+                                                        self.selected_schema_object.is_none(),
+                                                        |content| {
+                                                            content.child(self.cluster_overview())
+                                                        },
+                                                    )
+                                            },
+                                        ),
                                 )
                             }),
                     ),

@@ -8,6 +8,9 @@ use crate::store::StoreError;
 #[serde(default)]
 pub struct Preferences {
     pub vim_mode: bool,
+    /// Last-opened migration repo, restored on launch (BYO git: this is
+    /// just a local checkout path; git stays the user's workflow).
+    pub fleet_repo: Option<String>,
 }
 
 fn preferences_path() -> Result<PathBuf, StoreError> {
