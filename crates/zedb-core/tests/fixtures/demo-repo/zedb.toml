@@ -1,0 +1,18 @@
+format = 1
+
+[engine]
+kind = "clickhouse"
+version = "25.3.2.1"
+
+[tracking]
+database = "default"
+
+[fleet]
+registry_query = "SELECT name FROM system.databases WHERE name LIKE 'demo_%'"
+
+[scopes]
+global = { }
+db = { param = "db" }
+
+[params]
+ttl_days = { default = "30", description = "raw event retention window" }

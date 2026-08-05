@@ -1,0 +1,3 @@
+[groups.frozen]
+reason = "Databases under an incident freeze; migrate individually."
+databases = ["demo_frozen"]

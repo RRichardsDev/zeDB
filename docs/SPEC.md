@@ -189,8 +189,7 @@ commits through their normal workflow. Everything else parked in IDEAS.md.
 
 ## Open decisions
 
-- Exact new repo format (layout, numbering, tracking schema, config file
-  format and name).
+- ~~Exact new repo format~~: decided, see FORMAT.md (format version 1).
 - Result streaming format (RowBinary vs Arrow) and grid memory model for
   very large result sets.
 - Name/branding: "zeDB" working title.
