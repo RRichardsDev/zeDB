@@ -912,10 +912,10 @@ impl<'a> Regenerator<'a> {
         let mut synthesized: HashSet<String> = HashSet::new();
 
         let reconcile = |files: &mut Files,
-                             key_to_path: &mut HashMap<Key, String>,
-                             cand_norm: &BTreeMap<String, String>,
-                             synthesized: &mut HashSet<String>,
-                             second_pass: bool|
+                         key_to_path: &mut HashMap<Key, String>,
+                         cand_norm: &BTreeMap<String, String>,
+                         synthesized: &mut HashSet<String>,
+                         second_pass: bool|
          -> Result<bool, RegenError> {
             let mut changed = false;
             let paths: HashMap<String, String> = key_to_path

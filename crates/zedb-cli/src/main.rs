@@ -60,6 +60,12 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Run repo checks against the pinned binary.
+    Check {
+        /// Which check to run (default: all).
+        #[arg(value_parser = ["sql", "equivalence", "all"], default_value = "all")]
+        kind: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -231,6 +237,46 @@ fn run(cli: Cli) -> Result<(), String> {
                     removed.len(),
                     files.len() - changed.len()
                 );
+                Ok(())
+            }
+        }
+        Command::Check { kind } => {
+            let repo = MigrationRepo::open(&cli.repo).map_err(|error| error.to_string())?;
+            let version = &repo.config.engine.version;
+            let binary = zedb_ch::cached_binary(version).ok_or_else(|| {
+                format!("pinned ClickHouse {version} is not cached; run `zedb pin` first")
+            })?;
+            let mut failed = false;
+            if kind == "sql" || kind == "all" {
+                let report = zedb_ch::checks::check_sql(&binary, &repo)
+                    .map_err(|error| error.to_string())?;
+                for error in &report.errors {
+                    eprintln!("{error}");
+                }
+                println!(
+                    "sql: {}/{} SQL files parse as valid ClickHouse",
+                    report.checked - report.errors.len(),
+                    report.checked
+                );
+                failed |= !report.errors.is_empty();
+            }
+            if kind == "equivalence" || kind == "all" {
+                let report = zedb_ch::checks::check_equivalence(binary.clone(), &repo)
+                    .map_err(|error| error.to_string())?;
+                for difference in &report.differences {
+                    eprintln!("{difference}");
+                }
+                println!(
+                    "equivalence: {} current-state objects vs {} migration-chain objects, {} difference(s)",
+                    report.state_objects,
+                    report.chain_objects,
+                    report.differences.len()
+                );
+                failed |= !report.differences.is_empty();
+            }
+            if failed {
+                Err("checks failed".into())
+            } else {
                 Ok(())
             }
         }
