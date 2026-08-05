@@ -34,6 +34,41 @@ use components::text_input::{self, TextInput};
 use grid_spike::GridSpike;
 use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
 
+const M8_HIGHLIGHTING_SAMPLE: &str = r#"-- M8 ClickHouse syntax-highlighting sample
+WITH
+    range(5) AS values,
+    arrayMap(x -> x * 2, values) AS doubled
+SELECT
+    number,
+    tuple(number, toString(number)) AS pair,
+    toDateTime64(now(), 3) AS observed_at,
+    doubled,
+    count() OVER (ORDER BY number) AS running_count
+FROM numbers(10)
+ARRAY JOIN doubled AS item
+PREWHERE number >= 0
+WHERE item % 2 = 0
+ORDER BY number DESC
+LIMIT 2 BY item
+LIMIT 10
+FORMAT PrettyCompactMonoBlock;
+"#;
+
+fn format_engine_definition(engine: &str) -> String {
+    let mut formatted = format!("ENGINE = {engine}");
+    for clause in [
+        " PARTITION BY ",
+        " PRIMARY KEY ",
+        " ORDER BY ",
+        " SAMPLE BY ",
+        " TTL ",
+        " SETTINGS ",
+    ] {
+        formatted = formatted.replace(clause, &format!("\n{} ", clause.trim()));
+    }
+    formatted
+}
+
 actions!(
     query_editor,
     [
@@ -168,6 +203,8 @@ struct SelectedSchemaObject {
     loading: bool,
     columns: Vec<ColumnInfo>,
     details: Option<ObjectDetails>,
+    ddl_editor: Entity<InputState>,
+    engine_editor: Entity<InputState>,
     tab: ObjectInspectorTab,
     error: Option<String>,
 }
@@ -253,7 +290,7 @@ impl Workspace {
         let query_editor = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor("sql")
-                .default_value("SELECT 1;")
+                .default_value(M8_HIGHLIGHTING_SAMPLE)
         });
         let query_tabs = vec![QueryTab {
             id: 1,
@@ -689,10 +726,11 @@ impl Workspace {
                             .rounded(px(3.))
                             .when(is_selected, |row| row.bg(rgb(0x303640)))
                             .hover(|row| row.bg(rgb(0x2a2f37)).cursor_pointer())
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 this.select_schema_object(
                                     row_database.clone(),
                                     row_object.clone(),
+                                    window,
                                     cx,
                                 )
                             }))
@@ -1532,6 +1570,7 @@ impl Workspace {
         &mut self,
         database_name: String,
         object: SchemaObjectMeta,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(connected) = &self.connected else {
@@ -1540,12 +1579,21 @@ impl Workspace {
         let connection_name = connected.name.clone();
         let config = connected.client_config.clone();
         let object_name = object.name.clone();
+        let window_handle = window.window_handle();
+        let ddl_editor = cx.new(|cx| InputState::new(window, cx).code_editor("sql"));
+        let engine_editor = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor("sql")
+                .line_number(false)
+        });
         self.selected_schema_object = Some(SelectedSchemaObject {
             database: database_name.clone(),
             object,
             loading: true,
             columns: Vec::new(),
             details: None,
+            ddl_editor: ddl_editor.clone(),
+            engine_editor: engine_editor.clone(),
             tab: ObjectInspectorTab::Overview,
             error: None,
         });
@@ -1566,6 +1614,15 @@ impl Workspace {
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
+            if let Ok((_, Ok(details))) = &result {
+                let ddl = details.create_table_query.clone();
+                let engine = format_engine_definition(&details.engine_full);
+                cx.update_window(window_handle, |_, window, cx| {
+                    ddl_editor.update(cx, |editor, cx| editor.set_value(ddl, window, cx));
+                    engine_editor.update(cx, |editor, cx| editor.set_value(engine, window, cx));
+                })
+                .ok();
+            }
             this.update(cx, |this, cx| {
                 if this.connected.as_ref().map(|cluster| cluster.name.as_str())
                     != Some(connection_name.as_str())
@@ -2410,6 +2467,8 @@ impl Workspace {
         let loading = selected.loading;
         let error = selected.error.clone();
         let details = selected.details.clone();
+        let ddl_editor = selected.ddl_editor.clone();
+        let engine_editor = selected.engine_editor.clone();
         let tab = selected.tab;
         let tab_bar = div()
             .h(px(34.))
@@ -2457,7 +2516,10 @@ impl Workspace {
 
         let content = match tab {
             ObjectInspectorTab::Overview => {
-                let engine_definition = details.as_ref().map(|details| details.engine_full.clone());
+                let has_engine_definition = details
+                    .as_ref()
+                    .map(|details| !details.engine_full.is_empty())
+                    .unwrap_or(false);
                 let metadata = details.as_ref().map(|details| {
                     [
                         ("Partition key", details.partition_key.clone()),
@@ -2507,7 +2569,7 @@ impl Workspace {
                         .when_some(error.as_ref(), |panel, error| {
                             panel.child(div().py_3().text_color(rgb(DANGER)).child(error.clone()))
                         })
-                        .when_some(engine_definition, |panel, engine| {
+                        .when(has_engine_definition, |panel| {
                             panel.child(
                                 div()
                                     .py_3()
@@ -2523,15 +2585,20 @@ impl Workspace {
                                         div()
                                             .id("engine-definition")
                                             .w_full()
-                                            .px_3()
-                                            .py_2()
+                                            .h(px(132.))
                                             .rounded(px(3.))
                                             .border_1()
                                             .border_color(rgb(BORDER))
                                             .bg(rgb(0x191c21))
-                                            .whitespace_normal()
-                                            .text_color(rgb(TEXT))
-                                            .child(engine),
+                                            .overflow_hidden()
+                                            .child(
+                                                Input::new(&engine_editor)
+                                                    .appearance(false)
+                                                    .bordered(false)
+                                                    .focus_bordered(false)
+                                                    .disabled(true)
+                                                    .h_full(),
+                                            ),
                                     ),
                             )
                         })
@@ -2591,27 +2658,6 @@ impl Workspace {
                     .map(|details| details.create_table_query.clone())
                     .unwrap_or_default();
                 let clipboard_ddl = ddl.clone();
-                let lines = ddl
-                    .lines()
-                    .enumerate()
-                    .map(|(index, line)| {
-                        div()
-                            .id(("ddl-line", index))
-                            .min_h(px(22.))
-                            .flex()
-                            .whitespace_nowrap()
-                            .child(
-                                div()
-                                    .w(px(42.))
-                                    .pr_3()
-                                    .flex_none()
-                                    .text_right()
-                                    .text_color(rgb(0x5f6672))
-                                    .child((index + 1).to_string()),
-                            )
-                            .child(div().flex_1().min_w_0().child(line.to_string()))
-                    })
-                    .collect::<Vec<_>>();
                 div()
                     .flex_1()
                     .min_h_0()
@@ -2658,8 +2704,7 @@ impl Workspace {
                             .flex_1()
                             .min_h_0()
                             .m_3()
-                            .overflow_scroll()
-                            .p_3()
+                            .overflow_hidden()
                             .rounded(px(3.))
                             .border_1()
                             .border_color(rgb(BORDER))
@@ -2671,9 +2716,19 @@ impl Workspace {
                             })
                             .when(!loading && error.is_none() && ddl.is_empty(), |panel| {
                                 panel
+                                    .p_3()
                                     .child(div().text_color(rgb(TEXT_DIM)).child("DDL unavailable"))
                             })
-                            .children(lines),
+                            .when(!loading && error.is_none() && !ddl.is_empty(), |panel| {
+                                panel.child(
+                                    Input::new(&ddl_editor)
+                                        .appearance(false)
+                                        .bordered(false)
+                                        .focus_bordered(false)
+                                        .disabled(true)
+                                        .h_full(),
+                                )
+                            }),
                     )
             }
         };
@@ -3055,7 +3110,7 @@ impl Workspace {
                 TEXT_DIM
             }))
             .child(status)
-            .child(concat!("zedb ", env!("CARGO_PKG_VERSION"), " | M4"))
+            .child(concat!("zedb ", env!("CARGO_PKG_VERSION"), " | M8"))
     }
 }
 
@@ -3267,4 +3322,21 @@ fn main() {
         .expect("failed to open window");
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_engine_definition;
+
+    #[test]
+    fn engine_definition_is_split_at_top_level_clauses() {
+        let formatted = format_engine_definition(
+            "MergeTree ORDER BY id PARTITION BY toYYYYMM(created_at) SETTINGS index_granularity = 8192",
+        );
+
+        assert_eq!(
+            formatted,
+            "ENGINE = MergeTree\nORDER BY id\nPARTITION BY toYYYYMM(created_at)\nSETTINGS index_granularity = 8192"
+        );
+    }
 }

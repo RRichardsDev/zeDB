@@ -207,3 +207,24 @@ Status: complete.
   hover contrast as the rest of zeDB.
 - The real ClickHouse integration test covers incremental streaming, server
   progress, the row cap, typed columns, and final byte accounting.
+
+## M8: SQL highlighting (2026-08-05)
+
+Status: implementation complete, awaiting UI acceptance.
+
+- Query buffers, full DDL documents, and engine-definition fragments now use
+  the same `gpui-component` code-editor and Tree-sitter highlighting path.
+- The bundled grammar is `tree-sitter-sequel` 0.3.11, a permissive general SQL
+  grammar. It handles standard SQL structure, functions, arrays, tuples,
+  lambdas, window expressions, and many ClickHouse expressions usefully.
+- ClickHouse-only clauses are not fully modeled. In particular, `PREWHERE`,
+  `ARRAY JOIN`, `LIMIT BY`, table `TTL`, codecs, engine parameters, and some
+  `SETTINGS` forms may parse or color as generic identifiers rather than their
+  precise semantic role. This is a highlighting limitation only and does not
+  affect query execution.
+- The DDL viewer remains read-only, line-numbered, scrollable in both axes, and
+  copyable. Engine definitions are formatted one top-level clause per line and
+  use a compact highlighted block without line numbers.
+- The initial M8 acceptance buffer contains safe ClickHouse-flavored SQL that
+  makes supported syntax and grammar gaps visible immediately. New query tabs
+  continue to start with `SELECT 1;`.
