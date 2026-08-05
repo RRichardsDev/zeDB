@@ -47,7 +47,7 @@ description: "Use when the user asks how code works, wants to understand archite
 
 ## Tools
 
-**query** : find execution flows related to a concept:
+**query** — find execution flows related to a concept:
 
 ```
 query({search_query: "payment processing"})
@@ -55,7 +55,7 @@ query({search_query: "payment processing"})
 → Symbols grouped by flow with file locations
 ```
 
-**context** : 360-degree view of a symbol:
+**context** — 360-degree view of a symbol:
 
 ```
 context({name: "validateUser"})

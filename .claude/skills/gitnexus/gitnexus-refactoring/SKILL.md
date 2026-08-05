@@ -29,39 +29,39 @@ description: "Use when the user wants to rename, extract, split, move, or restru
 ### Rename Symbol
 
 ```
-- [ ] rename({symbol_name: "oldName", new_name: "newName", dry_run: true}) : preview all edits
+- [ ] rename({symbol_name: "oldName", new_name: "newName", dry_run: true}) — preview all edits
 - [ ] Review graph edits (high confidence) and text_search edits (review carefully)
-- [ ] If satisfied: rename({..., dry_run: false}) : apply edits
-- [ ] detect_changes() : verify only expected files changed
+- [ ] If satisfied: rename({..., dry_run: false}) — apply edits
+- [ ] detect_changes() — verify only expected files changed
 - [ ] Run tests for affected processes
 ```
 
 ### Extract Module
 
 ```
-- [ ] context({name: target}) : see all incoming/outgoing refs
-- [ ] impact({target, direction: "upstream"}) : find all external callers
+- [ ] context({name: target}) — see all incoming/outgoing refs
+- [ ] impact({target, direction: "upstream"}) — find all external callers
 - [ ] Define new module interface
 - [ ] Extract code, update imports
-- [ ] detect_changes() : verify affected scope
+- [ ] detect_changes() — verify affected scope
 - [ ] Run tests for affected processes
 ```
 
 ### Split Function/Service
 
 ```
-- [ ] context({name: target}) : understand all callees
+- [ ] context({name: target}) — understand all callees
 - [ ] Group callees by responsibility
-- [ ] impact({target, direction: "upstream"}) : map callers to update
+- [ ] impact({target, direction: "upstream"}) — map callers to update
 - [ ] Create new functions/services
 - [ ] Update callers
-- [ ] detect_changes() : verify affected scope
+- [ ] detect_changes() — verify affected scope
 - [ ] Run tests for affected processes
 ```
 
 ## Tools
 
-**rename** : automated multi-file rename:
+**rename** — automated multi-file rename:
 
 ```
 rename({symbol_name: "validateUser", new_name: "authenticateUser", dry_run: true})
@@ -70,7 +70,7 @@ rename({symbol_name: "validateUser", new_name: "authenticateUser", dry_run: true
 → Changes: [{file_path, edits: [{line, old_text, new_text, confidence}]}]
 ```
 
-**impact** : map all dependents first:
+**impact** — map all dependents first:
 
 ```
 impact({target: "validateUser", direction: "upstream"})
@@ -78,7 +78,7 @@ impact({target: "validateUser", direction: "upstream"})
 → Affected Processes: LoginFlow, TokenRefresh
 ```
 
-**detect_changes** : verify your changes after refactoring:
+**detect_changes** — verify your changes after refactoring:
 
 ```
 detect_changes({scope: "all"})
@@ -87,7 +87,7 @@ detect_changes({scope: "all"})
 → Risk: MEDIUM
 ```
 
-**cypher** : custom reference queries:
+**cypher** — custom reference queries:
 
 ```cypher
 MATCH (caller)-[:CodeRelation {type: 'CALLS'}]->(f:Function {name: "validateUser"})
@@ -117,5 +117,5 @@ RETURN caller.name, caller.filePath ORDER BY caller.filePath
 
 4. detect_changes({scope: "all"})
    → Affected: LoginFlow, TokenRefresh
-   → Risk: MEDIUM : run tests for these flows
+   → Risk: MEDIUM — run tests for these flows
 ```
