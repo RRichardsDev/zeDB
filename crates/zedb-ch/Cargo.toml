@@ -10,6 +10,7 @@ zedb-core.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
 dirs = "6"
+regex = "1"
 futures-util.workspace = true
 tokio.workspace = true
 thiserror.workspace = true

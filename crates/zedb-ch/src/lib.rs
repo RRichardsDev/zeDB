@@ -11,6 +11,7 @@
 mod client;
 mod error;
 pub mod pin;
+pub mod replay;
 mod rowbinary;
 mod schema;
 mod types;
