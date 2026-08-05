@@ -27,7 +27,7 @@ impl Workspace {
             .border_color(rgb(BORDER))
             .flex()
             .items_center()
-            .pl(px(80.))
+            .pl(px(90.))
             .pr_3()
             .text_sm()
             .text_color(rgb(TEXT_DIM))
