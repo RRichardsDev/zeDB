@@ -197,6 +197,23 @@ fn init_and_scaffold_round_trip() {
 }
 
 #[test]
+fn set_pinned_version_preserves_the_rest_of_the_config() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_fixture(dir.path());
+    let config_path = dir.path().join("zedb.toml");
+    let mut text = std::fs::read_to_string(&config_path).unwrap();
+    text.insert_str(0, "# keep this comment\n");
+    std::fs::write(&config_path, text).unwrap();
+
+    zedb_core::repo::RepoConfig::set_pinned_version(dir.path(), "26.3.12.3").unwrap();
+
+    let rewritten = std::fs::read_to_string(&config_path).unwrap();
+    assert!(rewritten.contains("# keep this comment"), "{rewritten}");
+    let repo = MigrationRepo::open_root(dir.path()).unwrap();
+    assert_eq!(repo.config.engine.version, "26.3.12.3");
+}
+
+#[test]
 fn render_validates_identifier_params() {
     let sql = "CREATE TABLE ${db}.t TTL INTERVAL ${ttl_days} DAY;";
     let mut values = BTreeMap::new();

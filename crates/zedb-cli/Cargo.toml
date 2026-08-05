@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 zedb-core.workspace = true
+zedb-ch.workspace = true
+tokio.workspace = true
 clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]

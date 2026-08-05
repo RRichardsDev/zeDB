@@ -65,7 +65,7 @@ print "Building zeDB..."
 cargo build --manifest-path "$zedb_root/Cargo.toml" -p zedb-app
 
 mkdir -p "$zedb_contents/MacOS" "$zedb_contents/Resources"
-install -m 755 "$zedb_root/target/debug/zedb" "$zedb_contents/MacOS/zedb"
+install -m 755 "$zedb_root/target/debug/zedb-app" "$zedb_contents/MacOS/zedb"
 install -m 644 "$zedb_root/packaging/macos/Info.plist" "$zedb_contents/Info.plist"
 install -m 644 "$zedb_profile" "$zedb_contents/embedded.provisionprofile"
 

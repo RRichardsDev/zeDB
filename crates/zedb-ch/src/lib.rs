@@ -10,11 +10,15 @@
 
 mod client;
 mod error;
+pub mod pin;
 mod rowbinary;
 mod schema;
 mod types;
 
 pub use client::{ChClient, ChConfig, QueryProgress, QueryStreamEvent, QueryStreamSummary};
 pub use error::{ChError, Result};
+pub use pin::{
+    binary_cache_dir, cached_binary, discover_server_version, ensure_binary, smoke_replay, PinError,
+};
 pub use schema::{ColumnInfo, DatabaseMeta, ObjectDetails, SchemaObjectKind, SchemaObjectMeta};
 pub use types::{parse_type, ChType};

@@ -102,6 +102,22 @@ impl RepoConfig {
         Ok(config)
     }
 
+    /// Rewrite `[engine].version` in a repo's zedb.toml, preserving the
+    /// rest of the file (including comments) untouched.
+    pub fn set_pinned_version(root: &Path, version: &str) -> Result<(), RepoError> {
+        let path = root.join("zedb.toml");
+        let text = std::fs::read_to_string(&path)?;
+        let mut document: toml_edit::DocumentMut =
+            text.parse()
+                .map_err(|error: toml_edit::TomlError| RepoError::Config {
+                    path: path.clone(),
+                    message: error.to_string(),
+                })?;
+        document["engine"]["version"] = toml_edit::value(version);
+        std::fs::write(&path, document.to_string())?;
+        Ok(())
+    }
+
     /// Parameter names usable in `${...}` placeholders: built-ins plus
     /// declared params plus scope params.
     pub fn declared_params(&self) -> impl Iterator<Item = &str> {

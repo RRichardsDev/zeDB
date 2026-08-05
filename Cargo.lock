@@ -8354,6 +8354,7 @@ name = "zedb-ch"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dirs 6.0.0",
  "futures-util",
  "reqwest",
  "tempfile",
@@ -8368,6 +8369,8 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "tempfile",
+ "tokio",
+ "zedb-ch",
  "zedb-core",
 ]
 
@@ -8383,6 +8386,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "toml 0.8.23",
+ "toml_edit 0.22.27",
 ]
 
 [[package]]

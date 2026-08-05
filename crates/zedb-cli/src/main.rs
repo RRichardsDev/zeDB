@@ -38,6 +38,22 @@ enum Command {
     Ls,
     /// Show one migration's files and metadata.
     Show { number: u32 },
+    /// Ensure the pinned ClickHouse binary is cached, discovering the
+    /// version from a server or taking it explicitly.
+    Pin {
+        /// Discover the version from this server (http://host:port).
+        #[arg(long, conflicts_with = "pin_version")]
+        server: Option<String>,
+        /// Server user for discovery.
+        #[arg(long, default_value = "default")]
+        user: String,
+        /// Server password for discovery.
+        #[arg(long, default_value = "")]
+        password: String,
+        /// Pin this exact version instead of discovering one.
+        #[arg(long = "version", id = "pin_version")]
+        pin_version: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -126,6 +142,43 @@ fn run(cli: Cli) -> Result<(), String> {
             {
                 println!("-- rollback.sql\n{rollback}");
             }
+            Ok(())
+        }
+        Command::Pin {
+            server,
+            user,
+            password,
+            pin_version,
+        } => {
+            let repo = MigrationRepo::open(&cli.repo).map_err(|error| error.to_string())?;
+            let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
+            let version = match (pin_version, server) {
+                (Some(version), _) => version,
+                (None, Some(url)) => {
+                    let discovered = runtime
+                        .block_on(zedb_ch::discover_server_version(zedb_ch::ChConfig {
+                            url,
+                            user,
+                            password: (!password.is_empty()).then_some(password),
+                            database: None,
+                            read_only: true,
+                        }))
+                        .map_err(|error| error.to_string())?;
+                    println!("server runs ClickHouse {discovered}");
+                    discovered
+                }
+                (None, None) => repo.config.engine.version.clone(),
+            };
+            let binary = runtime
+                .block_on(zedb_ch::ensure_binary(&version))
+                .map_err(|error| error.to_string())?;
+            zedb_ch::smoke_replay(&binary).map_err(|error| error.to_string())?;
+            if version != repo.config.engine.version {
+                zedb_core::repo::RepoConfig::set_pinned_version(&repo.root, &version)
+                    .map_err(|error| error.to_string())?;
+                println!("zedb.toml [engine].version updated to {version}");
+            }
+            println!("pinned: ClickHouse {version} at {}", binary.display());
             Ok(())
         }
     }

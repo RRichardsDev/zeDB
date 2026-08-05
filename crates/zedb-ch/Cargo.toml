@@ -9,6 +9,7 @@ repository.workspace = true
 zedb-core.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
+dirs = "6"
 futures-util.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
