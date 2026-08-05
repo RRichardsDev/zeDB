@@ -11,9 +11,10 @@ chrono.workspace = true
 reqwest.workspace = true
 dirs = "6"
 regex = "1"
+tempfile = "3"
 futures-util.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tokio = { workspace = true, features = ["macros"] }

@@ -314,3 +314,25 @@ Status: implementation complete, awaiting UI acceptance.
   gain the clause. Demonstrated live: ALTER rewrites exactly one file
   canonically, data-only migrations cause zero churn, reruns are
   byte-stable, and regen --check catches hand edits.
+
+## Phase 1 M4-M5: checks and the live runner (2026-08-05)
+
+- zedb check sql (real-parser validation with file:line:col errors) and
+  check equivalence (current-state vs chain canonical diff) landed; the
+  lifecycle check waits on the runner it drives.
+- The runner ports runner.py: versioned tracking bootstrap (zedb_meta +
+  zedb_migrations with a params map), argMax-latest applied-set queries,
+  upgrade with --to ceiling, peel-from-top rollback plus the --to walk with
+  refuse-before-touching gates, stamp, targeted apply with allow-list
+  enforcement, and status. Mutations demand --write; structural rollbacks
+  warn, irreversible ones need --irreversible, removing a customisation
+  needs --targeted; every run appends to a local audit log with password
+  values redacted. Deferred from the ancestor, recorded here: admin
+  credential routing and live parameter inheritance (rendered params are
+  recorded in the tracking table instead).
+- EphemeralServer runs the pinned binary as a throwaway single-node server
+  for tests. Two gotchas: ClickHouse forks a watchdog parent unless
+  CLICKHOUSE_WATCHDOG_ENABLE=0, so killing the spawned pid orphans the
+  real server (this had leaked a dozen servers from the ancestor's checks
+  on this machine), and /ping responses are chunked, so readiness must
+  check the status line, not the body.

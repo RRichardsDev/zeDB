@@ -1,0 +1,166 @@
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use zedb_ch::ephemeral::EphemeralServer;
+use zedb_ch::runner::{Runner, RunnerOptions, Targets};
+use zedb_ch::ChConfig;
+use zedb_core::repo::MigrationRepo;
+
+fn fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../zedb-core/tests/fixtures/demo-repo")
+}
+
+fn any_cached_binary() -> Option<PathBuf> {
+    let root = zedb_ch::binary_cache_dir();
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        let version = entry.file_name().to_string_lossy().to_string();
+        if let Some(binary) = zedb_ch::cached_binary(&version) {
+            return Some(binary);
+        }
+    }
+    None
+}
+
+fn options(server: &EphemeralServer, write: bool) -> RunnerOptions {
+    RunnerOptions {
+        server: ChConfig {
+            url: server.http_url.clone(),
+            user: "default".into(),
+            password: None,
+            database: None,
+            read_only: false,
+        },
+        cluster: None,
+        no_cluster: true,
+        write,
+        dry_run: false,
+        overrides: BTreeMap::new(),
+    }
+}
+
+fn dbs(names: &[&str]) -> Targets {
+    Targets::Databases(names.iter().map(ToString::to_string).collect())
+}
+
+/// The full M5 done-condition against a real ephemeral server: upgrade,
+/// status, peel-from-top and class enforcement, the --to walk, stamp,
+/// targeted apply with allow-list, and read-only refusal. Skips silently
+/// when no binary is cached so cold CI stays green.
+#[tokio::test]
+async fn runner_walks_the_chain_on_a_real_server() {
+    let Some(binary) = any_cached_binary() else {
+        eprintln!("skipping: no cached clickhouse binary (run `zedb pin`)");
+        return;
+    };
+    let server = EphemeralServer::start(&binary).unwrap();
+    let repo = MigrationRepo::open_root(&fixture()).unwrap();
+
+    // Without --write, every mutating entry point refuses.
+    let readonly = Runner::new(&repo, options(&server, false));
+    let refused = readonly.upgrade(&dbs(&["demo_a"]), None).await;
+    let message = refused.expect_err("read-only must refuse").to_string();
+    assert!(message.contains("--write"), "{message}");
+
+    // Upgrade two databases through the whole fleet chain.
+    let runner = Runner::new(&repo, options(&server, true));
+    runner
+        .upgrade(&dbs(&["demo_a", "demo_b"]), None)
+        .await
+        .unwrap();
+    let statuses = runner.status(&dbs(&["demo_a", "demo_b"])).await.unwrap();
+    for status in &statuses {
+        assert_eq!(status.head, Some(100), "{}", status.database);
+        assert!(status.pending.is_empty(), "{:?}", status.pending);
+        assert!(status.failed.is_empty());
+    }
+
+    // The events table and view really exist on the server.
+    let client = zedb_ch::ChClient::new(options(&server, true).server);
+    let result = client
+        .query("SELECT count() FROM system.tables WHERE database = 'demo_a'")
+        .await
+        .unwrap();
+    assert_eq!(result.rows[0][0].to_string(), "2");
+
+    // Peel-from-top: rolling back 00000 while 00100 is applied is refused.
+    let error = runner
+        .rollback_one(&dbs(&["demo_a"]), 0, false, false)
+        .await
+        .expect_err("00000 is not the head")
+        .to_string();
+    assert!(error.contains("peel from the top"), "{error}");
+    runner
+        .rollback_one(&dbs(&["demo_a"]), 100, false, false)
+        .await
+        .unwrap();
+    let statuses = runner.status(&dbs(&["demo_a"])).await.unwrap();
+    assert_eq!(statuses[0].head, Some(0));
+    assert_eq!(statuses[0].pending, [100]);
+
+    // The --to walk brings demo_b down to the baseline too.
+    runner
+        .rollback_to(&dbs(&["demo_b"]), 0, false)
+        .await
+        .unwrap();
+    let statuses = runner.status(&dbs(&["demo_b"])).await.unwrap();
+    assert_eq!(statuses[0].head, Some(0));
+
+    // Upgrade back to the top; both are current again.
+    runner
+        .upgrade(&dbs(&["demo_a", "demo_b"]), None)
+        .await
+        .unwrap();
+
+    // Stamp: a hand-provisioned database is adopted without executing.
+    client
+        .execute("CREATE DATABASE demo_adopted")
+        .await
+        .unwrap();
+    runner.stamp(&dbs(&["demo_adopted"]), 100).await.unwrap();
+    let statuses = runner.status(&dbs(&["demo_adopted"])).await.unwrap();
+    assert_eq!(statuses[0].head, Some(100));
+    assert!(statuses[0].pending.is_empty());
+
+    // Targeted apply honors the allow list.
+    let error = runner
+        .apply_targeted(&dbs(&["demo_a"]), 200)
+        .await
+        .expect_err("demo_a is not in the allow list")
+        .to_string();
+    assert!(error.contains("demo_pilot"), "{error}");
+    client.execute("CREATE DATABASE demo_pilot").await.unwrap();
+    runner.upgrade(&dbs(&["demo_pilot"]), None).await.unwrap();
+    runner
+        .apply_targeted(&dbs(&["demo_pilot"]), 200)
+        .await
+        .unwrap();
+    let statuses = runner.status(&dbs(&["demo_pilot"])).await.unwrap();
+    assert_eq!(statuses[0].customised, [200]);
+    let result = client
+        .query(
+            "SELECT count() FROM system.columns \
+             WHERE database = 'demo_pilot' AND table = 'events' AND name = 'backfilled'",
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.rows[0][0].to_string(), "1");
+
+    // Removing the customisation requires --targeted friction.
+    let error = runner
+        .rollback_one(&dbs(&["demo_pilot"]), 200, false, false)
+        .await
+        .expect_err("targeted rollback needs consent")
+        .to_string();
+    assert!(error.contains("--targeted"), "{error}");
+    runner
+        .rollback_one(&dbs(&["demo_pilot"]), 200, false, true)
+        .await
+        .unwrap();
+
+    // Tracking metadata is versioned.
+    let meta = client
+        .query("SELECT value FROM default.zedb_meta WHERE key = 'tracking_version'")
+        .await
+        .unwrap();
+    assert_eq!(meta.rows[0][0].to_string(), "1");
+}

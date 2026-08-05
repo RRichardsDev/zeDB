@@ -10,11 +10,13 @@
 
 pub mod checks;
 mod client;
+pub mod ephemeral;
 mod error;
 pub mod pin;
 pub mod regen;
 pub mod replay;
 mod rowbinary;
+pub mod runner;
 mod schema;
 mod types;
 
