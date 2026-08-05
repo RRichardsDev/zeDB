@@ -72,4 +72,8 @@ entitlements so they can launch unprofiled.
       in place, and relaunches on click. Bare `cargo run` builds fall back
       to opening the release page. Needs the repo public (or
       `ZEDB_GITHUB_TOKEN`) to see releases and download assets.
-- [ ] Bump `LSMinimumSystemVersion` intentionally (currently 13.0).
+- [x] `LSMinimumSystemVersion` set intentionally to 14.0: releases are
+      arm64-only, macOS 14 is the oldest Apple-supported release, and
+      nothing older is tested. `MACOSX_DEPLOYMENT_TARGET` in
+      `bundle-macos.sh` keeps the compiled binary in lockstep; revisit
+      when Apple drops macOS 14 support.
