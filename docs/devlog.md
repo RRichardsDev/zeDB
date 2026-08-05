@@ -138,9 +138,8 @@ Status: implementation complete, awaiting UI acceptance.
 - The original macOS credential backend used `keyring`, whose Apple backend
   reads legacy generic-password items and gives poor control over authorization
   prompts. zeDB now uses Security framework `SecItem` operations directly and
-  caches an unlocked credential for the workspace session. The intended final
-  setup is the data-protection Keychain with user-presence access control. That
-  requires an active Apple Developer membership, an explicit `dev.zedb.app`
-  identifier, a development provisioning profile, matching entitlements, and
-  an embedded profile. Restore the data-protection option when that profile is
-  available; raw `cargo run` builds must not be used for credential testing.
+  caches an unlocked credential for the workspace session. Signed development
+  builds embed the `dev.zedb.app` Mac App Development profile and use its
+  matching application, team, and Keychain access-group entitlements. Passwords
+  live in the data-protection Keychain with user-presence access control. Raw
+  `cargo run` builds must not be used for credential testing.

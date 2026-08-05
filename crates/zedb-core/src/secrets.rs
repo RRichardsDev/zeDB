@@ -7,9 +7,10 @@ use security_framework::passwords::{
     AccessControlOptions, PasswordOptions,
 };
 
-const SERVICE: &str = "dev.zedb.app.credentials";
+const SERVICE: &str = "dev.zedb.app.protected-credentials";
 const LEGACY_SERVICE: &str = "zedb";
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
@@ -21,7 +22,11 @@ pub enum SecretError {
 
 fn options(connection_name: &str, protected: bool) -> PasswordOptions {
     let service = if protected { SERVICE } else { LEGACY_SERVICE };
-    PasswordOptions::new_generic_password(service, connection_name)
+    let mut options = PasswordOptions::new_generic_password(service, connection_name);
+    if protected {
+        options.use_protected_keychain();
+    }
+    options
 }
 
 fn protected_options(connection_name: &str) -> PasswordOptions {
@@ -70,8 +75,16 @@ pub fn get_password(connection_name: &str) -> Result<Option<String>, SecretError
     let Some(password) = read(connection_name, false)? else {
         return Ok(None);
     };
-    set_password(connection_name, &password)?;
-    delete(connection_name, false)?;
+    match set_password(connection_name, &password) {
+        Ok(()) => delete(connection_name, false)?,
+        Err(SecretError::Keychain(error)) if error.code() == ERR_SEC_MISSING_ENTITLEMENT => {
+            // Local certificate signing without a provisioning profile cannot
+            // create an access-controlled item. Keep the legacy item intact and
+            // use its value for this session; a provisioned build will migrate
+            // it on a later successful read.
+        }
+        Err(error) => return Err(error),
+    }
     Ok(Some(password))
 }
 
