@@ -77,7 +77,12 @@ zedb/
   Native protocol is not a v1 concern.
 - **Replay engine:** manages a cache of pinned `clickhouse local` binaries.
   Multiple clusters may run different server versions, so the pin is
-  per-repo (checks) and per-cluster (verify), not global.
+  per-repo (checks) and per-cluster (verify), not global. The version is
+  discovered from the connected server (`SELECT version()`), and the
+  matching binary is downloaded on demand into the cache the first time
+  that version is needed; nothing is preinstalled or hardcoded. Regen and
+  verify always replay against the same version as the target server, so
+  "the checks pass" always means "against the server we actually run".
 - **Editor/grid:** built on GPUI primitives; tree-sitter for SQL
   highlighting. Expect to build the virtualized data grid and editor widget
   ourselves; upstream reusable findings to GPUI where possible.
