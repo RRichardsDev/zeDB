@@ -72,23 +72,50 @@ jobs:
           ditto -c -k --keepParent target/macos/zeDB.app "$zip_name"
           echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
 
-      - name: Upload workflow artifact
+      - name: Create DMG
+        id: dmg
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          dmg_name=zeDB-$version-macos.dmg
+          ./scripts/make-dmg.sh "$dmg_name"
+          echo "dmg_name=$dmg_name" >> "$GITHUB_OUTPUT"
+
+      - name: Notarize and staple DMG
+        if: ${{ secrets.NOTARY_APPLE_ID != '' && env.ZEDB_CODESIGN_IDENTITY != '' }}
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+        run: |
+          xcrun notarytool submit "${{ steps.dmg.outputs.dmg_name }}" \
+            --apple-id "$NOTARY_APPLE_ID" \
+            --password "$NOTARY_PASSWORD" \
+            --team-id "$NOTARY_TEAM_ID" \
+            --wait
+          xcrun stapler staple "${{ steps.dmg.outputs.dmg_name }}"
+
+      - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.zip.outputs.zip_name }}
-          path: ${{ steps.zip.outputs.zip_name }}
+          name: zeDB-macos
+          path: |
+            ${{ steps.zip.outputs.zip_name }}
+            ${{ steps.dmg.outputs.dmg_name }}
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="macOS app bundle."
+          notes="macOS app bundle (DMG or zip)."
           if [[ -z "${ZEDB_CODESIGN_IDENTITY:-}" ]]; then
             notes="$notes Ad-hoc signed: Gatekeeper will block it on other machines until Developer ID signing secrets are configured."
           fi
           gh release create "$GITHUB_REF_NAME" \
             --title "zeDB $GITHUB_REF_NAME" \
             --notes "$notes" \
-            "${{ steps.zip.outputs.zip_name }}" ||
-          gh release upload "$GITHUB_REF_NAME" "${{ steps.zip.outputs.zip_name }}" --clobber
+            "${{ steps.zip.outputs.zip_name }}" \
+            "${{ steps.dmg.outputs.dmg_name }}" ||
+          gh release upload "$GITHUB_REF_NAME" \
+            "${{ steps.zip.outputs.zip_name }}" \
+            "${{ steps.dmg.outputs.dmg_name }}" --clobber

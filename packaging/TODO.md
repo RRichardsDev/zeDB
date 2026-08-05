@@ -61,7 +61,10 @@ entitlements so they can launch unprofiled.
 
 ## Later / nice to have
 
-- [ ] Ship a DMG instead of (or alongside) the zip, and sign + notarize the
-      DMG itself.
+- [x] Ship a DMG alongside the zip, signed and notarized
+      (`scripts/make-dmg.sh` + the release workflow).
+- [ ] DMG window polish: background image with a drag-to-Applications
+      arrow and fixed icon layout (do together with the app icon work;
+      `create-dmg` handles the layout).
 - [ ] Sparkle or a hand-rolled update check for in-app updates.
 - [ ] Bump `LSMinimumSystemVersion` intentionally (currently 13.0).
