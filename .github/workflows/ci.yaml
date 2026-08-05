@@ -30,12 +30,17 @@ jobs:
             sudo mv ./clickhouse /usr/local/bin/clickhouse
           fi
           clickhouse --version
+      - name: Seed zedb binary cache (replay-backed tests)
+        run: |
+          version=$(clickhouse local --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          mkdir -p ~/.cache/zedb/clickhouse/"$version"
+          cp "$(command -v clickhouse)" ~/.cache/zedb/clickhouse/"$version"/clickhouse
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy -p zedb-core -p zedb-ch --all-targets -- -D warnings
+        run: cargo clippy -p zedb-core -p zedb-ch -p zedb-cli --all-targets -- -D warnings
       - name: Test
-        run: cargo test -p zedb-core -p zedb-ch
+        run: cargo test -p zedb-core -p zedb-ch -p zedb-cli
 
   app:
     name: App (macOS gpui build)

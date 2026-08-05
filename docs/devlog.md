@@ -367,3 +367,17 @@ Status: implementation complete, awaiting UI acceptance.
   rollback history) carries over; a second run refuses. Remaining
   acceptance: zedb status against staging agreeing with ddl status, which
   needs staging credentials.
+
+## Phase 1 M9 (buildable half) and the first cluster deploy (2026-08-05)
+
+- status, verify, and check gained --json; CI now lints and tests
+  zedb-cli and seeds the zedb binary cache from the installed clickhouse
+  so the replay-backed tests run instead of skipping. A ready-made
+  workflow for migration repos lives in docs/ci-migration-repo.example.yml.
+- First real clustered deploy: zedb_demo onto the two-node docker cluster
+  (zedb_cluster, keeper-backed). ON CLUSTER DDL fanned out through the
+  distributed queue, ReplicatedMergeTree replicated inserted rows to the
+  second node, the tracking tables themselves replicated (first exercise
+  of the clustered ensure_tracking path), and zedb verify reports clean
+  at 00100. Remaining for M9: the staging status comparison and one real
+  migration end to end, both needing fleet credentials.

@@ -65,6 +65,9 @@ enum Command {
         /// Which check to run (default: all).
         #[arg(value_parser = ["sql", "equivalence", "all"], default_value = "all")]
         kind: String,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Show each database's chain position.
     Status {
@@ -72,6 +75,9 @@ enum Command {
         connection: ConnectionArgs,
         #[command(flatten)]
         targets: TargetArgs,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Apply pending fleet migrations.
     Upgrade {
@@ -132,6 +138,9 @@ enum Command {
         connection: ConnectionArgs,
         #[command(flatten)]
         targets: TargetArgs,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Apply one targeted migration to specific databases.
     Apply {
@@ -396,39 +405,65 @@ fn run(cli: Cli) -> Result<(), String> {
                 Ok(())
             }
         }
-        Command::Check { kind } => {
+        Command::Check { kind, json } => {
             let repo = MigrationRepo::open(&cli.repo).map_err(|error| error.to_string())?;
             let version = &repo.config.engine.version;
             let binary = zedb_ch::cached_binary(version).ok_or_else(|| {
                 format!("pinned ClickHouse {version} is not cached; run `zedb pin` first")
             })?;
             let mut failed = false;
+            let mut output = serde_json::Map::new();
             if kind == "sql" || kind == "all" {
                 let report = zedb_ch::checks::check_sql(&binary, &repo)
                     .map_err(|error| error.to_string())?;
-                for error in &report.errors {
-                    eprintln!("{error}");
+                if json {
+                    output.insert(
+                        "sql".into(),
+                        serde_json::json!({
+                            "checked": report.checked,
+                            "errors": report.errors,
+                        }),
+                    );
+                } else {
+                    for error in &report.errors {
+                        eprintln!("{error}");
+                    }
+                    println!(
+                        "sql: {}/{} SQL files parse as valid ClickHouse",
+                        report.checked - report.errors.len(),
+                        report.checked
+                    );
                 }
-                println!(
-                    "sql: {}/{} SQL files parse as valid ClickHouse",
-                    report.checked - report.errors.len(),
-                    report.checked
-                );
                 failed |= !report.errors.is_empty();
             }
             if kind == "equivalence" || kind == "all" {
                 let report = zedb_ch::checks::check_equivalence(binary.clone(), &repo)
                     .map_err(|error| error.to_string())?;
-                for difference in &report.differences {
-                    eprintln!("{difference}");
+                if json {
+                    output.insert(
+                        "equivalence".into(),
+                        serde_json::json!({
+                            "state_objects": report.state_objects,
+                            "chain_objects": report.chain_objects,
+                            "differences": report.differences,
+                        }),
+                    );
+                } else {
+                    for difference in &report.differences {
+                        eprintln!("{difference}");
+                    }
+                    println!(
+                        "equivalence: {} current-state objects vs {} migration-chain objects, {} difference(s)",
+                        report.state_objects,
+                        report.chain_objects,
+                        report.differences.len()
+                    );
                 }
-                println!(
-                    "equivalence: {} current-state objects vs {} migration-chain objects, {} difference(s)",
-                    report.state_objects,
-                    report.chain_objects,
-                    report.differences.len()
-                );
                 failed |= !report.differences.is_empty();
+            }
+            if json {
+                output.insert("ok".into(), serde_json::json!(!failed));
+                println!("{}", serde_json::Value::Object(output));
             }
             if failed {
                 Err("checks failed".into())
@@ -439,6 +474,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Command::Status {
             connection,
             targets,
+            json,
         } => {
             let repo = MigrationRepo::open(&cli.repo).map_err(|error| error.to_string())?;
             let runner = zedb_ch::runner::Runner::new(&repo, connection.options());
@@ -447,6 +483,23 @@ fn run(cli: Cli) -> Result<(), String> {
             let statuses = runtime
                 .block_on(runner.status(&targets))
                 .map_err(|error| error.to_string())?;
+            if json {
+                let rows: Vec<serde_json::Value> = statuses
+                    .iter()
+                    .map(|status| {
+                        serde_json::json!({
+                            "database": status.database,
+                            "head": status.head,
+                            "latest": status.latest,
+                            "pending": status.pending,
+                            "customised": status.customised,
+                            "failed": status.failed,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::json!({ "databases": rows }));
+                return Ok(());
+            }
             for status in statuses {
                 let head = status
                     .head
@@ -560,6 +613,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Command::Verify {
             connection,
             targets,
+            json,
         } => {
             let repo = MigrationRepo::open(&cli.repo).map_err(|error| error.to_string())?;
             let version = &repo.config.engine.version;
@@ -573,6 +627,28 @@ fn run(cli: Cli) -> Result<(), String> {
             let drifts = runtime
                 .block_on(verifier.verify(&targets))
                 .map_err(|error| error.to_string())?;
+            if json {
+                let rows: Vec<serde_json::Value> = drifts
+                    .iter()
+                    .map(|drift| {
+                        serde_json::json!({
+                            "database": drift.database,
+                            "head": drift.head,
+                            "findings": drift.findings,
+                        })
+                    })
+                    .collect();
+                let clean = drifts.iter().all(|drift| drift.findings.is_empty());
+                println!(
+                    "{}",
+                    serde_json::json!({ "databases": rows, "clean": clean })
+                );
+                return if clean {
+                    Ok(())
+                } else {
+                    Err("drift detected".into())
+                };
+            }
             let mut drifted = false;
             for drift in &drifts {
                 let head = drift
