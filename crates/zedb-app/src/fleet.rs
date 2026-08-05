@@ -44,6 +44,52 @@ pub struct DriftInfo {
     pub checked_at: Instant,
 }
 
+/// A mutating action awaiting the safety ladder's consent.
+#[derive(Clone, PartialEq)]
+pub enum FleetAction {
+    UpgradeAll,
+    UpgradeDatabase(String),
+    Rollback { database: String, number: u32 },
+    ApplyTargeted { database: String, number: u32 },
+    RemoveTargeted { database: String, number: u32 },
+}
+
+impl FleetAction {
+    fn title(&self) -> String {
+        match self {
+            Self::UpgradeAll => "Upgrade every non-excluded database".into(),
+            Self::UpgradeDatabase(database) => format!("Upgrade {database}"),
+            Self::Rollback { database, number } => {
+                format!("Roll back {number:05} on {database}")
+            }
+            Self::ApplyTargeted { database, number } => {
+                format!("Apply customisation {number:05} to {database}")
+            }
+            Self::RemoveTargeted { database, number } => {
+                format!("Remove customisation {number:05} from {database}")
+            }
+        }
+    }
+
+    /// What the operator must type to confirm on a production tier (or
+    /// for irreversible work on any tier).
+    fn required_phrase(&self, tier: zedb_core::EnvTier, irreversible: bool) -> Option<String> {
+        if irreversible {
+            return Some("irreversible".into());
+        }
+        if tier != zedb_core::EnvTier::Production {
+            return None;
+        }
+        Some(match self {
+            Self::UpgradeAll => "all".into(),
+            Self::UpgradeDatabase(database)
+            | Self::Rollback { database, .. }
+            | Self::ApplyTargeted { database, .. }
+            | Self::RemoveTargeted { database, .. } => database.clone(),
+        })
+    }
+}
+
 pub struct FleetState {
     pub repo_path: Entity<TextInput>,
     pub filter: Entity<TextInput>,
@@ -58,16 +104,35 @@ pub struct FleetState {
     pub drift: HashMap<String, DriftInfo>,
     pub drift_loading: HashSet<String>,
     pub drift_error: Option<String>,
+    /// Explicit per-session consent to mutate through this connection;
+    /// reset whenever the connection changes.
+    pub write_unlocked: bool,
+    pub cluster_input: Entity<TextInput>,
+    pub pending_action: Option<FleetAction>,
+    pub ack_structural: bool,
+    pub confirm_input: Entity<TextInput>,
+    pub action_running: bool,
+    pub action_result: Option<Result<String, String>>,
 }
 
 impl FleetState {
-    pub fn new(initial_path: &str, window: &mut gpui::Window, cx: &mut Context<Workspace>) -> Self {
+    pub fn new(
+        initial_path: &str,
+        initial_cluster: &str,
+        window: &mut gpui::Window,
+        cx: &mut Context<Workspace>,
+    ) -> Self {
         let _ = window;
         let initial_path = initial_path.to_string();
         let repo_path =
             cx.new(move |cx| TextInput::new(&initial_path, "path to a migration repo", false, cx));
         let filter = cx.new(|cx| TextInput::new("", "Filter databases", false, cx));
         cx.observe(&filter, |_, _, cx| cx.notify()).detach();
+        let initial_cluster = initial_cluster.to_string();
+        let cluster_input =
+            cx.new(move |cx| TextInput::new(&initial_cluster, "cluster (blank: none)", false, cx));
+        let confirm_input = cx.new(|cx| TextInput::new("", "type to confirm", false, cx));
+        cx.observe(&confirm_input, |_, _, cx| cx.notify()).detach();
         Self {
             repo_path,
             filter,
@@ -82,6 +147,13 @@ impl FleetState {
             drift: HashMap::new(),
             drift_loading: HashSet::new(),
             drift_error: None,
+            write_unlocked: false,
+            cluster_input,
+            pending_action: None,
+            ack_structural: false,
+            confirm_input,
+            action_running: false,
+            action_result: None,
         }
     }
 }
@@ -126,6 +198,26 @@ fn cell_for(row: &FleetRow, number: u32, targeted: bool) -> Cell {
     } else {
         Cell::Applied
     }
+}
+
+fn action_button(
+    id: &'static str,
+    label: String,
+    color: u32,
+    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .px_3()
+        .py_1()
+        .rounded(px(3.))
+        .border_1()
+        .border_color(rgb(color))
+        .text_color(rgb(color))
+        .text_center()
+        .child(label)
+        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+        .on_click(on_click)
 }
 
 impl Workspace {
@@ -236,6 +328,134 @@ impl Workspace {
                     Ok(Err(error)) => this.fleet.fetch_error = Some(error),
                     Err(error) => this.fleet.fetch_error = Some(error.to_string()),
                 }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn fleet_tier(&self) -> zedb_core::EnvTier {
+        self.selected
+            .and_then(|index| self.connections.get(index))
+            .map(|connection| connection.tier)
+            .unwrap_or(zedb_core::EnvTier::Dev)
+    }
+
+    /// The rollback class the ladder must gate on for an action, when any.
+    fn action_rollback_class(
+        &self,
+        action: &FleetAction,
+    ) -> Option<Option<zedb_core::repo::RollbackClass>> {
+        let repo = self.fleet.repo.as_ref()?;
+        match action {
+            FleetAction::Rollback { number, .. } | FleetAction::RemoveTargeted { number, .. } => {
+                repo.migration(*number)
+                    .map(|migration| migration.rollback_class)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn fleet_request_action(&mut self, action: FleetAction, cx: &mut Context<Self>) {
+        if !self.fleet.write_unlocked {
+            self.notice = Some("Unlock writes first: mutations need explicit consent".into());
+            cx.notify();
+            return;
+        }
+        self.fleet.pending_action = Some(action);
+        self.fleet.ack_structural = false;
+        self.fleet.action_running = false;
+        self.fleet.action_result = None;
+        // TextInput has no setter; a fresh entity is an empty input.
+        self.fleet.confirm_input = cx.new(|cx| TextInput::new("", "type to confirm", false, cx));
+        cx.observe(&self.fleet.confirm_input, |_, _, cx| cx.notify())
+            .detach();
+        cx.notify();
+    }
+
+    pub(crate) fn fleet_execute_action(&mut self, cx: &mut Context<Self>) {
+        let Some(action) = self.fleet.pending_action.clone() else {
+            return;
+        };
+        let Some(repo) = self.fleet.repo.clone() else {
+            return;
+        };
+        let Some(connected) = &self.connected else {
+            return;
+        };
+        let cluster_text = self.fleet.cluster_input.read(cx).text().trim().to_string();
+        let cluster = (!cluster_text.is_empty()).then_some(cluster_text.clone());
+        if self.preferences.fleet_cluster.as_deref() != Some(cluster_text.as_str()) {
+            self.preferences.fleet_cluster =
+                (!cluster_text.is_empty()).then_some(cluster_text.clone());
+            let _ = zedb_core::save_preferences(&self.preferences);
+        }
+        let config = connected.client_config.clone();
+        self.fleet.action_running = true;
+        self.fleet.action_result = None;
+        cx.notify();
+
+        let handle = rt::tokio().spawn(async move {
+            let no_cluster = cluster.is_none();
+            let runner = Runner::new(
+                &repo,
+                RunnerOptions {
+                    server: config,
+                    admin: None,
+                    cluster,
+                    no_cluster,
+                    write: true,
+                    dry_run: false,
+                    overrides: BTreeMap::new(),
+                },
+            );
+            let result = match &action {
+                FleetAction::UpgradeAll => runner.upgrade(&Targets::All, None).await,
+                FleetAction::UpgradeDatabase(database) => {
+                    runner
+                        .upgrade(&Targets::Databases(vec![database.clone()]), None)
+                        .await
+                }
+                FleetAction::Rollback { database, number } => {
+                    runner
+                        .rollback_one(
+                            &Targets::Databases(vec![database.clone()]),
+                            *number,
+                            true,
+                            false,
+                        )
+                        .await
+                }
+                FleetAction::ApplyTargeted { database, number } => {
+                    runner
+                        .apply_targeted(&Targets::Databases(vec![database.clone()]), *number)
+                        .await
+                }
+                FleetAction::RemoveTargeted { database, number } => {
+                    runner
+                        .rollback_one(
+                            &Targets::Databases(vec![database.clone()]),
+                            *number,
+                            true,
+                            true,
+                        )
+                        .await
+                }
+            };
+            result.map_err(|error| error.to_string())
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = handle.await;
+            this.update(cx, |this, cx| {
+                this.fleet.action_running = false;
+                this.fleet.action_result = Some(match result {
+                    Ok(Ok(())) => Ok("Completed; tracking table and audit log updated.".into()),
+                    Ok(Err(error)) => Err(error),
+                    Err(error) => Err(error.to_string()),
+                });
+                this.fleet_refresh(cx);
                 cx.notify();
             })
             .ok();
@@ -490,6 +710,108 @@ impl Workspace {
             body = body.child(div().text_color(rgb(DANGER)).child(error.clone()));
         }
 
+        if self.fleet.write_unlocked {
+            let mut actions = div().mt_2().flex().flex_col().gap_1();
+            let mut any = false;
+            if !row.pending.is_empty() {
+                any = true;
+                actions = actions.child(action_button(
+                    "fleet-act-upgrade",
+                    format!("Upgrade {database}"),
+                    ACCENT_PENDING,
+                    {
+                        let database = database.clone();
+                        cx.listener(move |this, _, _, cx| {
+                            this.fleet_request_action(
+                                FleetAction::UpgradeDatabase(database.clone()),
+                                cx,
+                            )
+                        })
+                    },
+                ));
+            }
+            if let (Some(head), Some(repo)) = (row.head, repo.as_ref()) {
+                if head != 0
+                    && repo.migration(head).is_some_and(|migration| {
+                        migration.targeted.is_none() && migration.rollback_class.is_some()
+                    })
+                {
+                    any = true;
+                    actions = actions.child(action_button(
+                        "fleet-act-rollback",
+                        format!("Roll back {head:05}"),
+                        DANGER,
+                        {
+                            let database = database.clone();
+                            cx.listener(move |this, _, _, cx| {
+                                this.fleet_request_action(
+                                    FleetAction::Rollback {
+                                        database: database.clone(),
+                                        number: head,
+                                    },
+                                    cx,
+                                )
+                            })
+                        },
+                    ));
+                }
+            }
+            if let Some(repo) = repo.as_ref() {
+                for migration in &repo.migrations {
+                    let Some(allow_list) = &migration.targeted else {
+                        continue;
+                    };
+                    let allowed = allow_list.is_empty() || allow_list.contains(&database);
+                    if !allowed {
+                        continue;
+                    }
+                    let number = migration.number;
+                    if row.customised.contains(&number) {
+                        any = true;
+                        actions = actions.child(action_button(
+                            "fleet-act-remove-targeted",
+                            format!("Remove customisation {number:05}"),
+                            DANGER,
+                            {
+                                let database = database.clone();
+                                cx.listener(move |this, _, _, cx| {
+                                    this.fleet_request_action(
+                                        FleetAction::RemoveTargeted {
+                                            database: database.clone(),
+                                            number,
+                                        },
+                                        cx,
+                                    )
+                                })
+                            },
+                        ));
+                    } else {
+                        any = true;
+                        actions = actions.child(action_button(
+                            "fleet-act-apply-targeted",
+                            format!("Apply customisation {number:05}"),
+                            ACCENT_CUSTOM,
+                            {
+                                let database = database.clone();
+                                cx.listener(move |this, _, _, cx| {
+                                    this.fleet_request_action(
+                                        FleetAction::ApplyTargeted {
+                                            database: database.clone(),
+                                            number,
+                                        },
+                                        cx,
+                                    )
+                                })
+                            },
+                        ));
+                    }
+                }
+            }
+            if any {
+                body = body.child(actions);
+            }
+        }
+
         if pending_sql.is_empty() && row.excluded.is_none() && row.failed.is_empty() {
             body = body.child(
                 div()
@@ -524,6 +846,305 @@ impl Workspace {
 
         panel = panel.child(body);
         panel
+    }
+
+    /// The safety ladder: tier identity, rendered dry-run, class
+    /// acknowledgements, and typed confirmation where the tier or the
+    /// action demands it. Nothing here is skippable.
+    fn fleet_action_modal(
+        &mut self,
+        action: FleetAction,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let tier = self.fleet_tier();
+        let (tier_bg, tier_fg) = Self::tier_colors(tier);
+        let tier_label = match tier {
+            zedb_core::EnvTier::Dev => "DEV",
+            zedb_core::EnvTier::Staging => "STAGING",
+            zedb_core::EnvTier::Production => "PRODUCTION",
+        };
+        let class = self.action_rollback_class(&action);
+        let structural = matches!(
+            class,
+            Some(Some(zedb_core::repo::RollbackClass::Structural))
+        );
+        let irreversible = matches!(
+            class,
+            Some(None) | Some(Some(zedb_core::repo::RollbackClass::Irreversible))
+        );
+        let phrase = action.required_phrase(tier, irreversible);
+        let typed = self.fleet.confirm_input.read(cx).text().trim().to_string();
+        let phrase_ok = phrase
+            .as_ref()
+            .map(|phrase| typed == *phrase)
+            .unwrap_or(true);
+        let ack_ok = !structural || self.fleet.ack_structural;
+        let running = self.fleet.action_running;
+        let confirmable = phrase_ok && ack_ok && !running && self.fleet.action_result.is_none();
+
+        // The dry-run: exactly what would execute, rendered.
+        let mut dry_run: Vec<(String, String)> = Vec::new();
+        if let Some(repo) = &self.fleet.repo {
+            let mut params: BTreeMap<String, String> = BTreeMap::new();
+            for (name, config) in &repo.config.params {
+                if let Some(default) = &config.default {
+                    params.insert(name.clone(), default.clone());
+                }
+            }
+            let cluster_text = self.fleet.cluster_input.read(cx).text().trim().to_string();
+            if !cluster_text.is_empty() {
+                params.insert("cluster".into(), cluster_text);
+            }
+            let with_db = |database: &str| {
+                let mut params = params.clone();
+                params.insert("db".into(), database.to_string());
+                params
+            };
+            match &action {
+                FleetAction::UpgradeAll => {
+                    for row in &self.fleet.rows {
+                        if row.excluded.is_some() || row.pending.is_empty() {
+                            continue;
+                        }
+                        let pending: Vec<String> =
+                            row.pending.iter().map(|n| format!("{n:05}")).collect();
+                        dry_run.push((
+                            format!("{}: would run {}", row.database, pending.join(", ")),
+                            String::new(),
+                        ));
+                    }
+                    for migration in &repo.migrations {
+                        if migration.targeted.is_some() {
+                            continue;
+                        }
+                        if self.fleet.rows.iter().any(|row| {
+                            row.excluded.is_none() && row.pending.contains(&migration.number)
+                        }) {
+                            if let Ok(sql) = migration.upgrade_sql() {
+                                dry_run.push((
+                                    format!("migration {:05}", migration.number),
+                                    render_lenient(sql.trim_end(), &params),
+                                ));
+                            }
+                        }
+                    }
+                }
+                FleetAction::UpgradeDatabase(database) => {
+                    let params = with_db(database);
+                    if let Some(row) = self.fleet.rows.iter().find(|row| row.database == *database)
+                    {
+                        for migration in &repo.migrations {
+                            if migration.targeted.is_none()
+                                && row.pending.contains(&migration.number)
+                            {
+                                if let Ok(sql) = migration.upgrade_sql() {
+                                    dry_run.push((
+                                        format!("migration {:05}", migration.number),
+                                        render_lenient(sql.trim_end(), &params),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                FleetAction::Rollback { database, number }
+                | FleetAction::RemoveTargeted { database, number } => {
+                    let params = with_db(database);
+                    if let Some(Ok(Some(sql))) = repo
+                        .migration(*number)
+                        .map(|migration| migration.rollback_sql())
+                    {
+                        dry_run.push((
+                            format!("rollback {number:05}"),
+                            render_lenient(sql.trim_end(), &params),
+                        ));
+                    }
+                }
+                FleetAction::ApplyTargeted { database, number } => {
+                    let params = with_db(database);
+                    if let Some(Ok(sql)) = repo
+                        .migration(*number)
+                        .map(|migration| migration.upgrade_sql())
+                    {
+                        dry_run.push((
+                            format!("apply {number:05}"),
+                            render_lenient(sql.trim_end(), &params),
+                        ));
+                    }
+                }
+            }
+        }
+
+        let mut card = div()
+            .w(px(640.))
+            .max_h(px(560.))
+            .flex()
+            .flex_col()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(BG))
+            .child(
+                div()
+                    .flex_none()
+                    .px_3()
+                    .py_2()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .bg(rgb(tier_bg))
+                    .text_color(rgb(tier_fg))
+                    .child(action.title())
+                    .child(format!("{tier_label} tier")),
+            );
+
+        let mut body = div()
+            .id("fleet-modal-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2();
+        for (label, sql) in dry_run {
+            body = body.child(div().text_color(rgb(TEXT_DIM)).child(label.clone()));
+            if !sql.is_empty() {
+                body = body.child(
+                    div()
+                        .id(gpui::SharedString::from(format!("modal-sql-{label}")))
+                        .p_2()
+                        .rounded(px(3.))
+                        .bg(rgb(0x1b1e23))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .text_xs()
+                        .font_family("Menlo")
+                        .whitespace_nowrap()
+                        .overflow_x_scroll()
+                        .child(sql),
+                );
+            }
+        }
+        if structural {
+            body = body.child(
+                div()
+                    .id("fleet-ack-structural")
+                    .p_2()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(rgb(if self.fleet.ack_structural {
+                        SUCCESS
+                    } else {
+                        DANGER
+                    }))
+                    .text_color(rgb(if self.fleet.ack_structural {
+                        SUCCESS
+                    } else {
+                        DANGER
+                    }))
+                    .child(if self.fleet.ack_structural {
+                        "Acknowledged: schema is restored but newer data may be lost"
+                    } else {
+                        "Structural rollback: click to acknowledge that newer data may be lost"
+                    })
+                    .hover(|ack| ack.cursor_pointer())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.fleet.ack_structural = !this.fleet.ack_structural;
+                        cx.notify();
+                    })),
+            );
+        }
+        if irreversible {
+            body =
+                body.child(div().text_color(rgb(DANGER)).child(
+                    "This rollback is IRREVERSIBLE: it does not restore the previous state.",
+                ));
+        }
+        if let Some(phrase) = &phrase {
+            body = body
+                .child(
+                    div()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(format!("Type \"{phrase}\" to confirm:")),
+                )
+                .child(div().w(px(260.)).child(self.fleet.confirm_input.clone()));
+        }
+        match &self.fleet.action_result {
+            Some(Ok(message)) => {
+                body = body.child(div().text_color(rgb(SUCCESS)).child(message.clone()));
+            }
+            Some(Err(error)) => {
+                body = body.child(div().text_color(rgb(DANGER)).child(error.clone()));
+            }
+            None => {}
+        }
+        if running {
+            body = body.child(div().text_color(rgb(TEXT_DIM)).child("Applying..."));
+        }
+        card = card.child(body);
+
+        card = card.child(
+            div()
+                .flex_none()
+                .px_3()
+                .py_2()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap_2()
+                .border_t_1()
+                .border_color(rgb(BORDER))
+                .child(
+                    div()
+                        .id("fleet-modal-cancel")
+                        .px_3()
+                        .py_1()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .child(if self.fleet.action_result.is_some() {
+                            "Close"
+                        } else {
+                            "Cancel"
+                        })
+                        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.fleet.pending_action = None;
+                            cx.notify();
+                        })),
+                )
+                .when(self.fleet.action_result.is_none(), |footer| {
+                    footer.child(
+                        div()
+                            .id("fleet-modal-confirm")
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgb(if confirmable { DANGER } else { BORDER }))
+                            .text_color(rgb(if confirmable { DANGER } else { TEXT_DIM }))
+                            .child(if running { "Applying..." } else { "Confirm" })
+                            .when(confirmable, |button| {
+                                button
+                                    .hover(|button| button.bg(rgb(0x3a2a2a)).cursor_pointer())
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.fleet_execute_action(cx)),
+                                    )
+                            }),
+                    )
+                }),
+        );
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::rgba(0x000000aa))
+            .child(card)
+            .into_any_element()
     }
 
     pub(crate) fn fleet_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -609,6 +1230,45 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, _, cx| this.fleet_refresh(cx))),
             )
             .child(div().w(px(220.)).child(self.fleet.filter.clone()))
+            .child(div().w(px(150.)).child(self.fleet.cluster_input.clone()))
+            .child({
+                let unlocked = self.fleet.write_unlocked;
+                div()
+                    .id("fleet-write-unlock")
+                    .px_3()
+                    .py_1()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(rgb(if unlocked { DANGER } else { BORDER }))
+                    .text_color(rgb(if unlocked { DANGER } else { TEXT_DIM }))
+                    .child(if unlocked {
+                        "Writes unlocked"
+                    } else {
+                        "Writes locked"
+                    })
+                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.fleet.write_unlocked = !this.fleet.write_unlocked;
+                        cx.notify();
+                    }))
+            })
+            .when(self.fleet.write_unlocked, |toolbar| {
+                toolbar.child(
+                    div()
+                        .id("fleet-upgrade-all")
+                        .px_3()
+                        .py_1()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(rgb(ACCENT_PENDING))
+                        .text_color(rgb(ACCENT_PENDING))
+                        .child("Upgrade all")
+                        .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.fleet_request_action(FleetAction::UpgradeAll, cx)
+                        })),
+                )
+            })
             .when_some(repo.as_ref(), |toolbar, repo| {
                 toolbar.child(div().text_color(rgb(TEXT_DIM)).child(format!(
                             "{}  |  {} migration(s)  |  ClickHouse {}",
@@ -779,7 +1439,14 @@ impl Workspace {
                 .child("Open a migration repo to see the fleet")
         };
 
+        let modal = self
+            .fleet
+            .pending_action
+            .clone()
+            .map(|action| self.fleet_action_modal(action, cx));
+
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -809,5 +1476,6 @@ impl Workspace {
                     .text_xs()
                     .child(status_line),
             )
+            .when_some(modal, |root, modal| root.child(modal))
     }
 }

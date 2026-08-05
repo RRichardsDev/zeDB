@@ -344,6 +344,7 @@ impl Workspace {
             ),
         };
         let fleet_repo_path = preferences.fleet_repo.clone();
+        let fleet_cluster = preferences.fleet_cluster.clone();
         let update_check = rt::tokio().spawn(updates::check());
         cx.spawn(async move |this, cx| {
             let Ok(Some(update)) = update_check.await else {
@@ -426,7 +427,12 @@ impl Workspace {
                 active_query_tab: 0,
                 next_query_tab_id: 2,
                 show_query_editor: false,
-                fleet: FleetState::new(fleet_repo_path.as_deref().unwrap_or(""), window, cx),
+                fleet: FleetState::new(
+                    fleet_repo_path.as_deref().unwrap_or(""),
+                    fleet_cluster.as_deref().unwrap_or(""),
+                    window,
+                    cx,
+                ),
                 show_fleet: false,
                 query_abort: None,
                 query_error_decision: None,
@@ -463,7 +469,12 @@ impl Workspace {
                 active_query_tab: 0,
                 next_query_tab_id: 2,
                 show_query_editor: false,
-                fleet: FleetState::new(fleet_repo_path.as_deref().unwrap_or(""), window, cx),
+                fleet: FleetState::new(
+                    fleet_repo_path.as_deref().unwrap_or(""),
+                    fleet_cluster.as_deref().unwrap_or(""),
+                    window,
+                    cx,
+                ),
                 show_fleet: false,
                 query_abort: None,
                 query_error_decision: None,
@@ -1329,6 +1340,7 @@ impl Workspace {
             == Some(connection.name.as_str())
         {
             self.connected = None;
+            self.fleet.write_unlocked = false;
             self.clear_schema();
         }
         self.selected = if self.connections.is_empty() {
@@ -1567,6 +1579,8 @@ impl Workspace {
                 == Some(old_name)
             {
                 self.connected = None;
+                self.fleet.write_unlocked = false;
+                self.fleet.write_unlocked = false;
                 self.clear_schema();
             }
         }
@@ -1692,6 +1706,7 @@ impl Workspace {
                     this.form = None;
                 }
                 this.endpoint_health.insert(name.clone(), health);
+                this.fleet.write_unlocked = false;
                 this.connected = Some(ConnectedCluster {
                     name: name.clone(),
                     active_node: active_node.node_index,

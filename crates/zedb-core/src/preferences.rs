@@ -11,6 +11,8 @@ pub struct Preferences {
     /// Last-opened migration repo, restored on launch (BYO git: this is
     /// just a local checkout path; git stays the user's workflow).
     pub fleet_repo: Option<String>,
+    /// Value rendered into ${cluster} for fleet operations.
+    pub fleet_cluster: Option<String>,
 }
 
 fn preferences_path() -> Result<PathBuf, StoreError> {
@@ -67,6 +69,7 @@ mod tests {
         let preferences = Preferences {
             vim_mode: true,
             fleet_repo: Some("/tmp/repo".into()),
+            fleet_cluster: None,
         };
         save_preferences(&preferences).unwrap();
         assert_eq!(load_preferences().unwrap(), preferences);

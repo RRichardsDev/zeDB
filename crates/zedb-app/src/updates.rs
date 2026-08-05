@@ -154,11 +154,7 @@ fn install_from_archive(archive: &Path, bundle: &Path) -> Result<(), String> {
         .join("extracted");
     run(
         "ditto",
-        &[
-            "-xk".as_ref(),
-            archive.as_os_str(),
-            extract_dir.as_os_str(),
-        ],
+        &["-xk".as_ref(), archive.as_os_str(), extract_dir.as_os_str()],
     )?;
 
     let new_bundle = std::fs::read_dir(&extract_dir)

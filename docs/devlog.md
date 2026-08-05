@@ -443,3 +443,23 @@ Status: implementation complete, awaiting UI acceptance.
   the virtualized list proven at 1M rows in the grid spike.
 - Driving gpui with synthetic CGEvents needs a preceding mouse-move and
   mouseEventClickState=1, or clicks are silently dropped.
+
+## Phase 2 M4: applies behind the safety ladder (2026-08-05)
+
+- Mutation reached the GUI, gated: a per-session "Writes locked/unlocked"
+  toggle that disarms on every connection change, a cluster input
+  (remembered in preferences; blank means declustered), and per-database
+  Upgrade / Rollback-of-head / targeted apply-remove buttons plus a
+  fleet-wide Upgrade all, every one of them funneled through a single
+  confirmation modal. The modal carries the environment tier as its
+  header color and label, the rendered dry-run of exactly what would
+  execute (unresolved placeholders visible), a click-to-acknowledge gate
+  for structural rollbacks, an IRREVERSIBLE warning plus typed
+  "irreversible" for irreversible ones, and a typed database-name (or
+  "all") confirmation on production tiers. Execution runs the same
+  Runner calls as the CLI (write consent, tracking rows, audit log,
+  redaction all identical) and refreshes the matrix on completion.
+- Not GUI-automatable here: connects now require Touch ID for the saved
+  credential, so the live ladder walk is a human step. Deferred: admin
+  credentials from the GUI, per-statement live progress (the modal shows
+  per-run progress and the runner's error text).
