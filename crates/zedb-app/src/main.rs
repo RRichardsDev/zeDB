@@ -10,10 +10,10 @@ use std::{
 };
 
 use gpui::{
-    actions, div, point, prelude::*, px, rgb, rgba, size, svg, App, Application, AssetSource,
-    Bounds, ClipboardItem, Context, Entity, EntityInputHandler, Focusable, IntoElement, KeyBinding,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, SharedString, Timer,
-    TitlebarOptions, Window, WindowBounds, WindowOptions,
+    actions, div, point, prelude::*, px, rgb, rgba, size, svg, Action, App, Application,
+    AssetSource, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, Focusable,
+    IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    SharedString, Timer, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use gpui_component::{
     button::Button,
@@ -28,7 +28,7 @@ use zedb_ch::{
     ChClient, ChConfig, ColumnInfo, DatabaseMeta, ObjectDetails, QueryStreamEvent,
     SchemaObjectKind, SchemaObjectMeta,
 };
-use zedb_core::{load_connections, save_connections, ConnectionConfig, EnvTier};
+use zedb_core::{load_connections, save_connections, ConnectionConfig, ConnectionNode, EnvTier};
 
 use components::text_input::{self, TextInput};
 use grid_spike::GridSpike;
@@ -86,6 +86,7 @@ struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
+            "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
             "icons/refresh.svg" => Some(include_bytes!("../assets/icons/refresh.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
@@ -96,7 +97,12 @@ impl AssetSource for Assets {
 
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(match path {
-            "icons" => vec!["edit.svg".into(), "refresh.svg".into(), "trash.svg".into()],
+            "icons" => vec![
+                "chevron-down.svg".into(),
+                "edit.svg".into(),
+                "refresh.svg".into(),
+                "trash.svg".into(),
+            ],
             _ => Vec::new(),
         })
     }
@@ -106,12 +112,17 @@ struct ConnectionForm {
     editing: Option<usize>,
     original_name: Option<String>,
     name: Entity<TextInput>,
-    endpoints: Vec<Entity<TextInput>>,
+    nodes: Vec<NodeForm>,
     user: Entity<TextInput>,
     database: Entity<TextInput>,
     password: Entity<TextInput>,
     tier: EnvTier,
     read_only: bool,
+}
+
+struct NodeForm {
+    name: Entity<TextInput>,
+    endpoint: Entity<TextInput>,
 }
 
 #[derive(Clone)]
@@ -124,14 +135,23 @@ struct ConnectionDraft {
 
 struct ConnectedCluster {
     name: String,
+    active_node: usize,
     active_endpoint: String,
     client_config: ChConfig,
 }
 
 #[derive(Clone)]
 struct EndpointHealth {
+    node_index: usize,
+    name: String,
     endpoint: String,
     reachable: bool,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct SelectNode {
+    index: usize,
 }
 
 struct DatabaseNode {
@@ -402,7 +422,7 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(format!("{} node(s)", connection.endpoints.len()))
+                            .child(format!("{} node(s)", connection.nodes.len()))
                             .when(connected, |row| {
                                 row.child(div().size(px(7.)).rounded_full().bg(rgb(SUCCESS)))
                             }),
@@ -844,12 +864,10 @@ impl Workspace {
             editing: None,
             original_name: None,
             name: Self::input("", "staging", false, cx),
-            endpoints: vec![Self::input(
-                "http://localhost:8123",
-                "http://host:8123",
-                false,
-                cx,
-            )],
+            nodes: vec![NodeForm {
+                name: Self::input("Node 1", "Node 1", false, cx),
+                endpoint: Self::input("http://localhost:8123", "http://host:8123", false, cx),
+            }],
             user: Self::input("default", "default", false, cx),
             database: Self::input("", "optional", false, cx),
             password: Self::input("", "stored in macOS Keychain", true, cx),
@@ -870,10 +888,13 @@ impl Workspace {
             editing: Some(index),
             original_name: Some(connection.name.clone()),
             name: Self::input(connection.name, "staging", false, cx),
-            endpoints: connection
-                .endpoints
+            nodes: connection
+                .nodes
                 .into_iter()
-                .map(|endpoint| Self::input(endpoint, "http://host:8123", false, cx))
+                .map(|node| NodeForm {
+                    name: Self::input(node.name, "Node name", false, cx),
+                    endpoint: Self::input(node.endpoint, "http://host:8123", false, cx),
+                })
                 .collect(),
             user: Self::input(connection.user, "default", false, cx),
             database: Self::input(
@@ -996,17 +1017,25 @@ impl Workspace {
     }
 
     fn add_endpoint(&mut self, cx: &mut Context<Self>) {
-        let endpoint = Self::input("", "http://host:8123", false, cx);
+        let next_number = self
+            .form
+            .as_ref()
+            .map(|form| form.nodes.len() + 1)
+            .unwrap_or(1);
+        let node = NodeForm {
+            name: Self::input(format!("Node {next_number}"), "Node name", false, cx),
+            endpoint: Self::input("", "http://host:8123", false, cx),
+        };
         if let Some(form) = &mut self.form {
-            form.endpoints.push(endpoint);
+            form.nodes.push(node);
             cx.notify();
         }
     }
 
     fn remove_endpoint(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(form) = &mut self.form {
-            if form.endpoints.len() > 1 && index < form.endpoints.len() {
-                form.endpoints.remove(index);
+            if form.nodes.len() > 1 && index < form.nodes.len() {
+                form.nodes.remove(index);
                 cx.notify();
             }
         }
@@ -1018,15 +1047,27 @@ impl Workspace {
         let name = value(&form.name);
         let user = value(&form.user);
         let database = value(&form.database);
-        let endpoints = form
-            .endpoints
+        let nodes = form
+            .nodes
             .iter()
-            .map(value)
-            .filter(|endpoint| !endpoint.is_empty())
+            .map(|node| ConnectionNode {
+                name: value(&node.name),
+                endpoint: value(&node.endpoint),
+            })
             .collect::<Vec<_>>();
 
-        if name.is_empty() || user.is_empty() || endpoints.is_empty() {
-            return Err("Name, user, and at least one endpoint are required".into());
+        if name.is_empty()
+            || user.is_empty()
+            || nodes.is_empty()
+            || nodes
+                .iter()
+                .any(|node| node.name.is_empty() || node.endpoint.is_empty())
+        {
+            return Err("Name, user, and every node name and endpoint are required".into());
+        }
+        let mut node_names = std::collections::HashSet::new();
+        if nodes.iter().any(|node| !node_names.insert(&node.name)) {
+            return Err("Node names must be unique within a connection".into());
         }
         if self
             .connections
@@ -1040,7 +1081,7 @@ impl Workspace {
         Ok(ConnectionDraft {
             config: ConnectionConfig {
                 name,
-                endpoints,
+                nodes,
                 user,
                 database: (!database.is_empty()).then_some(database),
                 tier: form.tier,
@@ -1255,27 +1296,29 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let name = connection.name.clone();
-        let endpoints = connection.endpoints.clone();
+        let nodes = connection.nodes.clone();
         let user = connection.user.clone();
         let database = connection.database.clone();
         let read_only = connection.read_only;
         let connected_password = password.clone();
         self.connecting = Some(name.clone());
-        self.notice = Some(format!("Testing {} node(s) for {name}...", endpoints.len()));
+        self.notice = Some(format!("Testing {} node(s) for {name}...", nodes.len()));
         cx.notify();
 
         let task = rt::tokio().spawn(async move {
-            let mut health = Vec::with_capacity(endpoints.len());
-            for endpoint in endpoints {
+            let mut health = Vec::with_capacity(nodes.len());
+            for (node_index, node) in nodes.into_iter().enumerate() {
                 let client = ChClient::new(ChConfig {
-                    url: endpoint.clone(),
+                    url: node.endpoint.clone(),
                     user: user.clone(),
                     password: password.clone(),
                     database: database.clone(),
                     read_only,
                 });
                 health.push(EndpointHealth {
-                    endpoint,
+                    node_index,
+                    name: node.name,
+                    endpoint: node.endpoint,
                     reachable: client.test_connection().await.is_ok(),
                 });
             }
@@ -1285,14 +1328,11 @@ impl Workspace {
             let health = task.await.unwrap_or_default();
             this.update(cx, |this, cx| {
                 this.connecting = None;
-                let active_endpoint = health
-                    .iter()
-                    .find(|node| node.reachable)
-                    .map(|node| node.endpoint.clone());
+                let active_node = health.iter().find(|node| node.reachable).cloned();
                 let reachable = health.iter().filter(|node| node.reachable).count();
                 let total = health.len();
 
-                let Some(active_endpoint) = active_endpoint else {
+                let Some(active_node) = active_node else {
                     this.endpoint_health.insert(name.clone(), health);
                     this.notice = Some(format!(
                         "No node accepted the connection details for {name}"
@@ -1304,9 +1344,7 @@ impl Workspace {
                 if let Some(draft) = &draft {
                     let unlocked_previous_password =
                         draft.password.is_empty().then_some(&connected_password);
-                    if let Err(error) =
-                        this.persist_draft(draft, unlocked_previous_password)
-                    {
+                    if let Err(error) = this.persist_draft(draft, unlocked_previous_password) {
                         this.notice = Some(error);
                         cx.notify();
                         return;
@@ -1316,9 +1354,10 @@ impl Workspace {
                 this.endpoint_health.insert(name.clone(), health);
                 this.connected = Some(ConnectedCluster {
                     name: name.clone(),
-                    active_endpoint: active_endpoint.clone(),
+                    active_node: active_node.node_index,
+                    active_endpoint: active_node.endpoint.clone(),
                     client_config: ChConfig {
-                        url: active_endpoint.clone(),
+                        url: active_node.endpoint.clone(),
                         user: connection.user.clone(),
                         password: connected_password.clone(),
                         database: connection.database.clone(),
@@ -1328,7 +1367,8 @@ impl Workspace {
                 this.password_cache
                     .insert(name.clone(), connected_password.clone());
                 this.notice = Some(format!(
-                    "Connected to {name} via {active_endpoint} ({reachable}/{total} nodes reachable)"
+                    "Connected to {name} via {} ({reachable}/{total} nodes reachable)",
+                    active_node.name
                 ));
                 this.load_schema_databases(cx);
                 cx.notify();
@@ -1343,6 +1383,38 @@ impl Workspace {
             self.notice = Some(format!("Disconnected from {}", connected.name));
         }
         self.clear_schema();
+        cx.notify();
+    }
+
+    fn select_node(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(connected_name) = self
+            .connected
+            .as_ref()
+            .map(|connected| connected.name.clone())
+        else {
+            return;
+        };
+        let Some(node) = self
+            .endpoint_health
+            .get(&connected_name)
+            .and_then(|health| health.iter().find(|node| node.node_index == index))
+            .filter(|node| node.reachable)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(connected) = self.connected.as_mut() else {
+            return;
+        };
+        if connected.active_node == node.node_index {
+            return;
+        }
+
+        connected.active_node = node.node_index;
+        connected.active_endpoint = node.endpoint.clone();
+        connected.client_config.url = node.endpoint;
+        self.notice = Some(format!("Using {} for {connected_name}", node.name));
+        self.load_schema_databases(cx);
         cx.notify();
     }
 
@@ -1535,18 +1607,18 @@ impl Workspace {
 
     fn form_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let form = self.form.as_ref().expect("form panel requires a form");
-        let endpoint_count = form.endpoints.len();
+        let endpoint_count = form.nodes.len();
         let endpoint_rows = form
-            .endpoints
+            .nodes
             .iter()
-            .cloned()
             .enumerate()
-            .map(|(index, endpoint)| {
+            .map(|(index, node)| {
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().flex_1().child(endpoint))
+                    .child(div().w(px(150.)).flex_none().child(node.name.clone()))
+                    .child(div().flex_1().child(node.endpoint.clone()))
                     .when(endpoint_count > 1, |row| {
                         row.child(
                             div()
@@ -2041,8 +2113,62 @@ impl Workspace {
         cx.notify();
     }
 
+    fn node_selector(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let connected = self.connected.as_ref()?;
+        let connection = self
+            .connections
+            .iter()
+            .find(|connection| connection.name == connected.name)?;
+        let health = self.endpoint_health.get(&connected.name);
+        let nodes = connection
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| {
+                let reachable = health
+                    .and_then(|health| health.iter().find(|item| item.node_index == index))
+                    .map(|item| item.reachable)
+                    .unwrap_or(false);
+                (index, node.name.clone(), reachable)
+            })
+            .collect::<Vec<_>>();
+        let active_name = connection
+            .nodes
+            .get(connected.active_node)
+            .map(|node| node.name.clone())
+            .unwrap_or_else(|| "Select node".into());
+        let action_context = self.query_tabs[self.active_query_tab]
+            .editor
+            .focus_handle(cx);
+
+        Some(
+            Button::new("active-node-selector")
+                .label(active_name)
+                .dropdown_caret(true)
+                .compact()
+                .outline()
+                .dropdown_menu(move |menu: PopupMenu, _, _| {
+                    nodes.iter().cloned().fold(
+                        menu.action_context(action_context.clone()).min_w(px(180.)),
+                        |menu, (index, name, reachable)| {
+                            menu.menu_with_enable(name, Box::new(SelectNode { index }), reachable)
+                        },
+                    )
+                }),
+        )
+    }
+
     fn connection_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.selected.and_then(|index| self.connections.get(index));
+        let header_connection = self
+            .connected
+            .as_ref()
+            .and_then(|connected| {
+                self.connections
+                    .iter()
+                    .find(|connection| connection.name == connected.name)
+            })
+            .or(selected);
         let selected_connected = selected
             .map(|connection| {
                 self.connected
@@ -2067,18 +2193,14 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .when_some(selected, |row, connection| {
+                    .when_some(header_connection, |row, connection| {
                         row.child(connection.name.clone())
                             .child(Self::tier_badge(connection.tier))
-                            .child(format!("{} node(s)", connection.endpoints.len()))
-                            .when_some(self.endpoint_health.get(&connection.name), |row, health| {
-                                row.child(format!(
-                                    "{} reachable",
-                                    health.iter().filter(|node| node.reachable).count()
-                                ))
-                            })
+                            .when_some(self.node_selector(cx), |row, selector| row.child(selector))
                     })
-                    .when(selected.is_none(), |row| row.child("Select a connection")),
+                    .when(header_connection.is_none(), |row| {
+                        row.child("Select a connection")
+                    }),
             )
             .child(
                 div()
@@ -2139,16 +2261,17 @@ impl Workspace {
         let nodes = selected
             .map(|connection| {
                 connection
-                    .endpoints
+                    .nodes
                     .iter()
-                    .map(|endpoint| {
+                    .enumerate()
+                    .map(|(index, configured_node)| {
                         let reachable =
                             self.endpoint_health
                                 .get(&connection.name)
                                 .and_then(|health| {
                                     health
                                         .iter()
-                                        .find(|node| node.endpoint == *endpoint)
+                                        .find(|node| node.node_index == index)
                                         .map(|node| node.reachable)
                                 });
                         let (label, color) = match reachable {
@@ -2161,7 +2284,12 @@ impl Workspace {
                             .items_center()
                             .gap_2()
                             .child(div().size(px(7.)).rounded_full().bg(rgb(color)))
-                            .child(endpoint.clone())
+                            .child(configured_node.name.clone())
+                            .child(
+                                div()
+                                    .text_color(rgb(TEXT_DIM))
+                                    .child(configured_node.endpoint.clone()),
+                            )
                             .child(div().text_xs().text_color(rgb(TEXT_DIM)).child(label))
                     })
                     .collect::<Vec<_>>()
@@ -2964,6 +3092,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &MaxRowsUnlimited, _, cx| {
                 this.select_max_rows(MaxRows::Unlimited, cx)
             }))
+            .on_action(
+                cx.listener(|this, action: &SelectNode, _, cx| this.select_node(action.index, cx)),
+            )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.resizing_sidebar {
                     this.sidebar_width = f32::from(event.position.x).clamp(180.0, 480.0);

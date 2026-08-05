@@ -243,6 +243,9 @@ impl Render for GridSpike {
                             .items_center()
                             .w(px(COL_WIDTH * cols as f32))
                             .when(row % 2 == 1, |d| d.bg(rgb(0x21252b)))
+                            .when(row + 1 == rows, |d| {
+                                d.border_b_1().border_color(rgb(BORDER))
+                            })
                             .hover(|d| d.bg(rgb(0x2a2f37)))
                             .children(cells)
                     })

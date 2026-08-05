@@ -34,21 +34,45 @@ fn default_true() -> bool {
     true
 }
 
-fn deserialize_endpoints<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionNode {
+    pub name: String,
+    pub endpoint: String,
+}
+
+fn deserialize_nodes<'de, D>(deserializer: D) -> Result<Vec<ConnectionNode>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     #[derive(Deserialize)]
     #[serde(untagged)]
-    enum OneOrMany {
-        One(String),
-        Many(Vec<String>),
+    enum NodeOrEndpoint {
+        Node(ConnectionNode),
+        Endpoint(String),
     }
 
-    Ok(match OneOrMany::deserialize(deserializer)? {
-        OneOrMany::One(endpoint) => vec![endpoint],
-        OneOrMany::Many(endpoints) => endpoints,
-    })
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<NodeOrEndpoint>),
+    }
+
+    let values = match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(endpoint) => vec![NodeOrEndpoint::Endpoint(endpoint)],
+        OneOrMany::Many(values) => values,
+    };
+    Ok(values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| match value {
+            NodeOrEndpoint::Node(node) => node,
+            NodeOrEndpoint::Endpoint(endpoint) => ConnectionNode {
+                name: format!("Node {}", index + 1),
+                endpoint,
+            },
+        })
+        .collect())
 }
 
 /// A saved connection. Deliberately contains NO secret material; passwords
@@ -59,8 +83,13 @@ pub struct ConnectionConfig {
     pub name: String,
     /// HTTP endpoints for the nodes or load balancers that represent this
     /// logical cluster. Legacy configs with a singular `url` migrate on read.
-    #[serde(default, alias = "url", deserialize_with = "deserialize_endpoints")]
-    pub endpoints: Vec<String>,
+    #[serde(
+        default,
+        alias = "endpoints",
+        alias = "url",
+        deserialize_with = "deserialize_nodes"
+    )]
+    pub nodes: Vec<ConnectionNode>,
     pub user: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
@@ -81,7 +110,9 @@ mod tests {
         let conn: ConnectionConfig = serde_json::from_str(json).unwrap();
         assert!(conn.read_only, "read-only must default on");
         assert_eq!(conn.tier, EnvTier::Dev);
-        assert_eq!(conn.endpoints, ["http://h:8123"]);
+        assert_eq!(conn.nodes.len(), 1);
+        assert_eq!(conn.nodes[0].name, "Node 1");
+        assert_eq!(conn.nodes[0].endpoint, "http://h:8123");
     }
 
     #[test]
@@ -92,11 +123,27 @@ mod tests {
             "user": "zedb"
         }"#;
         let connection: ConnectionConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(connection.endpoints.len(), 2);
+        assert_eq!(connection.nodes.len(), 2);
+        assert_eq!(connection.nodes[0].name, "Node 1");
+        assert_eq!(connection.nodes[1].name, "Node 2");
 
         let serialized = serde_json::to_string(&connection).unwrap();
-        assert!(serialized.contains("\"endpoints\""));
+        assert!(serialized.contains("\"nodes\""));
         assert!(!serialized.contains("\"url\""));
+    }
+
+    #[test]
+    fn named_nodes_round_trip() {
+        let json = r#"{
+            "name": "local",
+            "nodes": [{"name": "Replica A", "endpoint": "http://localhost:8123"}],
+            "user": "zedb"
+        }"#;
+        let connection: ConnectionConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(connection.nodes[0].name, "Replica A");
+
+        let serialized = serde_json::to_string(&connection).unwrap();
+        assert!(serialized.contains("Replica A"));
     }
 
     #[test]

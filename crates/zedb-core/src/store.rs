@@ -63,7 +63,7 @@ pub fn save_connections(connections: &[ConnectionConfig]) -> Result<(), StoreErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::EnvTier;
+    use crate::connection::{ConnectionNode, EnvTier};
 
     #[test]
     fn round_trip_and_missing_file() {
@@ -76,9 +76,15 @@ mod tests {
 
         let conns = vec![ConnectionConfig {
             name: "staging".into(),
-            endpoints: vec![
-                "http://ch-1.example:8123".into(),
-                "http://ch-2.example:8123".into(),
+            nodes: vec![
+                ConnectionNode {
+                    name: "Node 1".into(),
+                    endpoint: "http://ch-1.example:8123".into(),
+                },
+                ConnectionNode {
+                    name: "Node 2".into(),
+                    endpoint: "http://ch-2.example:8123".into(),
+                },
             ],
             user: "default".into(),
             database: None,
