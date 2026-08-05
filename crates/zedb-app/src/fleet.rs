@@ -1321,6 +1321,7 @@ impl Workspace {
             .child(
                 div()
                     .id("fleet-write-unlock")
+                    .group("fleet-write-unlock")
                     .size(px(26.))
                     .flex()
                     .items_center()
@@ -1336,9 +1337,21 @@ impl Workspace {
                                 "icons/lock.svg"
                             })
                             .size(px(14.))
-                            .text_color(rgb(if unlocked { DANGER } else { TEXT_DIM })),
+                            .text_color(rgb(if unlocked { DANGER } else { TEXT_DIM }))
+                            .when(!unlocked, |icon| {
+                                icon.group_hover("fleet-write-unlock", |icon| {
+                                    icon.text_color(rgb(SUCCESS))
+                                })
+                            }),
                     )
-                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                    .hover(|button| {
+                        let button = button.bg(rgb(BG_SIDEBAR)).cursor_pointer();
+                        if unlocked {
+                            button
+                        } else {
+                            button.border_color(rgb(SUCCESS))
+                        }
+                    })
                     .tooltip(move |window, cx| {
                         gpui_component::tooltip::Tooltip::new(if unlocked {
                             "Writes unlocked; click to lock"
