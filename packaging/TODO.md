@@ -9,12 +9,11 @@ notarized, and stapled; the icon (section 1) is the main thing still missing.
 
 ## 1. App icon
 
-- [ ] Produce the ten PNGs listed in `packaging/macos/icons/REQUIRED.md`
-      and drop them in `packaging/macos/icons/zeDB.iconset/`.
-- [ ] Generate the icns and commit it:
+- [x] Ten PNGs in `packaging/macos/icons/zeDB.iconset/`, `zeDB.icns`
+      generated and committed; the bundle script wires it in via
+      `CFBundleIconFile` automatically. Regenerate with
       `iconutil -c icns packaging/macos/icons/zeDB.iconset -o packaging/macos/icons/zeDB.icns`
-      (the bundle script picks it up automatically and sets `CFBundleIconFile`).
-- [ ] Delete `REQUIRED.md`.
+      whenever the artwork changes.
 
 ## 2. Developer ID certificate
 
