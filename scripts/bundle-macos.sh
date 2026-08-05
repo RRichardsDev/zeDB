@@ -6,10 +6,12 @@
 #   "<identity>" -> sign with that keychain identity; set
 #                   ZEDB_HARDENED_RUNTIME=1 for a notarization-ready signature
 #
-# ZEDB_SIGN_ENTITLEMENTS may point at an entitlements plist to embed. Leave it
-# unset for Developer ID builds unless a matching Developer ID provisioning
-# profile is also embedded: packaging/macos/zeDB.entitlements holds restricted
-# keys that make an app without a profile fail to launch.
+# When signing with a real identity, the Developer ID provisioning profile in
+# packaging/macos is embedded and the restricted entitlements from
+# packaging/macos/zeDB.entitlements are applied, keeping the protected-keychain
+# path in zedb-core::secrets working. Ad-hoc builds skip both: those restricted
+# keys make an app fail to launch unless a matching profile backs them.
+# ZEDB_SIGN_ENTITLEMENTS overrides the entitlements file if set.
 #
 # The dev loop (Apple Development cert + provisioning profile + launch) stays
 # in scripts/run-signed-macos.sh; this script is for shippable artifacts.
@@ -48,12 +50,19 @@ else
     echo "warning: packaging/macos/icons/zeDB.icns not found; bundling without an icon" >&2
 fi
 
+profile="$root/packaging/macos/zeDB_DeveloperID.provisionprofile"
+entitlements=${ZEDB_SIGN_ENTITLEMENTS:-}
+if [[ $identity != - && -f "$profile" ]]; then
+    install -m 644 "$profile" "$contents/embedded.provisionprofile"
+    entitlements=${entitlements:-$root/packaging/macos/zeDB.entitlements}
+fi
+
 sign_args=(--force --sign "$identity")
 if [[ ${ZEDB_HARDENED_RUNTIME:-0} == 1 ]]; then
     sign_args+=(--options runtime --timestamp)
 fi
-if [[ -n ${ZEDB_SIGN_ENTITLEMENTS:-} ]]; then
-    sign_args+=(--entitlements "$ZEDB_SIGN_ENTITLEMENTS")
+if [[ -n $entitlements ]]; then
+    sign_args+=(--entitlements "$entitlements")
 fi
 
 echo "Signing with identity: $identity"

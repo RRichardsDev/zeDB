@@ -38,17 +38,18 @@ notarized, and stapled; the icon (section 1) is the main thing still missing.
 
 ## 4. Entitlements decision (protected keychain)
 
-`packaging/macos/zeDB.entitlements` carries restricted entitlements
-(`com.apple.application-identifier`, `keychain-access-groups`) that require an
-embedded provisioning profile. Release builds currently sign **without** them,
-so stored passwords use the legacy keychain path (`secrets.rs` falls back on
-`ERR_SEC_MISSING_ENTITLEMENT`). Either:
+Done. `packaging/macos/zeDB_DeveloperID.provisionprofile` (Developer ID
+profile for `dev.zedb.app`, keychain access group `M8Y82YQ4GF.*`, expires
+2044) is committed, and `bundle-macos.sh` embeds it and applies
+`zeDB.entitlements` automatically whenever signing with a real identity.
+Identity-signed builds therefore keep the protected-keychain path in
+`zedb-core::secrets`; ad-hoc dev bundles still skip the restricted
+entitlements so they can launch unprofiled.
 
-- [ ] Accept that for now (nothing to do), or
-- [ ] Create a **Developer ID provisioning profile** for `dev.zedb.app` with
-      the keychain access group, commit it to `packaging/macos/`, and update
-      `bundle-macos.sh` to embed it and pass
-      `ZEDB_SIGN_ENTITLEMENTS=packaging/macos/zeDB.entitlements`.
+- [x] Create a **Developer ID provisioning profile** for `dev.zedb.app` with
+      the keychain access group, commit it to `packaging/macos/`, and embed
+      it from `bundle-macos.sh`. Verified locally: signed bundle launches
+      with the entitlements applied.
 
 ## 5. First release
 
