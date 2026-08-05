@@ -24,6 +24,13 @@ jobs:
           if ! xcrun -f metal >/dev/null 2>&1; then
             sudo xcodebuild -downloadComponent MetalToolchain
           fi
+      - name: Install ClickHouse (integration tests)
+        run: |
+          if ! command -v clickhouse >/dev/null 2>&1; then
+            curl -fsSL https://clickhouse.com/ | sh
+            sudo mv ./clickhouse /usr/local/bin/clickhouse
+          fi
+          clickhouse --version
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy

@@ -12,6 +12,10 @@ repository = "https://github.com/rhodri-richards/zedb"
 zedb-core = { path = "crates/zedb-core" }
 zedb-ch = { path = "crates/zedb-ch" }
 gpui = "0.2.2"
+chrono = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [profile.dev]
 # gpui is heavy; keep dependency codegen optimized so the dev app stays usable.

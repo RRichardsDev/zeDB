@@ -7,3 +7,10 @@ repository.workspace = true
 
 [dependencies]
 zedb-core.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile = "3"

@@ -70,9 +70,11 @@ zedb/
   `migrate` (apply chain, track state), `regen` (derive current-state via
   replay), `verify` (diff live schema against expectation). The ClickHouse
   driver implements all; a future guest driver may implement only `explore`.
-- **ClickHouse connectivity:** HTTP interface via the `clickhouse` crate,
-  streaming (RowBinary) for large result sets. Native protocol is not a v1
-  concern.
+- **ClickHouse connectivity:** HTTP interface with a hand-rolled
+  `RowBinaryWithNamesAndTypes` decoder into a dynamic value model. (The
+  `clickhouse` crate was rejected: it is built around compile-time serde
+  row structs, while an explorer discovers column types at runtime.)
+  Native protocol is not a v1 concern.
 - **Replay engine:** manages a cache of pinned `clickhouse local` binaries.
   Multiple clusters may run different server versions, so the pin is
   per-repo (checks) and per-cluster (verify), not global.
