@@ -3,9 +3,9 @@
 What is left before a `zeDB.app` from CI runs cleanly on someone else's Mac.
 The release pipeline itself already exists: pushing a `v*` tag runs
 `.github/workflows/release.yaml`, which builds `scripts/bundle-macos.sh` and
-attaches `zeDB-<version>-macos.zip` to a GitHub Release. Until the steps below
-are done it ships an ad-hoc-signed, iconless bundle that Gatekeeper will block
-on other machines.
+attaches `zeDB-<version>-macos.zip` to a GitHub Release. Signing and
+notarization secrets are configured, so releases are Developer ID signed,
+notarized, and stapled; the icon (section 1) is the main thing still missing.
 
 ## 1. App icon
 
@@ -18,20 +18,20 @@ on other machines.
 
 ## 2. Developer ID certificate
 
-- [ ] Create a **Developer ID Application** certificate for team `M8Y82YQ4GF`:
+- [x] Create a **Developer ID Application** certificate for team `M8Y82YQ4GF`:
       Xcode > Settings > Accounts > Manage Certificates > + . Free with the
       existing paid membership.
-- [ ] Export it (with private key) from Keychain Access as a
+- [x] Export it (with private key) from Keychain Access as a
       password-protected `.p12`.
-- [ ] Add repo secrets:
+- [x] Add repo secrets:
       - `MACOS_CERTIFICATE_P12` = `base64 -i cert.p12 | pbcopy`
       - `MACOS_CERTIFICATE_PASSWORD` = the export password
 
 ## 3. Notarization credentials
 
-- [ ] Create an app-specific password at appleid.apple.com (Sign-In and
+- [x] Create an app-specific password at appleid.apple.com (Sign-In and
       Security > App-Specific Passwords).
-- [ ] Add repo secrets:
+- [x] Add repo secrets:
       - `NOTARY_APPLE_ID` = your Apple ID email
       - `NOTARY_PASSWORD` = the app-specific password
       - `NOTARY_TEAM_ID` = `M8Y82YQ4GF`
