@@ -36,3 +36,42 @@ become upstream contributions. Newest at the bottom.
   AggregateFunction states) fails loudly as UnsupportedType rather than
   guessing. The explorer will need a graceful UI story for those columns
   eventually.
+
+## M2: grid spike (2026-08-05)
+
+Verdict: uniform_list carries the grid. 1M rows x 50 cols scrolls smoothly
+with ~126MB flat memory (cells generated on demand from (row, col), only
+the visible window rendered).
+
+GPUI findings, in rough order of hours cost:
+
+- **Flex items default to `min-width: auto`, and it bites hard.** The div
+  hosting the grid view (`flex_1` in a row) silently expanded to its
+  content width (a 6000px header row), which made the whole subtree
+  content-sized: every `w_full` inside resolved to content width instead
+  of the parent, collapsing the uniform_list (no intrinsic width) to 0px
+  wide. Symptom: list renders items (closure called with correct range)
+  but paints nothing, because the content mask is 0 wide. Fix: `min_w_0()`
+  on the flex item that hosts the view. This is standard CSS flexbox
+  behavior, but nothing in the symptom points at it; hours lost.
+- **Debug technique that cracked it:** `gpui::canvas(|bounds, _, _|
+  eprintln!(...), |_,_,_,_| {})` as an `.absolute().size_full()` child is
+  a perfect bounds probe for any element. Also useful:
+  `UniformListScrollHandle.0.borrow().last_item_size` exposes the list's
+  laid-out viewport vs content size. Wishlist: a layout inspector.
+- **Two-axis scrolling is built into uniform_list** via
+  `.with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)`.
+  Do NOT wrap the list in an `overflow_x_scroll` container: the list
+  consumes wheel events and the wrapper never scrolls. Discoverability of
+  this option is poor (found by reading the crate source).
+- Scroll styling methods (`overflow_x_scroll` etc.) exist only on
+  stateful elements, i.e. after `.id(...)`. The compile error does not
+  hint at that.
+- A fixed header outside the list can mirror the list's horizontal offset:
+  read `scroll.0.borrow().base_handle.offset().x`, apply as `ml()` on the
+  header's inner row, and `cx.notify()` from an `on_scroll_wheel` listener
+  so it repaints. Works, feels instant.
+- Grid cells need `.overflow_hidden().whitespace_nowrap()` or long values
+  wrap into vertically-squeezed lines inside the fixed row height.
+- Process discipline note: `cargo clippy` does not produce the binary;
+  after edits, `cargo build` before relaunching, or you debug a stale app.

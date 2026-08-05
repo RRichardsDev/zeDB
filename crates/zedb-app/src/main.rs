@@ -1,17 +1,17 @@
+mod grid_spike;
+mod theme;
+
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Window, WindowBounds,
-    WindowOptions,
+    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, Window,
+    WindowBounds, WindowOptions,
 };
 
-// Placeholder palette until a real theme system exists.
-const BG: u32 = 0x1e2227;
-const BG_SIDEBAR: u32 = 0x23272e;
-const BG_STATUS: u32 = 0x191c20;
-const BORDER: u32 = 0x33383f;
-const TEXT: u32 = 0xaab2bd;
-const TEXT_DIM: u32 = 0x6b7380;
+use grid_spike::GridSpike;
+use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, TEXT, TEXT_DIM};
 
-struct Workspace;
+struct Workspace {
+    grid: Entity<GridSpike>,
+}
 
 impl Workspace {
     fn sidebar(&self) -> impl IntoElement {
@@ -28,18 +28,6 @@ impl Workspace {
             .child("connections")
     }
 
-    fn main_pane(&self) -> impl IntoElement {
-        div()
-            .flex_1()
-            .h_full()
-            .bg(rgb(BG))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_color(rgb(TEXT_DIM))
-            .child("zeDB")
-    }
-
     fn status_bar(&self) -> impl IntoElement {
         div()
             .h(px(28.))
@@ -53,7 +41,11 @@ impl Workspace {
             .items_center()
             .text_xs()
             .text_color(rgb(TEXT_DIM))
-            .child(concat!("zedb ", env!("CARGO_PKG_VERSION")))
+            .child(concat!(
+                "zedb ",
+                env!("CARGO_PKG_VERSION"),
+                " | grid spike (M2)"
+            ))
     }
 }
 
@@ -72,7 +64,7 @@ impl Render for Workspace {
                     .w_full()
                     .flex()
                     .child(self.sidebar())
-                    .child(self.main_pane()),
+                    .child(div().flex_1().h_full().min_w_0().child(self.grid.clone())),
             )
             .child(self.status_bar())
     }
@@ -86,7 +78,11 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| Workspace),
+            |_, cx| {
+                cx.new(|cx| Workspace {
+                    grid: cx.new(GridSpike::new),
+                })
+            },
         )
         .expect("failed to open window");
         cx.activate(true);
