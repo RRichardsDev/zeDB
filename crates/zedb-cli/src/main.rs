@@ -110,6 +110,13 @@ enum Command {
         /// Stamp through this migration number.
         number: u32,
     },
+    /// Diff live schemas against each database's applied chain position.
+    Verify {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        #[command(flatten)]
+        targets: TargetArgs,
+    },
     /// Apply one targeted migration to specific databases.
     Apply {
         #[command(flatten)]
@@ -507,6 +514,48 @@ fn run(cli: Cli) -> Result<(), String> {
             runtime
                 .block_on(runner.stamp(&targets, number))
                 .map_err(|error| error.to_string())
+        }
+        Command::Verify {
+            connection,
+            targets,
+        } => {
+            let repo = MigrationRepo::open(&cli.repo).map_err(|error| error.to_string())?;
+            let version = &repo.config.engine.version;
+            let binary = zedb_ch::cached_binary(version).ok_or_else(|| {
+                format!("pinned ClickHouse {version} is not cached; run `zedb pin` first")
+            })?;
+            let runner = zedb_ch::runner::Runner::new(&repo, connection.options());
+            let verifier = zedb_ch::verify::Verifier::new(&repo, &runner, binary);
+            let targets = targets.targets()?;
+            let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
+            let drifts = runtime
+                .block_on(verifier.verify(&targets))
+                .map_err(|error| error.to_string())?;
+            let mut drifted = false;
+            for drift in &drifts {
+                let head = drift
+                    .head
+                    .map(|head| format!("{head:05}"))
+                    .unwrap_or_else(|| "none".into());
+                if drift.findings.is_empty() {
+                    println!("{}: clean at {head}", drift.database);
+                } else {
+                    drifted = true;
+                    println!(
+                        "{}: {} drift finding(s) at {head}",
+                        drift.database,
+                        drift.findings.len()
+                    );
+                    for finding in &drift.findings {
+                        println!("  {finding}");
+                    }
+                }
+            }
+            if drifted {
+                Err("drift detected".into())
+            } else {
+                Ok(())
+            }
         }
         Command::Apply {
             connection,

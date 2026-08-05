@@ -19,6 +19,7 @@ mod rowbinary;
 pub mod runner;
 mod schema;
 mod types;
+pub mod verify;
 
 pub use client::{ChClient, ChConfig, QueryProgress, QueryStreamEvent, QueryStreamSummary};
 pub use error::{ChError, Result};

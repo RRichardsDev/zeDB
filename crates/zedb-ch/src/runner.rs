@@ -116,6 +116,11 @@ impl<'a> Runner<'a> {
         }
     }
 
+    /// The underlying client, for read-only companions like verify.
+    pub fn client(&self) -> &ChClient {
+        &self.client
+    }
+
     fn tracking_table(&self) -> String {
         format!("{}.zedb_migrations", self.repo.config.tracking.database)
     }

@@ -227,3 +227,68 @@ async fn fleet_targeting_discovers_and_skips_exclusions() {
         .to_string();
     assert!(error.contains("frozen"), "{error}");
 }
+
+/// M7 done-condition: a freshly upgraded database verifies clean, manual
+/// drift (added column, changed view) is detected and named, and a
+/// database behind head verifies clean at its own position.
+#[tokio::test]
+async fn verify_detects_drift_at_chain_position() {
+    let Some(binary) = any_cached_binary() else {
+        eprintln!("skipping: no cached clickhouse binary (run `zedb pin`)");
+        return;
+    };
+    let server = EphemeralServer::start(&binary).unwrap();
+    let repo = MigrationRepo::open_root(&fixture()).unwrap();
+    let client = zedb_ch::ChClient::new(options(&server, true).server);
+
+    let runner = Runner::new(&repo, options(&server, true));
+    runner
+        .upgrade(&dbs(&["demo_clean", "demo_drifted", "demo_behind"]), None)
+        .await
+        .unwrap();
+    runner
+        .rollback_to(&dbs(&["demo_behind"]), 0, false)
+        .await
+        .unwrap();
+
+    let verifier = zedb_ch::verify::Verifier::new(&repo, &runner, binary.clone());
+
+    let drifts = verifier
+        .verify(&dbs(&["demo_clean", "demo_behind"]))
+        .await
+        .unwrap();
+    for drift in &drifts {
+        assert!(
+            drift.findings.is_empty(),
+            "{}: {:?}",
+            drift.database,
+            drift.findings
+        );
+    }
+    assert_eq!(drifts[1].head, Some(0), "demo_behind sits at the baseline");
+
+    // Manual drift: an added column and a foreign table.
+    client
+        .execute("ALTER TABLE demo_drifted.events ADD COLUMN sneaky UInt8")
+        .await
+        .unwrap();
+    client
+        .execute("CREATE TABLE demo_drifted.rogue (x UInt8) ENGINE = Memory")
+        .await
+        .unwrap();
+    let drifts = verifier.verify(&dbs(&["demo_drifted"])).await.unwrap();
+    let findings = &drifts[0].findings;
+    assert_eq!(findings.len(), 2, "{findings:?}");
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.contains("drifted: ${db}.events") && finding.contains("sneaky")),
+        "{findings:?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.contains("unexpected") && finding.contains("rogue")),
+        "{findings:?}"
+    );
+}
