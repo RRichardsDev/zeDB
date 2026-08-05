@@ -363,11 +363,6 @@ impl Workspace {
         .detach();
         let schema_filter = Self::input("", "Filter schema", false, cx);
         cx.observe(&schema_filter, |_, _, cx| cx.notify()).detach();
-        let query_editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("sql")
-                .default_value(M8_HIGHLIGHTING_SAMPLE)
-        });
         // Vim keys must be intercepted before action dispatch: the editor's
         // own key bindings (Enter, Backspace, arrows) run before any key-down
         // listener and would edit the buffer behind modalkit's back.
@@ -380,28 +375,25 @@ impl Workspace {
             }
         })
         .detach();
-        let query_tabs = vec![QueryTab {
-            id: 1,
-            editor: query_editor,
-            result_grid: cx.new(GridSpike::new),
-            result_columns: 0,
-            result_rows: 0,
-            has_result: false,
-            max_rows: MaxRows::Rows100k,
-            result_capped: false,
-            read_rows: None,
-            read_bytes: None,
-            total_rows: None,
-            received_bytes: 0,
-            editor_height: 220.0,
-            status_height: 52.0,
-            outcome: QueryOutcome::Idle,
-            started_at: None,
-            elapsed: None,
-            vim: VimController::new(M8_HIGHLIGHTING_SAMPLE),
-            vim_command_line: None,
-            vim_recording: None,
-        }];
+        // Tabs saved by an update restart come back; otherwise start with the
+        // sample query.
+        let saved_session = zedb_core::take_update_session();
+        let tab_contents: Vec<String> = match &saved_session {
+            Some(session) if !session.tabs.is_empty() => {
+                session.tabs.iter().map(|tab| tab.sql.clone()).collect()
+            }
+            _ => vec![M8_HIGHLIGHTING_SAMPLE.to_string()],
+        };
+        let active_query_tab = saved_session
+            .as_ref()
+            .map(|session| session.active_tab.min(tab_contents.len() - 1))
+            .unwrap_or(0);
+        let next_query_tab_id = tab_contents.len() + 1;
+        let query_tabs: Vec<QueryTab> = tab_contents
+            .into_iter()
+            .enumerate()
+            .map(|(index, sql)| Self::make_query_tab(index + 1, &sql, window, cx))
+            .collect();
         match load_connections() {
             Ok(connections) => Self {
                 selected: (!connections.is_empty()).then_some(0),
@@ -428,8 +420,8 @@ impl Workspace {
                 connections_pane_height: 430.0,
                 resizing_sidebar_sections: false,
                 query_tabs,
-                active_query_tab: 0,
-                next_query_tab_id: 2,
+                active_query_tab,
+                next_query_tab_id,
                 show_query_editor: false,
                 fleet: FleetState::new(
                     fleet_repo_path.as_deref().unwrap_or(""),
@@ -471,8 +463,8 @@ impl Workspace {
                 connections_pane_height: 430.0,
                 resizing_sidebar_sections: false,
                 query_tabs,
-                active_query_tab: 0,
-                next_query_tab_id: 2,
+                active_query_tab,
+                next_query_tab_id,
                 show_query_editor: false,
                 fleet: FleetState::new(
                     fleet_repo_path.as_deref().unwrap_or(""),
@@ -581,6 +573,21 @@ impl Workspace {
     }
 
     fn relaunch_updated(&mut self, cx: &mut Context<Self>) {
+        let session = zedb_core::UpdateSession {
+            tabs: self
+                .query_tabs
+                .iter()
+                .map(|tab| zedb_core::SavedQueryTab {
+                    sql: tab.editor.read(cx).value().to_string(),
+                })
+                .collect(),
+            active_tab: self.active_query_tab,
+        };
+        if let Err(error) = zedb_core::save_update_session(&session) {
+            // Losing open tabs is worse than delaying the restart.
+            self.flash_warning(format!("Could not save open tabs: {error}"), cx);
+            return;
+        }
         if let Some(bundle) = updates::current_bundle() {
             let _ = std::process::Command::new("open")
                 .arg("-n")
@@ -2268,13 +2275,15 @@ impl Workspace {
         cx.notify();
     }
 
-    fn add_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let id = self.next_query_tab_id;
-        self.next_query_tab_id += 1;
-        let editor = cx.new(|cx| InputState::new(window, cx).code_editor("sql"));
-        self.query_tabs.push(QueryTab {
+    fn make_query_tab(id: usize, sql: &str, window: &mut Window, cx: &mut Context<Self>) -> QueryTab {
+        let default_value = sql.to_string();
+        QueryTab {
             id,
-            editor,
+            editor: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .code_editor("sql")
+                    .default_value(default_value)
+            }),
             result_grid: cx.new(GridSpike::new),
             result_columns: 0,
             result_rows: 0,
@@ -2290,10 +2299,17 @@ impl Workspace {
             outcome: QueryOutcome::Idle,
             started_at: None,
             elapsed: None,
-            vim: VimController::new(""),
+            vim: VimController::new(sql),
             vim_command_line: None,
             vim_recording: None,
-        });
+        }
+    }
+
+    fn add_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self.next_query_tab_id;
+        self.next_query_tab_id += 1;
+        let tab = Self::make_query_tab(id, "", window, cx);
+        self.query_tabs.push(tab);
         self.active_query_tab = self.query_tabs.len() - 1;
         self.show_query_editor = true;
         self.show_fleet = false;

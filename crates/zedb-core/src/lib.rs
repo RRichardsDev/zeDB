@@ -7,10 +7,12 @@ mod preferences;
 pub mod repo;
 #[cfg(target_vendor = "apple")]
 pub mod secrets;
+mod session;
 mod store;
 mod value;
 
 pub use connection::{ConnectionConfig, ConnectionNode, EnvTier};
 pub use preferences::{load_preferences, save_preferences, Preferences};
+pub use session::{save_update_session, take_update_session, SavedQueryTab, UpdateSession};
 pub use store::{load_connections, save_connections, StoreError};
 pub use value::{ColumnMeta, QueryResult, Value};
