@@ -5,6 +5,7 @@
 mod connection;
 mod preferences;
 pub mod repo;
+#[cfg(target_vendor = "apple")]
 pub mod secrets;
 mod store;
 mod value;
