@@ -103,6 +103,15 @@ the connection credentials never leave zeDB's process, and the tools
 version in lockstep with the app. The agent can therefore answer data
 questions and iterate on SQL against the live connection by itself.
 
+Read-only is not the same as harmless: an agent iterating on SQL can
+scan a cluster to its knees. Agent queries carry server-side caps
+(max_execution_time, max_result_rows, max_bytes_to_read) with
+defaults tight enough to be safe on production, loosenable per
+connection in its settings. And the thread always wears the
+connection's environment tier badge (the dev/staging/production
+colors), so there is never doubt about whose data the agent is
+touching.
+
 The pane is also ambiently context-aware: when a message is sent, the
 app attaches a snapshot of what the user is looking at (which screen;
 the selected database and its row status; drift findings already
@@ -147,13 +156,21 @@ proposal and reality. The tool exists only while the pane session is
 attached to the running app; a terminal agent using zedb mcp does not
 get it.
 
+Agents also edit repo files through their own tools, which today the
+app only notices on manual refresh. While a pane session is attached,
+the app watches the open repo: file changes refresh the chain, matrix
+staleness, and git chip, and an authoring overlay showing a migration
+that changed underneath says so instead of silently editing history
+that moved.
+
 Done when: the sentence above produces a correct two-sided draft in
 the overlay in one round trip, an edited proposal can be re-proposed
 without clobbering user edits silently (the overlay warns before
 replacing a dirty draft), saving still requires the human check, a
-query from the thread lands in a query tab in one click, and a write
+query from the thread lands in a query tab in one click, a write
 statement the agent could not run arrives as an editor draft rather
-than an apology.
+than an apology, and an agent editing a migration file on disk is
+reflected in the matrix and git chip without a manual refresh.
 
 ### M5. Permissions and daily-driver polish
 
@@ -182,6 +199,27 @@ walk and the soak) continue in parallel; nothing here blocks them.
 - Multi-thread management, thread sharing, or persistence beyond
   reopening the last transcript.
 - Building our own agent. The pane is a client.
+
+## Risks
+
+- **Streaming markdown rendering.** Mostly defused: gpui-component
+  (already a dependency) ships TextView with GFM Markdown rendering.
+  What remains is integration cost: re-rendering efficiently as chunks
+  stream in, and routing fenced SQL blocks through the existing
+  highlighting. Budget for it in M1, not zero.
+- **ACP is young.** The protocol and the adapters version fast;
+  pinning the protocol version and testing against a scripted fake
+  agent (M0) is the defense, and adapter breakage must degrade to an
+  actionable message in the picker, not a dead pane.
+- **Database content is untrusted model input.** Table comments,
+  names, and data flow into the agent's context through the query and
+  schema tools; a hostile comment is a prompt-injection path. The
+  blast radius is already bounded by design (read-only tools,
+  human-gated editors, no reachable write paths), and that boundary is
+  the mitigation to preserve, not a filter to write.
+- **Subprocess lifecycle.** Agent processes outliving the pane, dying
+  mid-turn, or leaking on quit; M0's client owns spawn-to-shutdown and
+  the tests must cover the ugly exits.
 
 ## Phase exit
 

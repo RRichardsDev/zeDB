@@ -29,6 +29,11 @@ phase assignment.
 - Per-database parameter overrides UI (the ancestor's offset inheritance,
   generalized).
 
+## Agent pane (Phase 3.1 spillover)
+
+- Preset prompts as one-click thread starters: explain this migration,
+  why is this database drifted, review my draft.
+
 ## Ops (explicitly out of scope for cluster management, parked hard)
 
 - Read-only ops panels: replication lag, mutation queues, disk, running
