@@ -8338,7 +8338,7 @@ dependencies = [
 
 [[package]]
 name = "zedb-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gpui",
  "gpui-component",
@@ -8354,7 +8354,7 @@ dependencies = [
 
 [[package]]
 name = "zedb-ch"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -8369,7 +8369,7 @@ dependencies = [
 
 [[package]]
 name = "zedb-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "serde_json",
@@ -8381,7 +8381,7 @@ dependencies = [
 
 [[package]]
 name = "zedb-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
