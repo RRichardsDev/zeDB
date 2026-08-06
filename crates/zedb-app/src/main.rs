@@ -371,16 +371,27 @@ impl Workspace {
         };
         let fleet_repo_path = preferences.fleet_repo.clone();
         let fleet_cluster = preferences.fleet_cluster.clone();
-        let update_check = rt::tokio().spawn(updates::check());
-        cx.spawn(async move |this, cx| {
-            let Ok(Some(update)) = update_check.await else {
-                return;
-            };
-            this.update(cx, |this, cx| {
-                this.update_available = Some(update);
-                cx.notify();
-            })
-            .ok();
+        // Check for updates now and every five minutes (the health-poll
+        // cadence), so long-running instances learn about releases too.
+        cx.spawn(async move |this, cx| loop {
+            let update = rt::tokio().spawn(updates::check()).await.ok().flatten();
+            if let Some(update) = update {
+                this.update(cx, |this, cx| {
+                    let fresh = this
+                        .update_available
+                        .as_ref()
+                        .map(|current| current.version != update.version)
+                        .unwrap_or(true);
+                    // Never disturb an install already in progress or
+                    // waiting on a restart.
+                    if fresh && this.update_phase == UpdatePhase::Available {
+                        this.update_available = Some(update);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+            Timer::after(Duration::from_secs(300)).await;
         })
         .detach();
         let schema_filter = Self::input("", "Filter schema", false, cx);
