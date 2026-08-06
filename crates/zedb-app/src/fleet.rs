@@ -1894,6 +1894,15 @@ impl Workspace {
 
         let migrations_for_rows = migrations.clone();
         let rows_for_list = rows.clone();
+        // Verified drift state per database, for the matrix badges:
+        // Some(count) = drifted, Some(0) = verified clean, None = not
+        // verified this session.
+        let drift_for_list: std::collections::HashMap<String, usize> = self
+            .fleet
+            .drift
+            .iter()
+            .map(|(database, info)| (database.clone(), info.findings.len()))
+            .collect();
         let list = uniform_list(
             "fleet-matrix",
             rows.len(),
@@ -1959,16 +1968,23 @@ impl Workspace {
                                         .child(glyph),
                                 );
                             }
+                            let drift = drift_for_list.get(&row.database).copied();
                             let state = if let Some(group) = &row.excluded {
                                 format!("excluded ({group})")
                             } else if !row.failed.is_empty() {
                                 let failed: Vec<String> =
                                     row.failed.iter().map(|n| format!("{n:05}")).collect();
                                 format!("FAILED: {}", failed.join(", "))
+                            } else if matches!(drift, Some(count) if count > 0) {
+                                format!("DRIFTED: {} finding(s)", drift.unwrap_or(0))
                             } else if !row.pending.is_empty() {
                                 format!("{} pending", row.pending.len())
                             } else if row.head == latest_fleet {
-                                "up to date".into()
+                                if drift == Some(0) {
+                                    "up to date, verified".into()
+                                } else {
+                                    "up to date".into()
+                                }
                             } else {
                                 String::new()
                             };
@@ -1976,6 +1992,8 @@ impl Workspace {
                                 TEXT_DIM
                             } else if !row.failed.is_empty() {
                                 DANGER
+                            } else if matches!(drift, Some(count) if count > 0) {
+                                ACCENT_CUSTOM
                             } else if !row.pending.is_empty() {
                                 ACCENT_PENDING
                             } else {
