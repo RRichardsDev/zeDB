@@ -66,6 +66,10 @@ pub struct ThreadState {
     pub include_context: bool,
     /// Which cached connection this thread belongs to.
     pub cache_key: String,
+    /// Tool activity happened since the last message chunk, so the
+    /// next chunk starts a fresh paragraph instead of gluing onto the
+    /// previous one (approval notices and answers otherwise merge).
+    pub break_assistant: bool,
     pub connection: Arc<AgentConnection>,
     pub session_id: Option<String>,
     pub entries: Vec<ThreadEntry>,
@@ -251,6 +255,7 @@ impl Workspace {
             agent_icon: icon.clone(),
             include_context: true,
             cache_key: cache_key.clone(),
+            break_assistant: false,
             connection: connection.clone(),
             session_id: None,
             entries: Vec::new(),
@@ -491,19 +496,23 @@ impl Workspace {
         }
         match event {
             AgentEvent::MessageChunk { text } => {
-                if let Some(ThreadEntry::Assistant(existing)) = thread.entries.last_mut() {
-                    existing.push_str(&text);
-                } else {
-                    thread.entries.push(ThreadEntry::Assistant(text));
+                match thread.entries.last_mut() {
+                    Some(ThreadEntry::Assistant(existing)) if !thread.break_assistant => {
+                        existing.push_str(&text);
+                    }
+                    _ => thread.entries.push(ThreadEntry::Assistant(text)),
                 }
+                thread.break_assistant = false;
             }
             AgentEvent::ThoughtChunk { .. } => {}
             AgentEvent::ToolCall {
                 id, title, status, ..
             } => {
                 thread.entries.push(ThreadEntry::Tool { id, title, status });
+                thread.break_assistant = true;
             }
             AgentEvent::ToolCallUpdate { id, status, .. } => {
+                thread.break_assistant = true;
                 for entry in thread.entries.iter_mut().rev() {
                     if let ThreadEntry::Tool {
                         id: existing,
