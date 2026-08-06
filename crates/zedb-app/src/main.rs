@@ -784,6 +784,29 @@ impl Workspace {
             .child(tier.label().to_uppercase())
     }
 
+    /// The connection's write posture, worn next to the tier: quiet
+    /// when read-only (the safe default), loud when writes are open.
+    fn write_badge(read_only: bool) -> impl IntoElement {
+        div()
+            .px_2()
+            .py(px(2.))
+            .rounded(px(3.))
+            .text_xs()
+            .map(|badge| {
+                if read_only {
+                    badge
+                        .bg(rgb(0x2a2f37))
+                        .text_color(rgb(TEXT_DIM))
+                        .child("READ-ONLY")
+                } else {
+                    badge
+                        .bg(rgb(0x4d2c2c))
+                        .text_color(rgb(0xe0806f))
+                        .child("WRITE")
+                }
+            })
+    }
+
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self
             .connections
@@ -823,7 +846,14 @@ impl Workspace {
                             .justify_between()
                             .text_color(rgb(TEXT))
                             .child(connection.name.clone())
-                            .child(Self::tier_badge(connection.tier)),
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(Self::write_badge(connection.read_only))
+                                    .child(Self::tier_badge(connection.tier)),
+                            ),
                     )
                     .child(
                         div()
