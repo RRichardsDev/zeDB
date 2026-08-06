@@ -86,6 +86,89 @@ pub fn read_git_status(root: &Path) -> Option<GitStatus> {
     Some(parse_porcelain_v2(&String::from_utf8_lossy(&output.stdout)))
 }
 
+/// Paths with uncommitted changes (staged, unstaged, or untracked),
+/// relative to the repo root. None outside a git work tree.
+pub fn changed_paths(root: &Path) -> Option<Vec<String>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["status", "--porcelain=v2"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut paths = Vec::new();
+    for line in text.lines() {
+        let path = if let Some(rest) = line.strip_prefix("? ") {
+            Some(rest.to_string())
+        } else if line.starts_with("1 ") || line.starts_with("u ") {
+            // `1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>` (unmerged
+            // lines carry two extra hash fields before the path).
+            let skip = if line.starts_with("1 ") { 8 } else { 10 };
+            line.splitn(skip + 1, ' ').nth(skip).map(str::to_string)
+        } else if line.starts_with("2 ") {
+            // Renames: `... <Xscore> <path>\t<origPath>`.
+            line.splitn(10, ' ')
+                .nth(9)
+                .and_then(|tail| tail.split('\t').next())
+                .map(str::to_string)
+        } else {
+            None
+        };
+        if let Some(path) = path {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Some(paths)
+}
+
+fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|error| format!("could not run git: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.success() {
+        Ok(format!("{}{}", stdout.trim(), stderr.trim()))
+    } else {
+        // git explains itself well; hand its words to the user intact.
+        Err(if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            stderr.trim().to_string()
+        })
+    }
+}
+
+/// Stage exactly `pathspecs` and commit them with `message`; returns the
+/// short commit hash. The commit names the pathspecs explicitly, so
+/// anything else already staged stays out of it.
+pub fn commit_paths(root: &Path, pathspecs: &[String], message: &str) -> Result<String, String> {
+    if pathspecs.is_empty() {
+        return Err("nothing to commit".into());
+    }
+    let mut add = vec!["add", "--"];
+    add.extend(pathspecs.iter().map(String::as_str));
+    run_git(root, &add)?;
+    let mut commit = vec!["commit", "-m", message, "--"];
+    commit.extend(pathspecs.iter().map(String::as_str));
+    run_git(root, &commit)?;
+    run_git(root, &["rev-parse", "--short", "HEAD"])
+}
+
+/// Push the current branch with the user's own git auth. Failures (no
+/// upstream, auth, non-fast-forward) return git's message verbatim.
+pub fn push(root: &Path) -> Result<String, String> {
+    run_git(root, &["push"])
+}
+
 fn parse_porcelain_v2(text: &str) -> GitStatus {
     let mut branch = None;
     let mut ahead_behind = None;
@@ -184,5 +267,36 @@ mod tests {
         assert_eq!(status.branch.as_deref(), Some("main"));
         assert_eq!(status.dirty, 1);
         assert_eq!(status.ahead_behind, None);
+    }
+
+    #[test]
+    fn commits_exactly_the_named_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::create_dir_all(dir.path().join("migrations")).unwrap();
+        std::fs::write(dir.path().join("migrations/00100.sql"), "SELECT 1;").unwrap();
+        std::fs::write(dir.path().join("unrelated.txt"), "keep out").unwrap();
+
+        let changed = changed_paths(dir.path()).unwrap();
+        assert_eq!(changed, vec!["migrations/", "unrelated.txt"]);
+
+        let hash = commit_paths(dir.path(), &["migrations".to_string()], "add 00100").unwrap();
+        assert!(!hash.is_empty());
+        let status = read_git_status(dir.path()).unwrap();
+        assert_eq!(status.dirty, 1, "unrelated.txt must stay uncommitted");
+        assert!(push(dir.path()).is_err(), "push without a remote must fail");
     }
 }

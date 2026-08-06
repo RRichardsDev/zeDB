@@ -1,5 +1,6 @@
 mod author;
 mod codegen;
+mod commit;
 mod components;
 mod fleet;
 mod grid_spike;
@@ -301,6 +302,7 @@ struct Workspace {
     author: Option<author::AuthorState>,
     regen: Option<codegen::RegenState>,
     checks: Option<codegen::ChecksState>,
+    commit: Option<commit::CommitState>,
     show_fleet: bool,
     health_poll_generation: u64,
     connections: Vec<ConnectionConfig>,
@@ -447,6 +449,7 @@ impl Workspace {
                 author: None,
                 regen: None,
                 checks: None,
+                commit: None,
                 health_poll_generation: 0,
                 query_abort: None,
                 query_error_decision: None,
@@ -493,6 +496,7 @@ impl Workspace {
                 author: None,
                 regen: None,
                 checks: None,
+                commit: None,
                 health_poll_generation: 0,
                 query_abort: None,
                 query_error_decision: None,

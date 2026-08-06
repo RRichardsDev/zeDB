@@ -514,3 +514,20 @@ Status: implementation complete, awaiting UI acceptance.
   construction; verified on a demo-fleet copy where an app-style
   authored migration produced the expected single stale line, the
   written tree carried the new column, and equivalence passed.
+
+## Phase 3 M3: commit and push in the app (2026-08-06)
+
+- zedb-core git grows the mutation half: changed_paths (porcelain v2,
+  handles renames and unmerged entries), commit_paths (stages and
+  commits exactly the named pathspecs, so anything else already staged
+  stays out by construction), and push (git's own words verbatim on
+  failure). Tested: an unrelated dirty file survives a migrations-only
+  commit untouched, and push without a remote fails readably.
+- The fleet toolbar shows Commit only while the checkout is dirty. The
+  modal partitions dirty paths into repo-owned (migrations,
+  current-state, zedb.toml, exclusions.toml), which are listed and
+  committed, versus everything else, which is shown and left strictly
+  alone. The message is templated from the tip migration's headline and
+  editable in a multi-line input. Push is a separate button with its
+  own progress and verbatim git errors; the git chip refreshes after
+  both steps. No forge, no conflict resolution, no history rewriting.

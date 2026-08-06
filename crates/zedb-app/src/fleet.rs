@@ -1361,6 +1361,32 @@ impl Workspace {
                     })
                     .on_click(cx.listener(|this, _, _, cx| this.codegen_start_checks(cx))),
             )
+            .when(
+                self.fleet.git.as_ref().is_some_and(|git| git.dirty > 0),
+                |controls| {
+                    controls.child(
+                        div()
+                            .id("fleet-commit")
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .text_color(rgb(TEXT_DIM))
+                            .child("Commit")
+                            .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                            .tooltip(|window, cx| {
+                                gpui_component::tooltip::Tooltip::new(
+                                    "Commit the repo's own changes and push to your remote",
+                                )
+                                .build(window, cx)
+                            })
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.commit_open(window, cx)),
+                            ),
+                    )
+                },
+            )
             .when(unlocked, |controls| {
                 controls.child(
                     div()
@@ -1803,5 +1829,6 @@ impl Workspace {
             .when_some(modal, |root, modal| root.child(modal))
             .when_some(self.author_panel(cx), |root, panel| root.child(panel))
             .when_some(self.codegen_panel(cx), |root, panel| root.child(panel))
+            .when_some(self.commit_panel(cx), |root, panel| root.child(panel))
     }
 }
