@@ -13,6 +13,7 @@ mod client;
 pub mod ephemeral;
 mod error;
 pub mod lifecycle;
+pub mod mcp;
 pub mod pin;
 pub mod regen;
 pub mod replay;

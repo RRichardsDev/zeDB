@@ -60,6 +60,34 @@ impl ChClient {
         }
     }
 
+    /// Run a query with server-side guardrails on top of read-only:
+    /// the agent-facing path (docs/PHASE-3.1.md M3). Time, row, and
+    /// byte caps are enforced by ClickHouse, not by inspecting SQL.
+    pub async fn query_guarded(
+        &self,
+        sql: &str,
+        max_execution_time_secs: u32,
+        max_result_rows: u64,
+        max_bytes_to_read: u64,
+    ) -> Result<QueryResult> {
+        let time = max_execution_time_secs.to_string();
+        let rows = max_result_rows.to_string();
+        let bytes = max_bytes_to_read.to_string();
+        let body = self
+            .request(
+                sql,
+                &[
+                    ("default_format", "RowBinaryWithNamesAndTypes"),
+                    ("max_execution_time", &time),
+                    ("max_result_rows", &rows),
+                    ("result_overflow_mode", "break"),
+                    ("max_bytes_to_read", &bytes),
+                ],
+            )
+            .await?;
+        rowbinary::decode(&body)
+    }
+
     /// Run a query and materialize the full typed result.
     pub async fn query(&self, sql: &str) -> Result<QueryResult> {
         let body = self

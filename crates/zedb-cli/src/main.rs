@@ -142,6 +142,17 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Serve read-only fleet and query tools to AI agents over MCP
+    /// (stdio). Connection optional: repo tools work without one.
+    Mcp {
+        /// Server HTTP URL, e.g. http://localhost:8123.
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(long, default_value = "default")]
+        user: String,
+        #[arg(long, default_value = "")]
+        password: String,
+    },
     /// Apply one targeted migration to specific databases.
     Apply {
         #[command(flatten)]
@@ -642,6 +653,27 @@ fn run(cli: Cli) -> Result<(), String> {
                 report.exclusion_groups
             );
             println!("next: zedb pin, zedb regen, zedb check");
+            Ok(())
+        }
+        Command::Mcp {
+            server,
+            user,
+            password,
+        } => {
+            // The repo is optional here: query tools alone are useful.
+            let repo = MigrationRepo::open(&cli.repo).ok();
+            let config = server.map(|url| zedb_ch::ChConfig {
+                url,
+                user,
+                password: (!password.is_empty()).then_some(password),
+                database: None,
+                read_only: true,
+            });
+            let mcp = zedb_ch::mcp::McpServer::new(repo, config, Default::default());
+            let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
+            runtime
+                .block_on(zedb_ch::mcp::serve_stdio(mcp))
+                .map_err(|error| error.to_string())?;
             Ok(())
         }
         Command::ImportTracking { connection, from } => {
