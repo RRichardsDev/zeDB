@@ -143,6 +143,7 @@ impl AssetSource for Assets {
             "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
             "icons/close.svg" => Some(include_bytes!("../assets/icons/close.svg")),
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
+            "icons/copy.svg" => Some(include_bytes!("../assets/icons/copy.svg")),
             "icons/check-chain.svg" => Some(include_bytes!("../assets/icons/check-chain.svg")),
             "icons/commit.svg" => Some(include_bytes!("../assets/icons/commit.svg")),
             "icons/fleet.svg" => Some(include_bytes!("../assets/icons/fleet.svg")),
@@ -233,6 +234,18 @@ struct SelectNode {
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json, no_register)]
 struct DuplicateConnection {
+    index: usize,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct EditConnection {
+    index: usize,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct DeleteConnection {
     index: usize,
 }
 
@@ -875,7 +888,9 @@ impl Workspace {
                         cx.notify();
                     }))
                     .context_menu(move |menu, _, _| {
-                        menu.menu("Duplicate", Box::new(DuplicateConnection { index }))
+                        menu.menu("Edit", Box::new(EditConnection { index }))
+                            .menu("Duplicate", Box::new(DuplicateConnection { index }))
+                            .menu("Delete", Box::new(DeleteConnection { index }))
                     })
                     .child(
                         div()
@@ -1039,6 +1054,39 @@ impl Workspace {
                                             .border_color(rgb(BORDER))
                                             .child(
                                                 div()
+                                                    .id("duplicate-connection")
+                                                    .size(px(24.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded(px(3.))
+                                                    .text_color(rgb(TEXT_DIM))
+                                                    .child(
+                                                        svg()
+                                                            .path("icons/copy.svg")
+                                                            .size(px(14.))
+                                                            .text_color(rgb(TEXT_DIM)),
+                                                    )
+                                                    .hover(|button| {
+                                                        button
+                                                            .bg(rgb(0x303640))
+                                                            .text_color(rgb(TEXT))
+                                                            .cursor_pointer()
+                                                    })
+                                                    .tooltip(|window, cx| {
+                                                        gpui_component::tooltip::Tooltip::new(
+                                                            "Duplicate connection",
+                                                        )
+                                                        .build(window, cx)
+                                                    })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if let Some(index) = this.selected {
+                                                            this.duplicate_connection(index, cx)
+                                                        }
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
                                                     .id("edit-connection")
                                                     .size(px(24.))
                                                     .flex()
@@ -1057,6 +1105,12 @@ impl Workspace {
                                                             .bg(rgb(0x303640))
                                                             .text_color(rgb(TEXT))
                                                             .cursor_pointer()
+                                                    })
+                                                    .tooltip(|window, cx| {
+                                                        gpui_component::tooltip::Tooltip::new(
+                                                            "Edit connection",
+                                                        )
+                                                        .build(window, cx)
                                                     })
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.start_edit(cx)
@@ -1084,6 +1138,12 @@ impl Workspace {
                                                                     .bg(rgb(0x3d2528))
                                                                     .text_color(rgb(DANGER))
                                                                     .cursor_pointer()
+                                                            })
+                                                            .tooltip(|window, cx| {
+                                                                gpui_component::tooltip::Tooltip::new(
+                                                                    "Delete connection",
+                                                                )
+                                                                .build(window, cx)
                                                             })
                                                             .on_click(cx.listener(
                                                                 |this, _, _, cx| {
@@ -4382,6 +4442,14 @@ impl Render for Workspace {
             )
             .on_action(cx.listener(|this, action: &DuplicateConnection, _, cx| {
                 this.duplicate_connection(action.index, cx)
+            }))
+            .on_action(cx.listener(|this, action: &EditConnection, _, cx| {
+                this.selected = Some(action.index);
+                this.start_edit(cx)
+            }))
+            .on_action(cx.listener(|this, action: &DeleteConnection, _, cx| {
+                this.selected = Some(action.index);
+                this.request_delete(cx)
             }))
             .on_action(
                 cx.listener(|this, action: &agent_pane::StartAgentThread, window, cx| {
