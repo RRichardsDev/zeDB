@@ -3,6 +3,7 @@
 //! Everything the CLI and the GPUI app share lives here. See docs/SPEC.md.
 
 mod connection;
+pub mod git;
 mod preferences;
 pub mod repo;
 #[cfg(target_vendor = "apple")]

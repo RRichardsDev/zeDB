@@ -237,7 +237,7 @@ pub async fn check_lifecycle(
         .collect();
     for number in &targeted {
         runner
-            .apply_targeted(&targets, *number)
+            .apply_targeted_for_check(&targets, *number)
             .await
             .map_err(|error| fail(&format!("apply {number:05}"), error.to_string()))?;
         runner
@@ -248,7 +248,11 @@ pub async fn check_lifecycle(
     if !targeted.is_empty() {
         step(
             &mut steps,
-            format!("smoke-tested {} targeted customisation(s)", targeted.len()),
+            format!(
+                "smoke-tested {} targeted customisation(s) (allow lists bypassed \
+                 for the ephemeral database)",
+                targeted.len()
+            ),
         );
     }
 

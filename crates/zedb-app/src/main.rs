@@ -1,3 +1,6 @@
+mod author;
+mod codegen;
+mod commit;
 mod components;
 mod fleet;
 mod grid_spike;
@@ -23,7 +26,7 @@ use gpui_component::{
     button::Button,
     highlighter::HighlightTheme,
     input::{Input, InputState, Position},
-    menu::{DropdownMenu, PopupMenu},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenu},
     scroll::ScrollableElement,
     Disableable, Root, Theme,
 };
@@ -136,7 +139,13 @@ impl AssetSource for Assets {
             "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
             "icons/close.svg" => Some(include_bytes!("../assets/icons/close.svg")),
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
+            "icons/check-chain.svg" => Some(include_bytes!("../assets/icons/check-chain.svg")),
+            "icons/commit.svg" => Some(include_bytes!("../assets/icons/commit.svg")),
             "icons/fleet.svg" => Some(include_bytes!("../assets/icons/fleet.svg")),
+            "icons/migration-plus.svg" => {
+                Some(include_bytes!("../assets/icons/migration-plus.svg"))
+            }
+            "icons/regen.svg" => Some(include_bytes!("../assets/icons/regen.svg")),
             "icons/folder-open.svg" => Some(include_bytes!("../assets/icons/folder-open.svg")),
             "icons/lock.svg" => Some(include_bytes!("../assets/icons/lock.svg")),
             "icons/lock-open.svg" => Some(include_bytes!("../assets/icons/lock-open.svg")),
@@ -206,6 +215,12 @@ struct EndpointHealth {
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json, no_register)]
 struct SelectNode {
+    index: usize,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct DuplicateConnection {
     index: usize,
 }
 
@@ -296,6 +311,10 @@ enum QueryResizeTarget {
 
 struct Workspace {
     fleet: FleetState,
+    author: Option<author::AuthorState>,
+    regen: Option<codegen::RegenState>,
+    checks: Option<codegen::ChecksState>,
+    commit: Option<commit::CommitState>,
     show_fleet: bool,
     health_poll_generation: u64,
     connections: Vec<ConnectionConfig>,
@@ -439,6 +458,10 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
+                author: None,
+                regen: None,
+                checks: None,
+                commit: None,
                 health_poll_generation: 0,
                 query_abort: None,
                 query_error_decision: None,
@@ -482,6 +505,10 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
+                author: None,
+                regen: None,
+                checks: None,
+                commit: None,
                 health_poll_generation: 0,
                 query_abort: None,
                 query_error_decision: None,
@@ -757,6 +784,29 @@ impl Workspace {
             .child(tier.label().to_uppercase())
     }
 
+    /// The connection's write posture, worn next to the tier: quiet
+    /// when read-only (the safe default), loud when writes are open.
+    fn write_badge(read_only: bool) -> impl IntoElement {
+        div()
+            .px_2()
+            .py(px(2.))
+            .rounded(px(3.))
+            .text_xs()
+            .map(|badge| {
+                if read_only {
+                    badge
+                        .bg(rgb(0x2a2f37))
+                        .text_color(rgb(TEXT_DIM))
+                        .child("READ-ONLY")
+                } else {
+                    badge
+                        .bg(rgb(0x4d2c2c))
+                        .text_color(rgb(0xe0806f))
+                        .child("WRITE")
+                }
+            })
+    }
+
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self
             .connections
@@ -786,6 +836,9 @@ impl Workspace {
                         this.notice = None;
                         cx.notify();
                     }))
+                    .context_menu(move |menu, _, _| {
+                        menu.menu("Duplicate", Box::new(DuplicateConnection { index }))
+                    })
                     .child(
                         div()
                             .flex()
@@ -793,7 +846,14 @@ impl Workspace {
                             .justify_between()
                             .text_color(rgb(TEXT))
                             .child(connection.name.clone())
-                            .child(Self::tier_badge(connection.tier)),
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(Self::write_badge(connection.read_only))
+                                    .child(Self::tier_badge(connection.tier)),
+                            ),
                     )
                     .child(
                         div()
@@ -1471,6 +1531,41 @@ impl Workspace {
             editing: form.editing,
             original_name: form.original_name.clone(),
         })
+    }
+
+    /// Duplicate a saved connection under a fresh name. Passwords live
+    /// in the keychain keyed by connection name, so the copy has no
+    /// credentials until its first connect asks for them.
+    fn duplicate_connection(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(original) = self.connections.get(index) else {
+            return;
+        };
+        let mut copy = original.clone();
+        let base = format!("{} copy", copy.name);
+        let mut name = base.clone();
+        let mut suffix = 2;
+        while self.connections.iter().any(|c| c.name == name) {
+            name = format!("{base} {suffix}");
+            suffix += 1;
+        }
+        copy.name = name.clone();
+        self.connections.push(copy);
+        match save_connections(&self.connections) {
+            Ok(()) => {
+                self.selected = Some(self.connections.len() - 1);
+                self.notice = Some(format!(
+                    "Duplicated as \"{name}\"; the password is not copied, connecting will ask for it"
+                ));
+                self.notice_warning = false;
+            }
+            Err(error) => {
+                self.connections.pop();
+                self.notice = Some(format!("Could not save connections: {error}"));
+                self.notice_warning = true;
+                self.notice_flash_id += 1;
+            }
+        }
+        cx.notify();
     }
 
     fn sidebar_resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4178,6 +4273,9 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, action: &SelectNode, _, cx| this.select_node(action.index, cx)),
             )
+            .on_action(cx.listener(|this, action: &DuplicateConnection, _, cx| {
+                this.duplicate_connection(action.index, cx)
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.resizing_sidebar {
                     this.sidebar_width = f32::from(event.position.x).clamp(180.0, 480.0);
@@ -4188,6 +4286,12 @@ impl Render for Workspace {
                     let maximum = (viewport_height - 220.0).max(140.0);
                     this.connections_pane_height =
                         (f32::from(event.position.y) - 36.0).clamp(140.0, maximum);
+                    cx.notify();
+                }
+                if this.fleet.resizing_detail {
+                    let viewport_width = f32::from(window.viewport_size().width);
+                    this.fleet.detail_width = (viewport_width - f32::from(event.position.x))
+                        .clamp(280.0, (viewport_width - 400.0).max(280.0));
                     cx.notify();
                 }
                 if let Some((target, last_y)) = this.query_resize {
@@ -4212,6 +4316,7 @@ impl Render for Workspace {
                 cx.listener(|this, _: &MouseUpEvent, _, _| {
                     this.resizing_sidebar = false;
                     this.resizing_sidebar_sections = false;
+                    this.fleet.resizing_detail = false;
                     this.query_resize = None;
                 }),
             )
@@ -4220,6 +4325,7 @@ impl Render for Workspace {
                 cx.listener(|this, _: &MouseUpEvent, _, _| {
                     this.resizing_sidebar = false;
                     this.resizing_sidebar_sections = false;
+                    this.fleet.resizing_detail = false;
                     this.query_resize = None;
                 }),
             )

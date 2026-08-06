@@ -463,3 +463,116 @@ Status: implementation complete, awaiting UI acceptance.
   credential, so the live ladder walk is a human step. Deferred: admin
   credentials from the GUI, per-statement live progress (the modal shows
   per-run progress and the runner's error text).
+
+## Phase 3 M0: fleet git awareness (2026-08-06)
+
+- On the phase-3 branch. zedb-core gains a git module: shell out to the
+  user's git (status --porcelain=v2 --branch), parse branch, dirty entry
+  count, and ahead/behind the local remote-tracking ref. Not a checkout
+  means None, not an error; zeDB never fetches, so ahead/behind is as
+  fresh as the user's last fetch, and the doc comment says so.
+- Fleet view shows the summary (branch, dirty star, +ahead -behind) next
+  to the repo chip in the bottom strip, amber when stale; re-read on
+  every refresh. The action modal leads with the specifics (uncommitted
+  changes, behind upstream, detached HEAD) before the consent controls,
+  meeting M0's warn-before-the-ladder condition.
+
+## Phase 3 M1: authoring in the app (2026-08-06)
+
+- New migration drafts live entirely in memory: a fleet-toolbar "New
+  migration" button opens an overlay with upgrade.sql and rollback.sql
+  in the code editor surface, a rollback-class picker (clean /
+  structural / irreversible / no rollback) that rewrites the marker
+  line, and a chain-vs-targeted toggle. Check runs check_sql_text (new
+  text variant extracted from check_sql_file, which now delegates)
+  against the pinned binary via ensure_binary; errors render
+  file:line:col exactly as the CLI prints them.
+- Save is only enabled while the last passing check still matches the
+  editor text byte-for-byte; it then scaffolds the next chain number,
+  writes the draft over the templates, reopens the repo, and refreshes
+  the matrix. So a deliberate SQL error surfaces before anything is
+  written to the chain, which was the milestone's done-condition.
+- Verified headlessly: a simulated app save (scaffold + draft overwrite
+  on a demo-fleet copy) passes `zedb check sql` 10/10 and lists in the
+  chain with class and headline intact. Deferred: Vim mode in the
+  authoring editors (query tabs only for now), editing an existing tip
+  migration, check-as-you-type debounce (IDEAS.md has the live-check
+  entry).
+
+## Phase 3 M2: codegen in the app (2026-08-06)
+
+- Two fleet-toolbar buttons. Regen replays the chain through the pinned
+  binary in the background and shows diff_tree's churn lines (stale /
+  missing / unexpected per generated file) in a modal; writing
+  current-state is a separate explicit button, absent entirely when the
+  tree is in sync. Check chain runs sql, equivalence, and lifecycle
+  concurrently with per-check progress lines, passing summaries phrased
+  like the CLI's and failures rendered as the reports' difference lines.
+- Same functions as the CLI end to end (Regenerator, diff_tree,
+  write_tree, check_sql, check_equivalence, check_lifecycle), so the
+  M2 exactly-the-tree-zedb-regen-produces condition holds by
+  construction; verified on a demo-fleet copy where an app-style
+  authored migration produced the expected single stale line, the
+  written tree carried the new column, and equivalence passed.
+
+## Phase 3 M3: commit and push in the app (2026-08-06)
+
+- zedb-core git grows the mutation half: changed_paths (porcelain v2,
+  handles renames and unmerged entries), commit_paths (stages and
+  commits exactly the named pathspecs, so anything else already staged
+  stays out by construction), and push (git's own words verbatim on
+  failure). Tested: an unrelated dirty file survives a migrations-only
+  commit untouched, and push without a remote fails readably.
+- The fleet toolbar shows Commit only while the checkout is dirty. The
+  modal partitions dirty paths into repo-owned (migrations,
+  current-state, zedb.toml, exclusions.toml), which are listed and
+  committed, versus everything else, which is shown and left strictly
+  alone. The message is templated from the tip migration's headline and
+  editable in a multi-line input. Push is a separate button with its
+  own progress and verbatim git errors; the git chip refreshes after
+  both steps. No forge, no conflict resolution, no history rewriting.
+
+## Decluster missed quoted cluster names (2026-08-06)
+
+- First real M4-loop walk found it: an authored migration using
+  ON CLUSTER '${cluster}' (quoted, which ClickHouse accepts) survived
+  decluster because the regex only matched bare identifiers, so the
+  replay hit QUERY_IS_PROHIBITED on clickhouse-local. The regex now
+  accepts bare, single-quoted, double-quoted, and backticked names,
+  with unit tests for each and for ON CLUSTER inside a string literal
+  staying untouched. CRITICAL blast radius per impact analysis (regen,
+  verify, runner, CLI and app), but strictly widening.
+- With that fixed, the same walk produced the next, correct error:
+  the draft altered a table the chain never creates, which the replay
+  catches and syntax checks cannot. The modal wording is doing its job.
+
+## Migration view/edit from the matrix header (2026-08-06)
+
+- Clicking a migration number in the matrix header opens it in the
+  authoring overlay. Editability follows the only rule that matters:
+  a migration is a draft until it has been applied (or
+  customised-applied for targeted ones) on ANY database, judged from
+  the fleet status rows (head passed it and not pending); after that
+  it opens read-only with the applied count in the header, since
+  history that ran somewhere is immutable. Not git state: an
+  uncommitted-but-applied migration is just as frozen.
+- Edit mode saves in place (upgrade.sql, rollback.sql presence
+  following the class picker, targeted.toml following the toggle)
+  behind the same check-then-save gate as new drafts. With no fleet
+  status loaded, editing stays possible but carries an explicit
+  warning to confirm the migration never ran anywhere.
+
+## Lifecycle check vs targeted allow lists (2026-08-06)
+
+- The in-app Chain checks run surfaced it: the lifecycle smoke test
+  applied targeted migrations through the same allow-list enforcement
+  as real applies, and the ephemeral lifecycle_db can never be on an
+  allow list, so any repo pinning a targeted migration to named
+  databases (demo-fleet's 00200 -> zedb_theta) could never pass check
+  lifecycle or check all. Policy gating a throwaway database verified
+  nothing.
+- The check now bypasses allow lists via a crate-only
+  apply_targeted_for_check; the public apply_targeted keeps its exact
+  signature and enforcement, so no real apply path can reach the
+  bypass. The step narration says the bypass happened. check all on
+  demo-fleet is green across sql, equivalence, and lifecycle.

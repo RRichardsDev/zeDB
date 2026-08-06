@@ -27,8 +27,11 @@ pub enum ReplayError {
     Template(String),
 }
 
+// The cluster name may be a bare identifier or quoted any way
+// ClickHouse allows ('name', "name", `name`); all forms must decluster.
 static ON_CLUSTER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\s+ON\s+CLUSTER\s+[A-Za-z_][A-Za-z0-9_]*").expect("static regex")
+    Regex::new(r#"(?i)\s+ON\s+CLUSTER\s+('[^']*'|"[^"]*"|`[^`]*`|[A-Za-z_][A-Za-z0-9_]*)"#)
+        .expect("static regex")
 });
 // ReplicatedXMergeTree('/zk/path', '{replica}'[, args]) -> XMergeTree([args])
 static REPLICATED_ENGINE: LazyLock<Regex> = LazyLock::new(|| {
@@ -318,5 +321,33 @@ impl LocalReplay {
         }
         let formatted = String::from_utf8_lossy(&output.stdout);
         Ok(format!("{}\n", formatted.trim_end().trim_end_matches(';')))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn declusters_every_cluster_name_quoting() {
+        for statement in [
+            "ALTER TABLE db.t ON CLUSTER main ADD COLUMN a UInt8",
+            "ALTER TABLE db.t ON CLUSTER 'main' ADD COLUMN a UInt8",
+            "ALTER TABLE db.t ON CLUSTER \"main\" ADD COLUMN a UInt8",
+            "ALTER TABLE db.t ON CLUSTER `main` ADD COLUMN a UInt8",
+            "ALTER TABLE db.t on cluster 'zedb_cluster' ADD COLUMN a UInt8",
+        ] {
+            let declustered = decluster(statement);
+            assert_eq!(
+                declustered, "ALTER TABLE db.t ADD COLUMN a UInt8",
+                "failed for: {statement}"
+            );
+        }
+    }
+
+    #[test]
+    fn decluster_leaves_unrelated_text_alone() {
+        let statement = "SELECT 'ON CLUSTER x is just a string here'";
+        assert_eq!(decluster(statement), statement);
     }
 }

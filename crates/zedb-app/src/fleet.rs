@@ -93,6 +93,8 @@ impl FleetAction {
 pub struct FleetState {
     pub repo_path: Entity<TextInput>,
     pub repo: Option<Arc<MigrationRepo>>,
+    /// Git state of the open checkout; None when it is not a git repo.
+    pub git: Option<zedb_core::git::GitStatus>,
     pub repo_error: Option<String>,
     pub rows: Vec<FleetRow>,
     pub fetch_error: Option<String>,
@@ -117,12 +119,19 @@ pub struct FleetState {
     pub confirm_input: Entity<TextInput>,
     pub action_running: bool,
     pub action_result: Option<Result<String, String>>,
+    /// Dry-run entries already applied in the running action, keyed by
+    /// the text before the first ':' of their label, with how long each
+    /// step took.
+    pub action_progress: HashMap<String, f32>,
     /// Show the repo path editor instead of the compact repo chip.
     pub editing_repo_path: bool,
     /// Databases unchecked in the filter list (hidden from the matrix).
     pub hidden_databases: HashSet<String>,
     /// The database checkbox list is open.
     pub filter_open: bool,
+    /// Width of the detail panel; user-draggable.
+    pub detail_width: f32,
+    pub resizing_detail: bool,
 }
 
 impl FleetState {
@@ -141,6 +150,7 @@ impl FleetState {
         Self {
             repo_path,
             repo: None,
+            git: None,
             repo_error: None,
             rows: Vec::new(),
             fetch_error: None,
@@ -160,9 +170,12 @@ impl FleetState {
             confirm_input,
             action_running: false,
             action_result: None,
+            action_progress: HashMap::new(),
             editing_repo_path: false,
             hidden_databases: HashSet::new(),
             filter_open: false,
+            detail_width: 420.0,
+            resizing_detail: false,
         }
     }
 }
@@ -209,6 +222,37 @@ fn cell_for(row: &FleetRow, number: u32, targeted: bool) -> Cell {
     }
 }
 
+/// A 28px square icon button matching the app toolbar style: dim icon
+/// that brightens on hover with a background highlight, plus a tooltip.
+fn fleet_icon_button(
+    id: &'static str,
+    icon: &'static str,
+    tooltip: &'static str,
+    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .group(id)
+        .size(px(28.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(3.))
+        .border_1()
+        .border_color(rgb(BORDER))
+        .child(
+            svg()
+                .path(icon)
+                .size(px(14.))
+                .text_color(rgb(TEXT_DIM))
+                .group_hover(id, |icon| icon.text_color(rgb(TEXT))),
+        )
+        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tooltip).build(window, cx))
+        .on_click(on_click)
+}
+
 fn action_button(
     id: &'static str,
     label: String,
@@ -243,6 +287,7 @@ impl Workspace {
         };
         match MigrationRepo::open(&expanded) {
             Ok(repo) => {
+                self.fleet.git = zedb_core::git::read_git_status(&repo.root);
                 self.fleet.repo = Some(Arc::new(repo));
                 self.fleet.repo_error = None;
                 self.fleet.editing_repo_path = false;
@@ -256,6 +301,7 @@ impl Workspace {
             }
             Err(error) => {
                 self.fleet.repo = None;
+                self.fleet.git = None;
                 self.fleet.rows.clear();
                 self.fleet.repo_error = Some(error.to_string());
             }
@@ -280,6 +326,7 @@ impl Workspace {
         cx.notify();
 
         let handle = rt::tokio().spawn(async move {
+            let git = zedb_core::git::read_git_status(&repo.root);
             let runner = Runner::new(
                 &repo,
                 RunnerOptions {
@@ -332,7 +379,7 @@ impl Workspace {
                         .collect(),
                 })
                 .collect();
-            Ok::<_, String>((rows, clusters))
+            Ok::<_, String>((rows, clusters, git))
         });
 
         cx.spawn(async move |this, cx| {
@@ -343,9 +390,10 @@ impl Workspace {
                 }
                 this.fleet.loading = false;
                 match result {
-                    Ok(Ok((rows, clusters))) => {
+                    Ok(Ok((rows, clusters, git))) => {
                         this.fleet.rows = rows;
                         this.fleet.clusters = clusters;
+                        this.fleet.git = git;
                         this.fleet.fetched_at = Some(Instant::now());
                     }
                     Ok(Err(error)) => this.fleet.fetch_error = Some(error),
@@ -388,6 +436,7 @@ impl Workspace {
         }
         self.fleet.pending_action = Some(action);
         self.fleet.ack_structural = false;
+        self.fleet.action_progress.clear();
         self.fleet.action_running = false;
         self.fleet.action_result = None;
         // TextInput has no setter; a fresh entity is an empty input.
@@ -411,8 +460,36 @@ impl Workspace {
         let config = connected.client_config.clone();
         self.fleet.action_running = true;
         self.fleet.action_result = None;
+        self.fleet.action_progress.clear();
         cx.notify();
 
+        // The work, decomposed so the modal can go green step by step:
+        // per pending migration for one database, per database for the
+        // fleet. Keys match the dry-run labels' text before ':'.
+        let upgrade_all_units: Vec<String> = self
+            .fleet
+            .rows
+            .iter()
+            .filter(|row| row.excluded.is_none() && !row.pending.is_empty())
+            .map(|row| row.database.clone())
+            .collect();
+        let single_pending: Vec<u32> = match &action {
+            FleetAction::UpgradeDatabase(database) => self
+                .fleet
+                .rows
+                .iter()
+                .find(|row| row.database == *database)
+                .map(|row| {
+                    let mut pending = row.pending.clone();
+                    pending.sort_unstable();
+                    pending
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
+        let (progress_tx, mut progress_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(String, f32)>();
         let handle = rt::tokio().spawn(async move {
             let no_cluster = cluster.is_none();
             let runner = Runner::new(
@@ -428,13 +505,48 @@ impl Workspace {
                 },
             );
             let result = match &action {
-                FleetAction::UpgradeAll => runner.upgrade(&Targets::All, None).await,
+                FleetAction::UpgradeAll => {
+                    let mut outcome = Ok(());
+                    for database in upgrade_all_units {
+                        let started = Instant::now();
+                        match runner
+                            .upgrade(&Targets::Databases(vec![database.clone()]), None)
+                            .await
+                        {
+                            Ok(()) => {
+                                let _ =
+                                    progress_tx.send((database, started.elapsed().as_secs_f32()));
+                            }
+                            Err(error) => {
+                                outcome = Err(error);
+                                break;
+                            }
+                        }
+                    }
+                    outcome
+                }
                 FleetAction::UpgradeDatabase(database) => {
-                    runner
-                        .upgrade(&Targets::Databases(vec![database.clone()]), None)
-                        .await
+                    let targets = Targets::Databases(vec![database.clone()]);
+                    let mut outcome = Ok(());
+                    for number in single_pending {
+                        let started = Instant::now();
+                        match runner.upgrade(&targets, Some(number)).await {
+                            Ok(()) => {
+                                let _ = progress_tx.send((
+                                    format!("migration {number:05}"),
+                                    started.elapsed().as_secs_f32(),
+                                ));
+                            }
+                            Err(error) => {
+                                outcome = Err(error);
+                                break;
+                            }
+                        }
+                    }
+                    outcome
                 }
                 FleetAction::Rollback { database, number } => {
+                    let started = Instant::now();
                     runner
                         .rollback_one(
                             &Targets::Databases(vec![database.clone()]),
@@ -443,13 +555,27 @@ impl Workspace {
                             false,
                         )
                         .await
+                        .inspect(|()| {
+                            let _ = progress_tx.send((
+                                format!("rollback {number:05}"),
+                                started.elapsed().as_secs_f32(),
+                            ));
+                        })
                 }
                 FleetAction::ApplyTargeted { database, number } => {
+                    let started = Instant::now();
                     runner
                         .apply_targeted(&Targets::Databases(vec![database.clone()]), *number)
                         .await
+                        .inspect(|()| {
+                            let _ = progress_tx.send((
+                                format!("apply {number:05}"),
+                                started.elapsed().as_secs_f32(),
+                            ));
+                        })
                 }
                 FleetAction::RemoveTargeted { database, number } => {
+                    let started = Instant::now();
                     runner
                         .rollback_one(
                             &Targets::Databases(vec![database.clone()]),
@@ -458,12 +584,25 @@ impl Workspace {
                             true,
                         )
                         .await
+                        .inspect(|()| {
+                            let _ = progress_tx.send((
+                                format!("rollback {number:05}"),
+                                started.elapsed().as_secs_f32(),
+                            ));
+                        })
                 }
             };
             result.map_err(|error| error.to_string())
         });
 
         cx.spawn(async move |this, cx| {
+            while let Some((key, seconds)) = progress_rx.recv().await {
+                this.update(cx, |this, cx| {
+                    this.fleet.action_progress.insert(key, seconds);
+                    cx.notify();
+                })
+                .ok();
+            }
             let result = handle.await;
             this.update(cx, |this, cx| {
                 this.fleet.action_running = false;
@@ -651,14 +790,32 @@ impl Workspace {
         };
 
         let mut panel = div()
-            .w(px(420.))
+            .w(px(self.fleet.detail_width))
             .flex_none()
             .h_full()
+            .relative()
             .flex()
             .flex_col()
             .border_l_1()
             .border_color(rgb(BORDER))
             .bg(rgb(BG_SIDEBAR))
+            .child(
+                div()
+                    .id("fleet-detail-resize")
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(6.))
+                    .cursor_col_resize()
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
+                            this.fleet.resizing_detail = true;
+                            cx.notify();
+                        }),
+                    ),
+            )
             .child(
                 div()
                     .flex_none()
@@ -1022,8 +1179,36 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_2();
+        if let Some(git) = self.fleet.git.as_ref().filter(|git| git.stale()) {
+            let mut warning = div()
+                .p_2()
+                .rounded(px(3.))
+                .border_1()
+                .border_color(rgb(ACCENT_PENDING))
+                .text_color(rgb(ACCENT_PENDING))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child("Repo checkout may not match what was reviewed:");
+            for line in git.deploy_warnings() {
+                warning = warning.child(format!("  {line}"));
+            }
+            body = body.child(warning);
+        }
         for (label, sql) in dry_run {
-            body = body.child(div().text_color(rgb(TEXT_DIM)).child(label.clone()));
+            let key = label.split(':').next().unwrap_or(&label);
+            let applied = self.fleet.action_progress.get(key).copied();
+            body = body.child(
+                div()
+                    .text_color(rgb(if applied.is_some() { SUCCESS } else { TEXT_DIM }))
+                    .child(match applied {
+                        Some(seconds) if seconds < 1.0 => {
+                            format!("{label}  [applied {:.0}ms]", seconds * 1000.0)
+                        }
+                        Some(seconds) => format!("{label}  [applied {seconds:.1}s]"),
+                        None => label.clone(),
+                    }),
+            );
             if !sql.is_empty() {
                 body = body.child(
                     div()
@@ -1287,6 +1472,35 @@ impl Workspace {
                         cx.notify();
                     })),
             )
+            .child(fleet_icon_button(
+                "fleet-new-migration",
+                "icons/migration-plus.svg",
+                "New migration: author a draft against the pinned server",
+                cx.listener(|this, _, window, cx| this.author_open(window, cx)),
+            ))
+            .child(fleet_icon_button(
+                "fleet-regen",
+                "icons/regen.svg",
+                "Regen: replay the chain and preview current-state churn before writing",
+                cx.listener(|this, _, _, cx| this.codegen_start_regen(cx)),
+            ))
+            .child(fleet_icon_button(
+                "fleet-checks",
+                "icons/check-chain.svg",
+                "Check chain: sql, equivalence, and lifecycle against the pinned server",
+                cx.listener(|this, _, _, cx| this.codegen_start_checks(cx)),
+            ))
+            .when(
+                self.fleet.git.as_ref().is_some_and(|git| git.dirty > 0),
+                |controls| {
+                    controls.child(fleet_icon_button(
+                        "fleet-commit",
+                        "icons/commit.svg",
+                        "Commit the repo's own changes and push to your remote",
+                        cx.listener(|this, _, window, cx| this.commit_open(window, cx)),
+                    ))
+                },
+            )
             .when(unlocked, |controls| {
                 controls.child(
                     div()
@@ -1395,13 +1609,57 @@ impl Workspace {
             .text_color(rgb(TEXT_DIM))
             .child(div().w(px(200.)).flex_none().px_2().child("database"))
             .child(div().w(px(70.)).flex_none().px_1().child("head"));
-        for (number, targeted) in &migrations {
+        for (index, (number, targeted)) in migrations.iter().enumerate() {
             let label = if *targeted {
                 format!("{number:05}*")
             } else {
                 format!("{number:05}")
             };
-            header = header.child(div().w(px(64.)).flex_none().text_center().child(label));
+            let number = *number;
+            let targeted = *targeted;
+            // Applied anywhere means read-only viewing; never applied
+            // means clicking opens an editable draft.
+            let applied_anywhere = rows.iter().any(|row| {
+                if targeted {
+                    row.customised.contains(&number)
+                } else {
+                    row.excluded.is_none()
+                        && row.head.is_some_and(|head| head >= number)
+                        && !row.pending.contains(&number)
+                }
+            });
+            header = header.child(
+                div()
+                    .id(("fleet-migration-header", index))
+                    .w(px(64.))
+                    .h_full()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(3.))
+                    // Editable (never applied anywhere) reads green at
+                    // all times; hover-time text recolors do not render
+                    // in this gpui version, and a standing cue is more
+                    // scannable anyway.
+                    .child(
+                        div()
+                            .text_color(rgb(if applied_anywhere { TEXT_DIM } else { SUCCESS }))
+                            .child(label),
+                    )
+                    .hover(|cell| cell.bg(rgb(0x303640)).cursor_pointer())
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(if applied_anywhere {
+                            "View migration (applied; read-only)"
+                        } else {
+                            "Edit migration (never applied anywhere)"
+                        })
+                        .build(window, cx)
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.author_open_migration(number, window, cx);
+                    })),
+            );
         }
         header = header.child(div().flex_1().px_2().child("state"));
 
@@ -1581,15 +1839,34 @@ impl Workspace {
                     .text_xs()
                     .child(status_line)
                     .when_some(repo.as_ref(), |strip, repo| {
-                        strip.child(div().text_color(rgb(TEXT_DIM)).child(format!(
-                            "{}  |  {} migration(s)  |  ClickHouse {}",
-                            repo.root
-                                .file_name()
-                                .map(|name| name.to_string_lossy().to_string())
-                                .unwrap_or_else(|| repo.root.display().to_string()),
-                            repo.migrations.len(),
-                            repo.config.engine.version
-                        )))
+                        let git = self.fleet.git.as_ref();
+                        let stale = git.map(|git| git.stale()).unwrap_or(false);
+                        strip.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .when_some(git, |chip, git| {
+                                    chip.child(
+                                        div()
+                                            .text_color(rgb(if stale {
+                                                ACCENT_PENDING
+                                            } else {
+                                                TEXT_DIM
+                                            }))
+                                            .child(git.summary()),
+                                    )
+                                })
+                                .child(div().text_color(rgb(TEXT_DIM)).child(format!(
+                                    "{}  |  {} migration(s)  |  ClickHouse {}",
+                                    repo.root
+                                        .file_name()
+                                        .map(|name| name.to_string_lossy().to_string())
+                                        .unwrap_or_else(|| repo.root.display().to_string()),
+                                    repo.migrations.len(),
+                                    repo.config.engine.version
+                                ))),
+                        )
                     }),
             )
             .when(self.fleet.filter_open, |root| {
@@ -1708,5 +1985,8 @@ impl Workspace {
                 root.child(card)
             })
             .when_some(modal, |root, modal| root.child(modal))
+            .when_some(self.author_panel(cx), |root, panel| root.child(panel))
+            .when_some(self.codegen_panel(cx), |root, panel| root.child(panel))
+            .when_some(self.commit_panel(cx), |root, panel| root.child(panel))
     }
 }
