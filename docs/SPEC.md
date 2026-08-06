@@ -172,6 +172,14 @@ Phased; each phase is usable on its own.
 - Until Phase 3 lands, the app reads the repo and the user commits
   through their normal git workflow.
 
+**Phase 3.1: the agent pane.**
+- A pane for AI threads with the coding agents already installed
+  (Claude Code, Codex, anything ACP-speaking), spawned with their own
+  auth; zeDB ships no model, keys, or login.
+- A read-only `zedb mcp` server hands agents fleet context (status,
+  schema, chain, drift, dry-runs); write paths stay CLI-only behind
+  explicit consent. See PHASE-3.1.md.
+
 **Follow-ups (explicitly not v1):** embedded runners, i.e. client
 libraries (Java, Python, Node, C++, Rust, PHP) that let an application
 read the repo's current state, deploy the databases it owns, and stamp
