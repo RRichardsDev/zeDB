@@ -62,6 +62,8 @@ if [[ ! -f "$zedb_profile" ]]; then
 fi
 
 print "Building zeDB..."
+export ZEDB_BUILD_COMMIT=$(git -C "$zedb_root" rev-parse HEAD)
+export ZEDB_BUILD_NUMBER=$(git -C "$zedb_root" rev-list --count HEAD)
 cargo build --manifest-path "$zedb_root/Cargo.toml" -p zedb-app
 
 mkdir -p "$zedb_contents/MacOS" "$zedb_contents/Resources"

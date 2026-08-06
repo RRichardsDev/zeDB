@@ -29,6 +29,8 @@ build_number=$(cd "$root" && git rev-list --count HEAD)
 echo "Building zeDB $version ($build_number) release binary..."
 # Keep the compiled deployment target in lockstep with LSMinimumSystemVersion
 # in packaging/macos/Info.plist.
+export ZEDB_BUILD_COMMIT=$(git -C "$root" rev-parse HEAD)
+export ZEDB_BUILD_NUMBER=$build_number
 export MACOSX_DEPLOYMENT_TARGET=14.0
 cargo build --manifest-path "$root/Cargo.toml" --release -p zedb-app
 

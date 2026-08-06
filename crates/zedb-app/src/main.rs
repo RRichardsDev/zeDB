@@ -16,7 +16,7 @@ use std::{
 };
 
 use gpui::{
-    actions, div, point, prelude::*, px, rgb, rgba, size, svg, Action, App, Application,
+    actions, div, img, point, prelude::*, px, rgb, rgba, size, svg, Action, App, Application,
     AssetSource, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, Focusable,
     IntoElement, KeyBinding, Keystroke, Menu, MenuItem, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, SharedString, SystemMenuType, Timer, TitlebarOptions, Window,
@@ -84,6 +84,8 @@ fn format_engine_definition(engine: &str) -> String {
 actions!(
     query_editor,
     [
+        OpenAbout,
+        CheckForUpdates,
         OpenPreferences,
         QuitZeDb,
         RunQuery,
@@ -154,6 +156,7 @@ impl AssetSource for Assets {
             "icons/query-plus.svg" => Some(include_bytes!("../assets/icons/query-plus.svg")),
             "icons/refresh.svg" => Some(include_bytes!("../assets/icons/refresh.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
+            "about-logo.png" => Some(include_bytes!("../assets/about-logo.png")),
             _ => None,
         };
         Ok(bytes.map(Cow::Borrowed))
@@ -351,6 +354,7 @@ struct Workspace {
     query_resize: Option<(QueryResizeTarget, f32)>,
     preferences: Preferences,
     show_preferences: bool,
+    show_about: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -481,6 +485,7 @@ impl Workspace {
                 query_resize: None,
                 preferences,
                 show_preferences: false,
+                show_about: false,
             },
             Err(error) => Self {
                 connections: Vec::new(),
@@ -528,6 +533,7 @@ impl Workspace {
                 query_resize: None,
                 preferences,
                 show_preferences: false,
+                show_about: false,
             },
         }
         .with_startup_notice(preferences_error)
@@ -4402,6 +4408,153 @@ impl Render for Workspace {
                     ),
             )
             .child(self.status_bar())
+            .when(self.show_about, |root| root.child(self.about_panel(cx)))
+    }
+}
+
+impl Workspace {
+    /// Check for updates on demand (the menu item); the periodic loop
+    /// stays quiet when nothing is newer, this says so out loud.
+    fn check_for_updates_now(&mut self, cx: &mut Context<Self>) {
+        self.notice = Some("Checking for updates...".into());
+        self.notice_warning = false;
+        cx.notify();
+        let handle = rt::tokio().spawn(updates::check());
+        cx.spawn(async move |this, cx| {
+            let update = handle.await.ok().flatten();
+            this.update(cx, |this, cx| {
+                match update {
+                    Some(update) => {
+                        this.notice = Some(format!(
+                            "v{} is available; click the update pill in the title bar to install",
+                            update.version
+                        ));
+                        if this.update_phase == UpdatePhase::Available {
+                            this.update_available = Some(update);
+                        }
+                    }
+                    None => {
+                        this.notice = Some(format!(
+                            "No newer release found; you are on v{}",
+                            env!("CARGO_PKG_VERSION")
+                        ));
+                    }
+                }
+                this.notice_warning = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn about_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let version = env!("CARGO_PKG_VERSION");
+        let commit = option_env!("ZEDB_BUILD_COMMIT").unwrap_or("dev");
+        let build = option_env!("ZEDB_BUILD_NUMBER").unwrap_or("0");
+        let full_version = format!("{version}+build.{build}.{commit}");
+        let copy_text = full_version.clone();
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::rgba(0x00000088))
+            .child(
+                div()
+                    .w(px(440.))
+                    .p_5()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(BG_SIDEBAR))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_2()
+                    .child(img("about-logo.png").size(px(96.)))
+                    .child(
+                        div()
+                            .text_xl()
+                            .text_color(rgb(TEXT))
+                            .child(format!("zeDB {version}")),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(TEXT_DIM))
+                            .mt_2()
+                            .child("Commit"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_family("Menlo")
+                            .text_color(rgb(TEXT))
+                            .child(commit),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(TEXT_DIM))
+                            .mt_2()
+                            .child("Version"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_family("Menlo")
+                            .text_color(rgb(TEXT))
+                            .child(full_version),
+                    )
+                    .child(
+                        div()
+                            .mt_4()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("about-ok")
+                                    .flex_1()
+                                    .py_1()
+                                    .rounded(px(4.))
+                                    .border_1()
+                                    .border_color(rgb(BORDER))
+                                    .text_center()
+                                    .text_color(rgb(TEXT))
+                                    .child("OK")
+                                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.show_about = false;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("about-copy")
+                                    .flex_1()
+                                    .py_1()
+                                    .rounded(px(4.))
+                                    .border_1()
+                                    .border_color(rgb(BORDER))
+                                    .text_center()
+                                    .text_color(rgb(TEXT))
+                                    .child("Copy")
+                                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            copy_text.clone(),
+                                        ));
+                                        this.notice = Some("Version copied".into());
+                                        this.notice_warning = false;
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            )
     }
 }
 
@@ -4537,6 +4690,9 @@ fn main() {
         cx.set_menus(vec![Menu {
             name: "zeDB".into(),
             items: vec![
+                MenuItem::action("About zeDB", OpenAbout),
+                MenuItem::action("Check for Updates…", CheckForUpdates),
+                MenuItem::separator(),
                 MenuItem::action("Preferences…", OpenPreferences),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
@@ -4561,6 +4717,19 @@ fn main() {
                 cx.on_action(move |_: &OpenPreferences, cx| {
                     preferences_workspace.update(cx, |workspace, cx| {
                         workspace.open_preferences(cx);
+                    });
+                });
+                let about_workspace = workspace.clone();
+                cx.on_action(move |_: &OpenAbout, cx| {
+                    about_workspace.update(cx, |workspace, cx| {
+                        workspace.show_about = true;
+                        cx.notify();
+                    });
+                });
+                let updates_workspace = workspace.clone();
+                cx.on_action(move |_: &CheckForUpdates, cx| {
+                    updates_workspace.update(cx, |workspace, cx| {
+                        workspace.check_for_updates_now(cx);
                     });
                 });
                 cx.new(|cx| Root::new(workspace, window, cx))
