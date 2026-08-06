@@ -586,17 +586,40 @@ impl Workspace {
                             composer.child(
                                 div()
                                     .id("agent-send")
-                                    .px_3()
-                                    .py_1()
+                                    .group("agent-send")
+                                    .size(px(28.))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
                                     .rounded(px(3.))
                                     .border_1()
-                                    .border_color(rgb(if ready { SUCCESS } else { BORDER }))
-                                    .text_color(rgb(if ready { SUCCESS } else { TEXT_DIM }))
-                                    .child("Send")
+                                    .border_color(rgb(BORDER))
+                                    .child(
+                                        svg()
+                                            .path("icons/send.svg")
+                                            .size(px(14.))
+                                            .text_color(rgb(if ready {
+                                                TEXT_DIM
+                                            } else {
+                                                0x454b55
+                                            }))
+                                            .when(ready, |icon| {
+                                                icon.group_hover("agent-send", |icon| {
+                                                    icon.text_color(rgb(TEXT))
+                                                })
+                                            }),
+                                    )
                                     .when(ready, |button| {
                                         button
                                             .hover(|button| {
                                                 button.bg(rgb(0x303640)).cursor_pointer()
+                                            })
+                                            .tooltip(|window, cx| {
+                                                gpui_component::tooltip::Tooltip::new(
+                                                    "Send (enter)",
+                                                )
+                                                .build(window, cx)
                                             })
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.agent_send(window, cx)

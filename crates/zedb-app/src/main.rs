@@ -157,6 +157,7 @@ impl AssetSource for Assets {
             "icons/pull.svg" => Some(include_bytes!("../assets/icons/pull.svg")),
             "icons/query-plus.svg" => Some(include_bytes!("../assets/icons/query-plus.svg")),
             "icons/refresh.svg" => Some(include_bytes!("../assets/icons/refresh.svg")),
+            "icons/send.svg" => Some(include_bytes!("../assets/icons/send.svg")),
             "icons/sparkle.svg" => Some(include_bytes!("../assets/icons/sparkle.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             "about-logo.png" => Some(include_bytes!("../assets/about-logo.png")),
