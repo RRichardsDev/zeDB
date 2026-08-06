@@ -482,7 +482,9 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
-                agent: agent_pane::AgentPaneState::new(),
+                agent: agent_pane::AgentPaneState::new(
+                    preferences.agent_pane_width.unwrap_or(420.0),
+                ),
                 author: None,
                 regen: None,
                 checks: None,
@@ -531,7 +533,9 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
-                agent: agent_pane::AgentPaneState::new(),
+                agent: agent_pane::AgentPaneState::new(
+                    preferences.agent_pane_width.unwrap_or(420.0),
+                ),
                 author: None,
                 regen: None,
                 checks: None,
@@ -4430,7 +4434,11 @@ impl Render for Workspace {
                     this.resizing_sidebar = false;
                     this.resizing_sidebar_sections = false;
                     this.fleet.resizing_detail = false;
-                    this.agent.resizing = false;
+                    if this.agent.resizing {
+                        this.agent.resizing = false;
+                        this.preferences.agent_pane_width = Some(this.agent.width);
+                        let _ = save_preferences(&this.preferences);
+                    }
                     this.query_resize = None;
                 }),
             )

@@ -97,6 +97,7 @@ pub enum ThreadEntry {
     /// A permission request; `answered` records the chosen option.
     Permission {
         title: String,
+        input: Option<String>,
         options: Vec<PermissionOption>,
         answered: Option<String>,
     },
@@ -126,7 +127,7 @@ pub struct ThreadState {
     pub input: Entity<InputState>,
     pub running: bool,
     pub status: Option<String>,
-    pub pending_permission: Option<oneshot::Sender<PermissionOutcome>>,
+    pub pending_permissions: std::collections::VecDeque<oneshot::Sender<PermissionOutcome>>,
     pub generation: u64,
 }
 
@@ -160,10 +161,10 @@ pub struct AddAgentForm {
 }
 
 impl AgentPaneState {
-    pub fn new() -> Self {
+    pub fn new(width: f32) -> Self {
         Self {
             open: false,
-            width: 420.0,
+            width,
             resizing: false,
             thread: None,
             picker_open: false,
@@ -332,7 +333,7 @@ impl Workspace {
             input,
             running: false,
             status: Some("starting...".into()),
-            pending_permission: None,
+            pending_permissions: std::collections::VecDeque::new(),
             generation,
         });
         self.agent.picker_open = false;
@@ -963,19 +964,54 @@ impl Workspace {
                 responder,
                 ..
             } => {
-                // One at a time: a newer request supersedes an
-                // unanswered one, which resolves as cancelled.
                 let title = tool_call
                     .get("title")
                     .and_then(|title| title.as_str())
                     .unwrap_or("the agent asks for permission")
                     .to_string();
+                // Always-allow memory: auto-approve tools the user has
+                // permanently blessed for this agent.
+                let key = format!("{}|{title}", thread.agent_name);
+                if self.preferences.agent_always_allow.contains(&key) {
+                    let choice = options
+                        .iter()
+                        .find(|option| option.option_id.contains("always"))
+                        .or_else(|| options.iter().find(|option| option.kind.contains("allow")))
+                        .or(options.first())
+                        .map(|option| option.option_id.clone());
+                    if let Some(option_id) = choice {
+                        agent_log(
+                            "permission_auto",
+                            serde_json::json!({ "title": title, "option": option_id }),
+                        );
+                        let _ = responder.send(PermissionOutcome::Selected { option_id });
+                        thread.entries.push(ThreadEntry::Info(format!(
+                            "auto-approved: {title} (always allow)"
+                        )));
+                        cx.notify();
+                        return true;
+                    }
+                }
+                let input = tool_call.get("rawInput").and_then(|raw| {
+                    if raw.is_null() || raw == &serde_json::json!({}) {
+                        None
+                    } else {
+                        let mut text = raw.to_string();
+                        if text.len() > 240 {
+                            text.truncate(240);
+                            text.push_str("...");
+                        }
+                        Some(text)
+                    }
+                });
                 thread.entries.push(ThreadEntry::Permission {
                     title,
+                    input,
                     options,
                     answered: None,
                 });
-                thread.pending_permission = Some(responder);
+                // Requests queue; answers pop in arrival order.
+                thread.pending_permissions.push_back(responder);
             }
             AgentEvent::Stderr { line } => {
                 if thread.session_id.is_none() {
@@ -1194,7 +1230,7 @@ impl Workspace {
         let Some(thread) = self.agent.thread.as_mut() else {
             return;
         };
-        let Some(responder) = thread.pending_permission.take() else {
+        let Some(responder) = thread.pending_permissions.pop_front() else {
             return;
         };
         let outcome = match &option_id {
@@ -1208,12 +1244,29 @@ impl Workspace {
             serde_json::json!({ "option": option_id }),
         );
         let _ = responder.send(outcome);
-        for entry in thread.entries.iter_mut().rev() {
-            if let ThreadEntry::Permission { answered, .. } = entry {
+        // Mark the OLDEST unanswered card (queue order), and remember
+        // permanent grants across sessions.
+        let agent_name = thread.agent_name.clone();
+        let mut remember: Option<String> = None;
+        for entry in thread.entries.iter_mut() {
+            if let ThreadEntry::Permission {
+                title, answered, ..
+            } = entry
+            {
                 if answered.is_none() {
-                    *answered = Some(option_id.unwrap_or_else(|| "cancelled".into()));
+                    let chosen = option_id.clone().unwrap_or_else(|| "cancelled".into());
+                    if chosen.contains("always") {
+                        remember = Some(format!("{agent_name}|{title}"));
+                    }
+                    *answered = Some(chosen);
+                    break;
                 }
-                break;
+            }
+        }
+        if let Some(key) = remember {
+            if !self.preferences.agent_always_allow.contains(&key) {
+                self.preferences.agent_always_allow.push(key);
+                let _ = zedb_core::save_preferences(&self.preferences);
             }
         }
         cx.notify();
@@ -1835,6 +1888,7 @@ fn render_entry(
             .into_any_element(),
         ThreadEntry::Permission {
             title,
+            input,
             options,
             answered,
         } => {
@@ -1851,7 +1905,16 @@ fn render_entry(
                         .text_color(rgb(0xd7a65f))
                         .text_xs()
                         .child(format!("Permission: {title}")),
-                );
+                )
+                .when_some(input.clone(), |card, input| {
+                    card.child(
+                        div()
+                            .text_xs()
+                            .font_family("Menlo")
+                            .text_color(rgb(TEXT_DIM))
+                            .child(input),
+                    )
+                });
             match answered {
                 Some(choice) => {
                     card = card.child(

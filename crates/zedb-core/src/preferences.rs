@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::store::StoreError;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub vim_mode: bool,
@@ -15,6 +15,11 @@ pub struct Preferences {
     pub fleet_cluster: Option<String>,
     /// User-added ACP agents for the agent pane, beyond the built-ins.
     pub custom_agents: Vec<CustomAgent>,
+    /// Tools the user chose Always Allow for, as "agent|tool" keys;
+    /// matching permission requests auto-approve across sessions.
+    pub agent_always_allow: Vec<String>,
+    /// Agent pane width, remembered across launches.
+    pub agent_pane_width: Option<f32>,
 }
 
 /// A user-configured ACP-speaking agent: a name and a command line.
@@ -86,6 +91,8 @@ mod tests {
                 command: "my-agent".into(),
                 args: vec!["acp".into()],
             }],
+            agent_always_allow: vec!["Claude Code|mcp__zedb__drift".into()],
+            agent_pane_width: Some(480.0),
         };
         save_preferences(&preferences).unwrap();
         assert_eq!(load_preferences().unwrap(), preferences);
