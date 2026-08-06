@@ -94,10 +94,21 @@ reachable over MCP. An agent that wants to mutate uses the CLI with
 its explicit consent flags like any other process the user runs, which
 keeps the safety ladder meaningful.
 
+The pane is also ambiently context-aware: when a message is sent, the
+app attaches a snapshot of what the user is looking at (which screen;
+the selected database and its row status; drift findings already
+fetched; an open action modal or authoring draft; the connection name
+and tier) as a visible context block on the prompt, shown as a chip
+and toggleable per thread, never invisible. "wait, what's wrong with
+that db" then resolves against the screen, and the agent digs further
+through the tools.
+
 Done when: "why is zedb_kappa drifted?" is answerable by the agent
-calling the drift and schema tools itself, the same server works under
-a terminal-run Claude Code against the same repo, and nothing mutating
-is reachable over the protocol.
+calling the drift and schema tools itself, asking "what's wrong with
+this database?" while its row is selected in the matrix works without
+naming it, the same server works under a terminal-run Claude Code
+against the same repo, and nothing mutating is reachable over the
+protocol.
 
 ### M4. The authoring bridge
 
