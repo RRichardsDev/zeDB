@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/zedb-core", "crates/zedb-ch", "crates/zedb-cli", "crates/zedb-app"]
+members = [
+    "crates/zedb-acp",
+    "crates/zedb-core",
+    "crates/zedb-ch",
+    "crates/zedb-cli",
+    "crates/zedb-app",
+]
 
 [workspace.package]
 version = "0.1.1"
@@ -11,6 +17,7 @@ repository = "https://github.com/rhodri-richards/zedb"
 [workspace.dependencies]
 zedb-core = { path = "crates/zedb-core" }
 zedb-ch = { path = "crates/zedb-ch" }
+zedb-acp = { path = "crates/zedb-acp" }
 gpui = "0.2.2"
 chrono = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }

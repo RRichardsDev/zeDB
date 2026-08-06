@@ -594,3 +594,23 @@ Status: implementation complete, awaiting UI acceptance.
   zedb_config.zedb_migrations with repo='demo-fleet', verified by
   status parity before dropping the old default.* tables; check all
   stays green with the new schema.
+
+## Phase 3.1 M0: the ACP round trip (2026-08-06)
+
+- New zedb-acp crate: a headless Agent Client Protocol client. JSON-RPC
+  2.0, one JSON object per line over stdio; three pumps (writer,
+  reader, stderr) around a spawned agent process with kill_on_drop;
+  responses routed to pending requests, session/update notifications
+  decoded into AgentEvents, agent-initiated permission requests carried
+  as events with a oneshot responder (an unanswered responder counts as
+  cancelled so the agent never hangs on us), unknown methods refused
+  politely, and unknown update kinds carried as Other rather than
+  dropped.
+- Proven by four lifecycle tests against a scripted fake agent (happy
+  stream, permission round trip, cancel mid-stream with a cancelled
+  stop reason, and abrupt death failing pending requests and emitting
+  Closed), plus a smoke example against the real Claude Code adapter
+  (npx @agentclientprotocol/claude-agent-acp): initialize, session,
+  streamed pong, end_turn, with the adapter's newer update kinds
+  (usage_update and friends) flowing through as Other exactly as the
+  lenient decoding intended.
