@@ -119,6 +119,9 @@ pub struct FleetState {
     pub confirm_input: Entity<TextInput>,
     pub action_running: bool,
     pub action_result: Option<Result<String, String>>,
+    /// Dry-run entries already applied in the running action, keyed by
+    /// the text before the first ':' of their label.
+    pub action_progress: HashSet<String>,
     /// Show the repo path editor instead of the compact repo chip.
     pub editing_repo_path: bool,
     /// Databases unchecked in the filter list (hidden from the matrix).
@@ -166,6 +169,7 @@ impl FleetState {
             confirm_input,
             action_running: false,
             action_result: None,
+            action_progress: HashSet::new(),
             editing_repo_path: false,
             hidden_databases: HashSet::new(),
             filter_open: false,
@@ -431,6 +435,7 @@ impl Workspace {
         }
         self.fleet.pending_action = Some(action);
         self.fleet.ack_structural = false;
+        self.fleet.action_progress.clear();
         self.fleet.action_running = false;
         self.fleet.action_result = None;
         // TextInput has no setter; a fresh entity is an empty input.
@@ -454,8 +459,35 @@ impl Workspace {
         let config = connected.client_config.clone();
         self.fleet.action_running = true;
         self.fleet.action_result = None;
+        self.fleet.action_progress.clear();
         cx.notify();
 
+        // The work, decomposed so the modal can go green step by step:
+        // per pending migration for one database, per database for the
+        // fleet. Keys match the dry-run labels' text before ':'.
+        let upgrade_all_units: Vec<String> = self
+            .fleet
+            .rows
+            .iter()
+            .filter(|row| row.excluded.is_none() && !row.pending.is_empty())
+            .map(|row| row.database.clone())
+            .collect();
+        let single_pending: Vec<u32> = match &action {
+            FleetAction::UpgradeDatabase(database) => self
+                .fleet
+                .rows
+                .iter()
+                .find(|row| row.database == *database)
+                .map(|row| {
+                    let mut pending = row.pending.clone();
+                    pending.sort_unstable();
+                    pending
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let handle = rt::tokio().spawn(async move {
             let no_cluster = cluster.is_none();
             let runner = Runner::new(
@@ -471,42 +503,80 @@ impl Workspace {
                 },
             );
             let result = match &action {
-                FleetAction::UpgradeAll => runner.upgrade(&Targets::All, None).await,
+                FleetAction::UpgradeAll => {
+                    let mut outcome = Ok(());
+                    for database in upgrade_all_units {
+                        match runner
+                            .upgrade(&Targets::Databases(vec![database.clone()]), None)
+                            .await
+                        {
+                            Ok(()) => {
+                                let _ = progress_tx.send(database);
+                            }
+                            Err(error) => {
+                                outcome = Err(error);
+                                break;
+                            }
+                        }
+                    }
+                    outcome
+                }
                 FleetAction::UpgradeDatabase(database) => {
-                    runner
-                        .upgrade(&Targets::Databases(vec![database.clone()]), None)
-                        .await
+                    let targets = Targets::Databases(vec![database.clone()]);
+                    let mut outcome = Ok(());
+                    for number in single_pending {
+                        match runner.upgrade(&targets, Some(number)).await {
+                            Ok(()) => {
+                                let _ = progress_tx.send(format!("migration {number:05}"));
+                            }
+                            Err(error) => {
+                                outcome = Err(error);
+                                break;
+                            }
+                        }
+                    }
+                    outcome
                 }
-                FleetAction::Rollback { database, number } => {
-                    runner
-                        .rollback_one(
-                            &Targets::Databases(vec![database.clone()]),
-                            *number,
-                            true,
-                            false,
-                        )
-                        .await
-                }
-                FleetAction::ApplyTargeted { database, number } => {
-                    runner
-                        .apply_targeted(&Targets::Databases(vec![database.clone()]), *number)
-                        .await
-                }
-                FleetAction::RemoveTargeted { database, number } => {
-                    runner
-                        .rollback_one(
-                            &Targets::Databases(vec![database.clone()]),
-                            *number,
-                            true,
-                            true,
-                        )
-                        .await
-                }
+                FleetAction::Rollback { database, number } => runner
+                    .rollback_one(
+                        &Targets::Databases(vec![database.clone()]),
+                        *number,
+                        true,
+                        false,
+                    )
+                    .await
+                    .inspect(|()| {
+                        let _ = progress_tx.send(format!("rollback {number:05}"));
+                    }),
+                FleetAction::ApplyTargeted { database, number } => runner
+                    .apply_targeted(&Targets::Databases(vec![database.clone()]), *number)
+                    .await
+                    .inspect(|()| {
+                        let _ = progress_tx.send(format!("apply {number:05}"));
+                    }),
+                FleetAction::RemoveTargeted { database, number } => runner
+                    .rollback_one(
+                        &Targets::Databases(vec![database.clone()]),
+                        *number,
+                        true,
+                        true,
+                    )
+                    .await
+                    .inspect(|()| {
+                        let _ = progress_tx.send(format!("rollback {number:05}"));
+                    }),
             };
             result.map_err(|error| error.to_string())
         });
 
         cx.spawn(async move |this, cx| {
+            while let Some(key) = progress_rx.recv().await {
+                this.update(cx, |this, cx| {
+                    this.fleet.action_progress.insert(key);
+                    cx.notify();
+                })
+                .ok();
+            }
             let result = handle.await;
             this.update(cx, |this, cx| {
                 this.fleet.action_running = false;
@@ -1100,7 +1170,17 @@ impl Workspace {
             body = body.child(warning);
         }
         for (label, sql) in dry_run {
-            body = body.child(div().text_color(rgb(TEXT_DIM)).child(label.clone()));
+            let key = label.split(':').next().unwrap_or(&label);
+            let applied = self.fleet.action_progress.contains(key);
+            body = body.child(
+                div()
+                    .text_color(rgb(if applied { SUCCESS } else { TEXT_DIM }))
+                    .child(if applied {
+                        format!("{label}  [applied]")
+                    } else {
+                        label.clone()
+                    }),
+            );
             if !sql.is_empty() {
                 body = body.child(
                     div()
