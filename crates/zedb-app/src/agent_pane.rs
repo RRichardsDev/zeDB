@@ -510,6 +510,8 @@ impl Workspace {
                                             Box::new(StartAgentThread { index }),
                                             move |_, _| {
                                                 div()
+                                                    .w_full()
+                                                    .py_0p5()
                                                     .flex()
                                                     .items_center()
                                                     .gap_2()
