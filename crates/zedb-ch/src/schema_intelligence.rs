@@ -109,7 +109,7 @@ pub fn analyze_sql(
     let mut issues = table_issues;
 
     for window in tokens.windows(3) {
-        if !window[0].identifier || window[1].text != "." || !window[2].identifier {
+        if !is_column_reference(window) {
             continue;
         }
         let Some((database, object)) = bindings.aliases.get(&window[0].text.to_ascii_lowercase())
@@ -151,10 +151,18 @@ pub fn completions(
     let (bindings, _, _) = resolve_bindings(snapshot, default_database, &tokenize(sql));
     let mut suggestions = Vec::new();
 
-    if tokens.last().is_some_and(|token| token.text == ".") {
+    let dot_adjacent = tokens
+        .last()
+        .is_some_and(|token| token.text == "." && token.range.end == replace.start);
+    if dot_adjacent {
         let qualifier = tokens
             .get(tokens.len().saturating_sub(2))
-            .filter(|token| token.identifier)
+            .filter(|token| {
+                token.identifier
+                    && tokens
+                        .last()
+                        .is_some_and(|dot| token.range.end == dot.range.start)
+            })
             .map(|token| token.text);
         if let Some(qualifier) = qualifier {
             if let Some((database, object)) = bindings.aliases.get(&qualifier.to_ascii_lowercase())
@@ -304,7 +312,7 @@ pub fn recognized_identifiers(
     let tokens = tokenize(sql);
     let (bindings, _, mut recognized) = resolve_bindings(snapshot, default_database, &tokens);
     for window in tokens.windows(3) {
-        if !window[0].identifier || window[1].text != "." || !window[2].identifier {
+        if !is_column_reference(window) {
             continue;
         }
         let Some((database, object)) = bindings.aliases.get(&window[0].text.to_ascii_lowercase())
@@ -451,6 +459,16 @@ fn resolve_bindings(
         index = end;
     }
     (bindings, issues, recognized)
+}
+
+/// `alias.column` counts only when the three tokens are glued together;
+/// `e. from` is an alias, a stray dot, and a keyword, not a reference.
+fn is_column_reference(window: &[Token<'_>]) -> bool {
+    window[0].identifier
+        && window[1].text == "."
+        && window[2].identifier
+        && window[0].range.end == window[1].range.start
+        && window[1].range.end == window[2].range.start
 }
 
 fn table_alias(tokens: &[Token<'_>], end: usize) -> Option<String> {
@@ -693,6 +711,19 @@ mod tests {
         .unwrap();
         assert!(info.markdown.contains("UInt64"));
         assert!(info.markdown.contains("Primary event id"));
+    }
+
+    #[test]
+    fn repro_alias_dot_mid_line() {
+        let snapshot = snapshot(Some(columns()));
+        let sql = "select e. from analytics.events e;";
+        let cursor = sql.find('.').unwrap() + 1;
+        let items = completions(&snapshot, None, sql, cursor);
+        println!(
+            "items: {:?}",
+            items.iter().map(|i| &i.label).collect::<Vec<_>>()
+        );
+        assert!(!items.is_empty());
     }
 
     #[test]

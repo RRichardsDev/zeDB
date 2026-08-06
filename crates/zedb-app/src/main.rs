@@ -1327,8 +1327,8 @@ impl Workspace {
                                 .gap_2()
                                 .rounded(px(3.))
                                 .hover(|row| row.bg(rgb(0x2a2f37)).cursor_pointer())
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.toggle_schema_database(database_index, cx)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.toggle_schema_database(database_index, window, cx)
                                 }))
                                 .child(if database.expanded { "▾" } else { "▸" })
                                 .child(
@@ -2242,7 +2242,12 @@ impl Workspace {
 
     /// Fetch a database's column metadata in the background if the cache
     /// is missing it; on success, re-run analysis so open editors update.
-    fn warm_schema_columns(&mut self, database: String, cx: &mut Context<Self>) {
+    fn warm_schema_columns(
+        &mut self,
+        database: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let (Some(cache), Some(connected)) = (self.schema_cache.clone(), self.connected.as_ref())
         else {
             return;
@@ -2258,9 +2263,9 @@ impl Workspace {
                 cache.refresh_columns(&client, &database).await.is_ok()
             }
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let warmed = task.await.unwrap_or(false);
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 this.schema_warming.remove(&database);
                 if warmed {
                     let editors: Vec<(usize, Entity<InputState>)> = this
@@ -2269,7 +2274,17 @@ impl Workspace {
                         .map(|tab| (tab.id, tab.editor.clone()))
                         .collect();
                     for (id, editor) in editors {
-                        this.schedule_schema_analysis(id, editor, cx);
+                        this.schedule_schema_analysis(id, editor, window, cx);
+                    }
+                    // If the user already typed the trigger (say `e.`)
+                    // while columns were cold, reopen the popup now.
+                    if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                        let editor = tab.editor.clone();
+                        if editor.read(cx).focus_handle(cx).is_focused(window) {
+                            editor.update(cx, |editor, cx| {
+                                editor.retrigger_completion(window, cx);
+                            });
+                        }
                     }
                 }
                 cx.notify();
@@ -2279,7 +2294,12 @@ impl Workspace {
         .detach();
     }
 
-    fn toggle_schema_database(&mut self, database_index: usize, cx: &mut Context<Self>) {
+    fn toggle_schema_database(
+        &mut self,
+        database_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(database) = self.schema_databases.get_mut(database_index) else {
             return;
         };
@@ -2303,7 +2323,7 @@ impl Workspace {
         let expanded = database.expanded;
         let database_name = database.meta.name.clone();
         if expanded {
-            self.warm_schema_columns(database_name.clone(), cx);
+            self.warm_schema_columns(database_name.clone(), window, cx);
         }
         if !needs_object_load {
             cx.notify();
@@ -2394,7 +2414,7 @@ impl Workspace {
         if let Some(cache) = &self.schema_cache {
             cache.touch_database(&database_name);
         }
-        self.warm_schema_columns(database_name.clone(), cx);
+        self.warm_schema_columns(database_name.clone(), window, cx);
 
         let task = rt::tokio().spawn({
             let database_name = database_name.clone();
@@ -2696,9 +2716,9 @@ impl Workspace {
         cx.subscribe_in(
             &editor,
             window,
-            move |this, state, event: &InputEvent, _, cx| {
+            move |this, state, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
-                    this.schedule_schema_analysis(id, state.clone(), cx);
+                    this.schedule_schema_analysis(id, state.clone(), window, cx);
                 }
             },
         )
@@ -2764,6 +2784,7 @@ impl Workspace {
         &mut self,
         tab_id: usize,
         editor: Entity<InputState>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
@@ -2795,13 +2816,13 @@ impl Workspace {
             );
             (sql, issues, referenced)
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let Ok((sql, issues, referenced)) = task.await else {
                 return;
             };
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 for database in referenced {
-                    this.warm_schema_columns(database, cx);
+                    this.warm_schema_columns(database, window, cx);
                 }
                 let Some(tab) = this.query_tabs.iter().find(|tab| tab.id == tab_id) else {
                     return;

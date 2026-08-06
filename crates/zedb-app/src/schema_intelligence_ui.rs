@@ -134,27 +134,27 @@ impl DocumentColorProvider for SchemaProvider {
         )
         .into_iter()
         .map(|identifier| {
-            // Subtle tinted boxes behind names the cache can vouch for:
-            // blue for databases, green for tables and views, a fainter
-            // blue for columns. Alphas keep the text fully readable.
+            // Rendered as text color by the vendored editor patch: light
+            // blue for recognized databases, soft green for tables and
+            // views, a paler blue for columns.
             let color = match identifier.kind {
                 RecognizedKind::Database => Color {
-                    red: 0.35,
-                    green: 0.62,
-                    blue: 0.95,
-                    alpha: 0.18,
+                    red: 0.42,
+                    green: 0.68,
+                    blue: 0.96,
+                    alpha: 1.0,
                 },
                 RecognizedKind::Object => Color {
-                    red: 0.38,
-                    green: 0.82,
-                    blue: 0.62,
-                    alpha: 0.14,
+                    red: 0.45,
+                    green: 0.83,
+                    blue: 0.65,
+                    alpha: 1.0,
                 },
                 RecognizedKind::Column => Color {
-                    red: 0.55,
-                    green: 0.72,
+                    red: 0.63,
+                    green: 0.78,
                     blue: 0.95,
-                    alpha: 0.11,
+                    alpha: 1.0,
                 },
             };
             ColorInformation {
