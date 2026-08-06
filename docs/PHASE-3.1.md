@@ -99,7 +99,31 @@ calling the drift and schema tools itself, the same server works under
 a terminal-run Claude Code against the same repo, and nothing mutating
 is reachable over the protocol.
 
-### M4. Permissions and daily-driver polish
+### M4. The authoring bridge
+
+The agent fills the draft. Alongside the read-only fleet tools, pane
+sessions get a draft surface hosted by the app itself (the CLI cannot
+reach the editors): a propose_migration tool taking upgrade SQL,
+rollback SQL, rollback class, and targeted flag. Calling it opens or
+fills the authoring overlay, visibly, for the user to read, check, and
+save exactly as if they had typed it. So "add column x to table y ON
+CLUSTER, a String" in the thread lands as a ready draft in the
+editors, with placeholders like ${db} and ${cluster} used correctly
+because the fleet tools told the agent how this repo templates.
+
+This deliberately does not breach the no-write rule: a draft is
+memory-only, and the existing gates (check against the pinned server,
+explicit save, the ladder for any deploy) still stand between the
+proposal and reality. The tool exists only while the pane session is
+attached to the running app; a terminal agent using zedb mcp does not
+get it.
+
+Done when: the sentence above produces a correct two-sided draft in
+the overlay in one round trip, an edited proposal can be re-proposed
+without clobbering user edits silently (the overlay warns before
+replacing a dirty draft), and saving still requires the human check.
+
+### M5. Permissions and daily-driver polish
 
 The ACP permission flow rendered properly (what the agent wants to do,
 approve or deny, per request), session restore for the pane across app
@@ -113,9 +137,9 @@ rather than being a demo.
 
 ## Order and dependencies
 
-M0 → M1 → M2 and M3 in either order → M4. Phase 3's M4/M5 (the live
-loop walk and the soak) continue in parallel; nothing here blocks
-them.
+M0 → M1 → M2 and M3 in either order → M4 (needs M3's fleet tools so
+proposals template correctly) → M5. Phase 3's M4/M5 (the live loop
+walk and the soak) continue in parallel; nothing here blocks them.
 
 ## Explicitly not in Phase 3.1
 
@@ -129,7 +153,7 @@ them.
 
 ## Phase exit
 
-Phase 3.1 is done when M4's done-condition holds in real use, at which
+Phase 3.1 is done when M5's done-condition holds in real use, at which
 point the Phase 4 draft (embedded runners) is next in line for its M0
 decision, informed by however much of the lifecycle the agent pane has
 made people actually exercise.
