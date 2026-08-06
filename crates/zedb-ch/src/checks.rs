@@ -104,11 +104,22 @@ pub fn check_sql_file(
     params: &BTreeMap<String, String>,
 ) -> Result<Option<String>, CheckError> {
     let text = std::fs::read_to_string(path)?;
+    check_sql_text(binary, &text, params, &path.display().to_string())
+}
+
+/// Check SQL text that may not be on disk yet (authoring drafts);
+/// `label` stands in for the path in the `label:line:col: message` result.
+pub fn check_sql_text(
+    binary: &Path,
+    text: &str,
+    params: &BTreeMap<String, String>,
+    label: &str,
+) -> Result<Option<String>, CheckError> {
     // A file using an undeclared placeholder fails here, which is exactly
     // right: it would also fail at apply time.
-    let sql = match render(&text, params) {
+    let sql = match render(text, params) {
         Ok(sql) => sql,
-        Err(error) => return Ok(Some(format!("{}:1:1: {error}", path.display()))),
+        Err(error) => return Ok(Some(format!("{label}:1:1: {error}"))),
     };
     let sql = truncate_insert_values(&sql);
 
@@ -130,7 +141,7 @@ pub fn check_sql_file(
         .captures(&message)
         .map(|captures| (captures[1].to_string(), captures[2].to_string()))
         .unwrap_or(("1".into(), "1".into()));
-    Ok(Some(format!("{}:{line}:{col}: {message}", path.display())))
+    Ok(Some(format!("{label}:{line}:{col}: {message}")))
 }
 
 /// Every SQL file under migrations/ and current-state/, sorted.

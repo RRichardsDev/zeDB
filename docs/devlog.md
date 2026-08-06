@@ -463,3 +463,38 @@ Status: implementation complete, awaiting UI acceptance.
   credential, so the live ladder walk is a human step. Deferred: admin
   credentials from the GUI, per-statement live progress (the modal shows
   per-run progress and the runner's error text).
+
+## Phase 3 M0: fleet git awareness (2026-08-06)
+
+- On the phase-3 branch. zedb-core gains a git module: shell out to the
+  user's git (status --porcelain=v2 --branch), parse branch, dirty entry
+  count, and ahead/behind the local remote-tracking ref. Not a checkout
+  means None, not an error; zeDB never fetches, so ahead/behind is as
+  fresh as the user's last fetch, and the doc comment says so.
+- Fleet view shows the summary (branch, dirty star, +ahead -behind) next
+  to the repo chip in the bottom strip, amber when stale; re-read on
+  every refresh. The action modal leads with the specifics (uncommitted
+  changes, behind upstream, detached HEAD) before the consent controls,
+  meeting M0's warn-before-the-ladder condition.
+
+## Phase 3 M1: authoring in the app (2026-08-06)
+
+- New migration drafts live entirely in memory: a fleet-toolbar "New
+  migration" button opens an overlay with upgrade.sql and rollback.sql
+  in the code editor surface, a rollback-class picker (clean /
+  structural / irreversible / no rollback) that rewrites the marker
+  line, and a chain-vs-targeted toggle. Check runs check_sql_text (new
+  text variant extracted from check_sql_file, which now delegates)
+  against the pinned binary via ensure_binary; errors render
+  file:line:col exactly as the CLI prints them.
+- Save is only enabled while the last passing check still matches the
+  editor text byte-for-byte; it then scaffolds the next chain number,
+  writes the draft over the templates, reopens the repo, and refreshes
+  the matrix. So a deliberate SQL error surfaces before anything is
+  written to the chain, which was the milestone's done-condition.
+- Verified headlessly: a simulated app save (scaffold + draft overwrite
+  on a demo-fleet copy) passes `zedb check sql` 10/10 and lists in the
+  chain with class and headline intact. Deferred: Vim mode in the
+  authoring editors (query tabs only for now), editing an existing tip
+  migration, check-as-you-type debounce (IDEAS.md has the live-check
+  entry).

@@ -1,3 +1,4 @@
+mod author;
 mod components;
 mod fleet;
 mod grid_spike;
@@ -296,6 +297,7 @@ enum QueryResizeTarget {
 
 struct Workspace {
     fleet: FleetState,
+    author: Option<author::AuthorState>,
     show_fleet: bool,
     health_poll_generation: u64,
     connections: Vec<ConnectionConfig>,
@@ -439,6 +441,7 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
+                author: None,
                 health_poll_generation: 0,
                 query_abort: None,
                 query_error_decision: None,
@@ -482,6 +485,7 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
+                author: None,
                 health_poll_generation: 0,
                 query_abort: None,
                 query_error_decision: None,

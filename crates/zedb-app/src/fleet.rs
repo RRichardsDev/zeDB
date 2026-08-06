@@ -1310,6 +1310,19 @@ impl Workspace {
                         cx.notify();
                     })),
             )
+            .child(
+                div()
+                    .id("fleet-new-migration")
+                    .px_3()
+                    .py_1()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .text_color(rgb(TEXT_DIM))
+                    .child("New migration")
+                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                    .on_click(cx.listener(|this, _, window, cx| this.author_open(window, cx))),
+            )
             .when(unlocked, |controls| {
                 controls.child(
                     div()
@@ -1750,5 +1763,6 @@ impl Workspace {
                 root.child(card)
             })
             .when_some(modal, |root, modal| root.child(modal))
+            .when_some(self.author_panel(cx), |root, panel| root.child(panel))
     }
 }
