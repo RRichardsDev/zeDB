@@ -156,6 +156,15 @@ proposal and reality. The tool exists only while the pane session is
 attached to the running app; a terminal agent using zedb mcp does not
 get it.
 
+The agent can also drive the view: a navigate tool (pane-only, like
+the propose tools) switches between fleet, query editor, and
+connections, selects a database row, or opens a migration in the
+overlay. Navigation is workspace state the user can flip right back,
+so it needs no consent machinery, but every use is narrated in the
+thread (opened fleet view: zedb_kappa) so the UI never moves
+unexplained. "Show me what's wrong with kappa" becomes: fetch drift,
+navigate to the row, explain what is on screen.
+
 Agents also edit repo files through their own tools, which today the
 app only notices on manual refresh. While a pane session is attached,
 the app watches the open repo: file changes refresh the chain, matrix
