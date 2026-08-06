@@ -52,11 +52,10 @@ entitlements so they can launch unprofiled.
 
 ## 5. First release
 
-- [ ] `git tag v0.1.0 && git push origin v0.1.0`
-- [ ] Check the Release page artifact; verify on a second Mac that the app
-      opens without Gatekeeper complaints:
-      `spctl -a -vv /Applications/zeDB.app` should say `accepted` and
-      `source=Notarized Developer ID`.
+- [x] v0.1.0 released 2026-08-06: signed, notarized, stapled zip + DMG on
+      the GitHub Release. Downloaded artifacts verified locally:
+      `spctl -a -vv` says `accepted, source=Notarized Developer ID` for
+      both the DMG and the app, and `stapler validate` passes.
 
 ## Later / nice to have
 
