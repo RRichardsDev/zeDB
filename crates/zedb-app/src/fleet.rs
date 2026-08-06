@@ -217,6 +217,37 @@ fn cell_for(row: &FleetRow, number: u32, targeted: bool) -> Cell {
     }
 }
 
+/// A 28px square icon button matching the app toolbar style: dim icon
+/// that brightens on hover with a background highlight, plus a tooltip.
+fn fleet_icon_button(
+    id: &'static str,
+    icon: &'static str,
+    tooltip: &'static str,
+    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .group(id)
+        .size(px(28.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(3.))
+        .border_1()
+        .border_color(rgb(BORDER))
+        .child(
+            svg()
+                .path(icon)
+                .size(px(14.))
+                .text_color(rgb(TEXT_DIM))
+                .group_hover(id, |icon| icon.text_color(rgb(TEXT))),
+        )
+        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+        .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tooltip).build(window, cx))
+        .on_click(on_click)
+}
+
 fn action_button(
     id: &'static str,
     label: String,
@@ -1333,81 +1364,33 @@ impl Workspace {
                         cx.notify();
                     })),
             )
-            .child(
-                div()
-                    .id("fleet-new-migration")
-                    .px_3()
-                    .py_1()
-                    .rounded(px(3.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(TEXT_DIM))
-                    .child("New migration")
-                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
-                    .on_click(cx.listener(|this, _, window, cx| this.author_open(window, cx))),
-            )
-            .child(
-                div()
-                    .id("fleet-regen")
-                    .px_3()
-                    .py_1()
-                    .rounded(px(3.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(TEXT_DIM))
-                    .child("Regen")
-                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
-                    .tooltip(|window, cx| {
-                        gpui_component::tooltip::Tooltip::new(
-                            "Replay the chain and preview current-state churn before writing",
-                        )
-                        .build(window, cx)
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| this.codegen_start_regen(cx))),
-            )
-            .child(
-                div()
-                    .id("fleet-checks")
-                    .px_3()
-                    .py_1()
-                    .rounded(px(3.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(TEXT_DIM))
-                    .child("Check chain")
-                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
-                    .tooltip(|window, cx| {
-                        gpui_component::tooltip::Tooltip::new(
-                            "Run sql, equivalence, and lifecycle checks against the pinned server",
-                        )
-                        .build(window, cx)
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| this.codegen_start_checks(cx))),
-            )
+            .child(fleet_icon_button(
+                "fleet-new-migration",
+                "icons/migration-plus.svg",
+                "New migration: author a draft against the pinned server",
+                cx.listener(|this, _, window, cx| this.author_open(window, cx)),
+            ))
+            .child(fleet_icon_button(
+                "fleet-regen",
+                "icons/regen.svg",
+                "Regen: replay the chain and preview current-state churn before writing",
+                cx.listener(|this, _, _, cx| this.codegen_start_regen(cx)),
+            ))
+            .child(fleet_icon_button(
+                "fleet-checks",
+                "icons/check-chain.svg",
+                "Check chain: sql, equivalence, and lifecycle against the pinned server",
+                cx.listener(|this, _, _, cx| this.codegen_start_checks(cx)),
+            ))
             .when(
                 self.fleet.git.as_ref().is_some_and(|git| git.dirty > 0),
                 |controls| {
-                    controls.child(
-                        div()
-                            .id("fleet-commit")
-                            .px_3()
-                            .py_1()
-                            .rounded(px(3.))
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .text_color(rgb(TEXT_DIM))
-                            .child("Commit")
-                            .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
-                            .tooltip(|window, cx| {
-                                gpui_component::tooltip::Tooltip::new(
-                                    "Commit the repo's own changes and push to your remote",
-                                )
-                                .build(window, cx)
-                            })
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.commit_open(window, cx)),
-                            ),
-                    )
+                    controls.child(fleet_icon_button(
+                        "fleet-commit",
+                        "icons/commit.svg",
+                        "Commit the repo's own changes and push to your remote",
+                        cx.listener(|this, _, window, cx| this.commit_open(window, cx)),
+                    ))
                 },
             )
             .when(unlocked, |controls| {

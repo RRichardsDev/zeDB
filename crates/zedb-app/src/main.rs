@@ -139,7 +139,13 @@ impl AssetSource for Assets {
             "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
             "icons/close.svg" => Some(include_bytes!("../assets/icons/close.svg")),
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
+            "icons/check-chain.svg" => Some(include_bytes!("../assets/icons/check-chain.svg")),
+            "icons/commit.svg" => Some(include_bytes!("../assets/icons/commit.svg")),
             "icons/fleet.svg" => Some(include_bytes!("../assets/icons/fleet.svg")),
+            "icons/migration-plus.svg" => {
+                Some(include_bytes!("../assets/icons/migration-plus.svg"))
+            }
+            "icons/regen.svg" => Some(include_bytes!("../assets/icons/regen.svg")),
             "icons/folder-open.svg" => Some(include_bytes!("../assets/icons/folder-open.svg")),
             "icons/lock.svg" => Some(include_bytes!("../assets/icons/lock.svg")),
             "icons/lock-open.svg" => Some(include_bytes!("../assets/icons/lock-open.svg")),
