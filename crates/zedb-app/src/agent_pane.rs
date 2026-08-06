@@ -27,14 +27,22 @@ pub struct StartAgentThread {
     pub index: usize,
 }
 
-/// Built-in agents until M2's discovery: (name, program, args).
-pub const AGENTS: &[(&str, &str, &[&str])] = &[
+/// Built-in agents until M2's discovery: (name, icon, program, args).
+/// The icon files are stable names; drop official brand assets over
+/// them and they show up everywhere the agent is named.
+pub const AGENTS: &[(&str, &str, &str, &[&str])] = &[
     (
         "Claude Code",
+        "icons/agent-claude.svg",
         "npx",
         &["-y", "@agentclientprotocol/claude-agent-acp"],
     ),
-    ("Codex", "npx", &["-y", "@zed-industries/codex-acp"]),
+    (
+        "Codex",
+        "icons/agent-codex.svg",
+        "npx",
+        &["-y", "@zed-industries/codex-acp"],
+    ),
 ];
 
 /// One rendered item in the transcript.
@@ -58,6 +66,7 @@ pub enum ThreadEntry {
 
 pub struct ThreadState {
     pub agent_name: String,
+    pub agent_icon: String,
     pub connection: Arc<AgentConnection>,
     pub session_id: Option<String>,
     pub entries: Vec<ThreadEntry>,
@@ -107,7 +116,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((name, program, args)) = AGENTS.get(agent_index).copied() else {
+        let Some((name, icon, program, args)) = AGENTS.get(agent_index).copied() else {
             return;
         };
         let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
@@ -157,6 +166,7 @@ impl Workspace {
         .detach();
         self.agent.thread = Some(ThreadState {
             agent_name: name.to_string(),
+            agent_icon: icon.to_string(),
             connection: connection.clone(),
             session_id: None,
             entries: Vec::new(),
@@ -450,7 +460,23 @@ impl Workspace {
                 .justify_between()
                 .border_b_1()
                 .border_color(rgb(BORDER))
-                .child(div().text_color(rgb(TEXT)).child(title))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .when_some(
+                            self.agent
+                                .thread
+                                .as_ref()
+                                .map(|thread| thread.agent_icon.clone()),
+                            |header, icon| {
+                                header
+                                    .child(svg().path(icon).size(px(14.)).text_color(rgb(TEXT_DIM)))
+                            },
+                        )
+                        .child(div().text_color(rgb(TEXT)).child(title)),
+                )
                 .child(
                     div()
                         .flex()
@@ -463,9 +489,12 @@ impl Workspace {
                                 .outline()
                                 .dropdown_menu(move |menu: PopupMenu, _, _| {
                                     let mut menu = menu.label("External Agents");
-                                    for (index, (name, _, _)) in AGENTS.iter().enumerate() {
-                                        menu =
-                                            menu.menu(*name, Box::new(StartAgentThread { index }));
+                                    for (index, (name, icon, _, _)) in AGENTS.iter().enumerate() {
+                                        menu = menu.menu_with_icon(
+                                            *name,
+                                            gpui_component::Icon::default().path(*icon),
+                                            Box::new(StartAgentThread { index }),
+                                        );
                                     }
                                     menu.separator().menu_with_enable(
                                         "Add More Agents",
