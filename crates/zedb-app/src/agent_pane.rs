@@ -62,6 +62,8 @@ pub enum ThreadEntry {
 pub struct ThreadState {
     pub agent_name: String,
     pub agent_icon: String,
+    /// Attach a snapshot of what the user is looking at to each send.
+    pub include_context: bool,
     pub connection: Arc<AgentConnection>,
     pub session_id: Option<String>,
     pub entries: Vec<ThreadEntry>,
@@ -200,6 +202,7 @@ impl Workspace {
         self.agent.thread = Some(ThreadState {
             agent_name: name.to_string(),
             agent_icon: icon.clone(),
+            include_context: true,
             connection: connection.clone(),
             session_id: None,
             entries: Vec::new(),
@@ -212,13 +215,18 @@ impl Workspace {
         self.agent.picker_open = false;
         cx.notify();
 
-        // Handshake: initialize, then open the session in the repo.
+        // Handshake: initialize, then open the session in the repo,
+        // registering the zedb MCP server (this same executable in a
+        // hidden serve mode) so the agent gets the fleet and query
+        // tools. Credentials travel via a 0600 file the server deletes
+        // on read, never argv or env.
+        let mcp_servers = self.agent_mcp_server_config();
         let handshake_connection = connection.clone();
         let handshake_cwd = cwd.clone().unwrap_or_else(|| "/".into());
         let handle = rt::tokio().spawn(async move {
             handshake_connection.initialize().await?;
             let session = handshake_connection
-                .new_session(&handshake_cwd, Vec::new())
+                .new_session(&handshake_cwd, mcp_servers)
                 .await?;
             Ok::<_, AcpError>(session.session_id)
         });
@@ -322,6 +330,57 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The zedb MCP server registration for a new session, when there
+    /// is anything to serve (an open repo, a connection, or both).
+    fn agent_mcp_server_config(&self) -> Vec<zedb_acp::McpServerConfig> {
+        let repo = self
+            .fleet
+            .repo
+            .as_ref()
+            .map(|repo| repo.root.display().to_string());
+        let connection = self.connected.as_ref().map(|connected| {
+            (
+                connected.client_config.url.clone(),
+                connected.client_config.user.clone(),
+                connected.client_config.password.clone().unwrap_or_default(),
+            )
+        });
+        if repo.is_none() && connection.is_none() {
+            return Vec::new();
+        }
+        let mut config = serde_json::Map::new();
+        if let Some(repo) = repo {
+            config.insert("repo".into(), repo.into());
+        }
+        if let Some((url, user, password)) = connection {
+            config.insert("url".into(), url.into());
+            config.insert("user".into(), user.into());
+            config.insert("password".into(), password.into());
+        }
+        let Some(dir) = dirs::data_local_dir().map(|dir| dir.join("zedb").join("mcp")) else {
+            return Vec::new();
+        };
+        if std::fs::create_dir_all(&dir).is_err() {
+            return Vec::new();
+        }
+        let path = dir.join(format!("session-{}.json", self.agent.next_generation));
+        let value = serde_json::Value::Object(config);
+        if std::fs::write(&path, value.to_string()).is_err() {
+            return Vec::new();
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        let Ok(exe) = std::env::current_exe() else {
+            return Vec::new();
+        };
+        vec![zedb_acp::McpServerConfig {
+            name: "zedb".into(),
+            command: exe.display().to_string(),
+            args: vec!["zedb-mcp-serve".into(), path.display().to_string()],
+            env: Vec::new(),
+        }]
+    }
+
     /// Fold one agent event into the transcript. Returns whether this
     /// thread is still the live one (stale pumps stop themselves).
     fn agent_apply_event(
@@ -421,7 +480,13 @@ impl Workspace {
         thread
             .input
             .update(cx, |input, cx| input.set_value("", window, cx));
+        let include_context = thread.include_context;
         thread.entries.push(ThreadEntry::User(text.clone()));
+        if include_context {
+            thread
+                .entries
+                .push(ThreadEntry::Info("screen context attached".into()));
+        }
         thread.entries.push(ThreadEntry::Assistant(String::new()));
         thread.running = true;
         thread.status = None;
@@ -429,7 +494,13 @@ impl Workspace {
         let connection = thread.connection.clone();
         cx.notify();
 
-        let handle = rt::tokio().spawn(async move { connection.prompt(&session_id, &text).await });
+        let full_text = if include_context {
+            format!("{}\n\n{text}", self.agent_ambient_context())
+        } else {
+            text
+        };
+        let handle =
+            rt::tokio().spawn(async move { connection.prompt(&session_id, &full_text).await });
         cx.spawn(async move |this, cx| {
             let result = handle.await;
             this.update(cx, |this, cx| {
@@ -461,6 +532,97 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    /// A snapshot of what the user is looking at; deictic questions
+    /// resolve against it and the agent digs further through the zedb
+    /// MCP tools. Attached visibly, never behind the user's back.
+    fn agent_ambient_context(&self) -> String {
+        let mut lines: Vec<String> = Vec::new();
+        let screen = if self.show_fleet {
+            "fleet view (databases x migrations matrix)"
+        } else if self.show_query_editor {
+            "query editor"
+        } else {
+            "connections and schema view"
+        };
+        lines.push(format!("screen: {screen}"));
+        if let Some(connected) = &self.connected {
+            lines.push(format!(
+                "connection: {} ({} tier, {})",
+                connected.name,
+                match self.fleet_tier() {
+                    zedb_core::EnvTier::Dev => "dev",
+                    zedb_core::EnvTier::Staging => "staging",
+                    zedb_core::EnvTier::Production => "production",
+                },
+                if connected.client_config.read_only {
+                    "read-only"
+                } else {
+                    "write-capable"
+                },
+            ));
+        } else {
+            lines.push("connection: none".into());
+        }
+        if let Some(repo) = &self.fleet.repo {
+            lines.push(format!(
+                "migration repo: {} ({} migration(s){})",
+                repo.root.display(),
+                repo.migrations.len(),
+                self.fleet
+                    .git
+                    .as_ref()
+                    .map(|git| format!(", git {}", git.summary()))
+                    .unwrap_or_default(),
+            ));
+        }
+        if self.show_fleet {
+            if let Some(selected) = &self.fleet.selected {
+                if let Some(row) = self.fleet.rows.iter().find(|row| row.database == *selected) {
+                    let head = row
+                        .head
+                        .map(|head| format!("{head:05}"))
+                        .unwrap_or_else(|| "none".into());
+                    lines.push(format!(
+                        "selected database: {} (head {head}, {} pending, {} customised, {} failed{})",
+                        row.database,
+                        row.pending.len(),
+                        row.customised.len(),
+                        row.failed.len(),
+                        row.excluded
+                            .as_ref()
+                            .map(|group| format!(", excluded by {group}"))
+                            .unwrap_or_default(),
+                    ));
+                    if let Some(drift) = self.fleet.drift.get(selected) {
+                        if drift.findings.is_empty() {
+                            lines.push("drift: verified clean".into());
+                        } else {
+                            lines.push(format!("drift findings: {}", drift.findings.join("; ")));
+                        }
+                    }
+                }
+            }
+            if self.fleet.pending_action.is_some() {
+                lines.push("an apply confirmation modal is open".into());
+            }
+        }
+        if let Some(author) = &self.author {
+            lines.push(format!(
+                "authoring overlay open on migration {:05}{}",
+                author.number,
+                if author.existing.is_some() {
+                    " (existing)"
+                } else {
+                    " (new draft)"
+                },
+            ));
+        }
+        format!(
+            "[zeDB screen context, attached by the app; the zedb MCP tools go deeper]\n{}",
+            lines.join("\n")
+        )
     }
 
     pub(crate) fn agent_cancel(&mut self, cx: &mut Context<Self>) {

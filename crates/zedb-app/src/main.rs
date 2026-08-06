@@ -4744,7 +4744,58 @@ fn quit_ze_db(_: &QuitZeDb, cx: &mut App) {
     cx.quit();
 }
 
+/// Hidden server mode: the agent pane spawns this same executable as
+/// its MCP server (the bundle ships no separate CLI). The config file
+/// carries the connection credentials at 0600 and is deleted on read.
+fn run_mcp_serve(config_path: &str) -> ! {
+    let outcome = (|| -> Result<(), String> {
+        let raw = std::fs::read_to_string(config_path).map_err(|error| error.to_string())?;
+        let _ = std::fs::remove_file(config_path);
+        let config: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+        let repo = config
+            .get("repo")
+            .and_then(|value| value.as_str())
+            .and_then(|path| zedb_core::repo::MigrationRepo::open(std::path::Path::new(path)).ok());
+        let connection = config
+            .get("url")
+            .and_then(|value| value.as_str())
+            .map(|url| zedb_ch::ChConfig {
+                url: url.to_string(),
+                user: config
+                    .get("user")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("default")
+                    .to_string(),
+                password: config
+                    .get("password")
+                    .and_then(|value| value.as_str())
+                    .filter(|password| !password.is_empty())
+                    .map(str::to_string),
+                database: None,
+                read_only: true,
+            });
+        let server = zedb_ch::mcp::McpServer::new(repo, connection, Default::default());
+        let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
+        runtime
+            .block_on(zedb_ch::mcp::serve_stdio(server))
+            .map_err(|error| error.to_string())
+    })();
+    match outcome {
+        Ok(()) => std::process::exit(0),
+        Err(error) => {
+            eprintln!("zedb-mcp-serve: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("zedb-mcp-serve") {
+        let config_path = args.get(2).cloned().unwrap_or_default();
+        run_mcp_serve(&config_path);
+    }
     // ZEDB_LOG=1 surfaces log-crate records (gpui swallows asset and
     // image errors into log::error, which is silence without a logger).
     if std::env::var_os("ZEDB_LOG").is_some() {

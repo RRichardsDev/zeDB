@@ -608,7 +608,7 @@ impl Workspace {
         .detach();
     }
 
-    fn fleet_tier(&self) -> zedb_core::EnvTier {
+    pub(crate) fn fleet_tier(&self) -> zedb_core::EnvTier {
         self.selected
             .and_then(|index| self.connections.get(index))
             .map(|connection| connection.tier)

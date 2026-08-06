@@ -657,3 +657,24 @@ Status: implementation complete, awaiting UI acceptance.
 - Verified live: both built-ins Ready with no configuration, and a
   hand-added custom agent (the test crate's fake-agent binary) appears
   in the menu, threads, streams a reply, and shows its tool call.
+
+## Phase 3.1 M3: fleet context via MCP (2026-08-06)
+
+- zedb mcp: a read-only MCP server over stdio in zedb-ch, exposed as a
+  CLI subcommand and as a hidden serve mode in the app binary (the
+  bundle ships no CLI; the pane spawns its own executable). Fleet
+  tools ride the same runner/verifier as everything else; ClickHouse
+  tools go through a new query_guarded client path with server-side
+  readonly plus execution-time, row, and byte caps. Proven live:
+  guarded queries and fleet status against the demo cluster, an
+  INSERT refused READONLY, and a terminal-run Claude Code answering
+  fleet questions through the CLI form of the server.
+- Pane sessions register the server automatically: connection
+  credentials travel via a 0600 file the server deletes on read,
+  never argv or env. Sends carry ambient screen context (screen,
+  connection with tier and posture, repo with git summary, selected
+  fleet row with status and fetched drift, open modal or authoring
+  overlay), attached visibly as an entry in the transcript and
+  toggleable per thread. Remaining for live sign-off: the deictic
+  what's-wrong-with-this-database walk, which needs a Touch ID
+  connect.
