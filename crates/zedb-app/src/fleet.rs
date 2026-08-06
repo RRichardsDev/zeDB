@@ -125,6 +125,9 @@ pub struct FleetState {
     pub hidden_databases: HashSet<String>,
     /// The database checkbox list is open.
     pub filter_open: bool,
+    /// Width of the detail panel; user-draggable.
+    pub detail_width: f32,
+    pub resizing_detail: bool,
 }
 
 impl FleetState {
@@ -166,6 +169,8 @@ impl FleetState {
             editing_repo_path: false,
             hidden_databases: HashSet::new(),
             filter_open: false,
+            detail_width: 420.0,
+            resizing_detail: false,
         }
     }
 }
@@ -658,14 +663,32 @@ impl Workspace {
         };
 
         let mut panel = div()
-            .w(px(420.))
+            .w(px(self.fleet.detail_width))
             .flex_none()
             .h_full()
+            .relative()
             .flex()
             .flex_col()
             .border_l_1()
             .border_color(rgb(BORDER))
             .bg(rgb(BG_SIDEBAR))
+            .child(
+                div()
+                    .id("fleet-detail-resize")
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(6.))
+                    .cursor_col_resize()
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
+                            this.fleet.resizing_detail = true;
+                            cx.notify();
+                        }),
+                    ),
+            )
             .child(
                 div()
                     .flex_none()
@@ -1502,6 +1525,18 @@ impl Workspace {
                 format!("{number:05}")
             };
             let number = *number;
+            let targeted = *targeted;
+            // Applied anywhere means read-only viewing; never applied
+            // means clicking opens an editable draft.
+            let applied_anywhere = rows.iter().any(|row| {
+                if targeted {
+                    row.customised.contains(&number)
+                } else {
+                    row.excluded.is_none()
+                        && row.head.is_some_and(|head| head >= number)
+                        && !row.pending.contains(&number)
+                }
+            });
             header = header.child(
                 div()
                     .id(("fleet-migration-header", index))
@@ -1513,11 +1548,17 @@ impl Workspace {
                     .justify_center()
                     .rounded(px(3.))
                     .child(label)
-                    .hover(|cell| cell.bg(rgb(0x303640)).cursor_pointer())
-                    .tooltip(|window, cx| {
-                        gpui_component::tooltip::Tooltip::new(
-                            "View this migration; editable until it has been applied anywhere",
-                        )
+                    .hover(move |cell| {
+                        cell.bg(rgb(0x303640))
+                            .text_color(rgb(if applied_anywhere { TEXT } else { SUCCESS }))
+                            .cursor_pointer()
+                    })
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(if applied_anywhere {
+                            "View migration (applied; read-only)"
+                        } else {
+                            "Edit migration (never applied anywhere)"
+                        })
                         .build(window, cx)
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {

@@ -4205,6 +4205,12 @@ impl Render for Workspace {
                         (f32::from(event.position.y) - 36.0).clamp(140.0, maximum);
                     cx.notify();
                 }
+                if this.fleet.resizing_detail {
+                    let viewport_width = f32::from(window.viewport_size().width);
+                    this.fleet.detail_width = (viewport_width - f32::from(event.position.x))
+                        .clamp(280.0, (viewport_width - 400.0).max(280.0));
+                    cx.notify();
+                }
                 if let Some((target, last_y)) = this.query_resize {
                     let current_y = f32::from(event.position.y);
                     let delta = current_y - last_y;
@@ -4227,6 +4233,7 @@ impl Render for Workspace {
                 cx.listener(|this, _: &MouseUpEvent, _, _| {
                     this.resizing_sidebar = false;
                     this.resizing_sidebar_sections = false;
+                    this.fleet.resizing_detail = false;
                     this.query_resize = None;
                 }),
             )
@@ -4235,6 +4242,7 @@ impl Render for Workspace {
                 cx.listener(|this, _: &MouseUpEvent, _, _| {
                     this.resizing_sidebar = false;
                     this.resizing_sidebar_sections = false;
+                    this.fleet.resizing_detail = false;
                     this.query_resize = None;
                 }),
             )
