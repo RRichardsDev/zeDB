@@ -1537,11 +1537,9 @@ impl Workspace {
                         && !row.pending.contains(&number)
                 }
             });
-            let group_name = gpui::SharedString::from(format!("fleet-migration-header-{index}"));
             header = header.child(
                 div()
                     .id(("fleet-migration-header", index))
-                    .group(group_name.clone())
                     .w(px(64.))
                     .h_full()
                     .flex_none()
@@ -1549,9 +1547,15 @@ impl Workspace {
                     .items_center()
                     .justify_center()
                     .rounded(px(3.))
-                    .child(div().child(label).group_hover(group_name, move |cell| {
-                        cell.text_color(rgb(if applied_anywhere { TEXT } else { SUCCESS }))
-                    }))
+                    // Editable (never applied anywhere) reads green at
+                    // all times; hover-time text recolors do not render
+                    // in this gpui version, and a standing cue is more
+                    // scannable anyway.
+                    .child(
+                        div()
+                            .text_color(rgb(if applied_anywhere { TEXT_DIM } else { SUCCESS }))
+                            .child(label),
+                    )
                     .hover(|cell| cell.bg(rgb(0x303640)).cursor_pointer())
                     .tooltip(move |window, cx| {
                         gpui_component::tooltip::Tooltip::new(if applied_anywhere {
