@@ -1606,6 +1606,12 @@ impl Workspace {
                             .text_color(rgb(TEXT))
                             .cursor_pointer()
                     })
+                    .tooltip(|window, cx| {
+                        gpui_component::tooltip::Tooltip::new(
+                            "Open the repo: a local checkout path or a git URL to clone",
+                        )
+                        .build(window, cx)
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.fleet_open_repo(cx))),
             )
             .child(
@@ -1628,6 +1634,12 @@ impl Workspace {
                             .bg(rgb(BG_SIDEBAR))
                             .text_color(rgb(TEXT))
                             .cursor_pointer()
+                    })
+                    .tooltip(|window, cx| {
+                        gpui_component::tooltip::Tooltip::new(
+                            "Refresh fleet status from the connected cluster",
+                        )
+                        .build(window, cx)
                     })
                     .on_click(cx.listener(|this, _, _, cx| this.fleet_refresh(cx))),
             );
