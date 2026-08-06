@@ -1202,6 +1202,9 @@ impl Workspace {
                 div()
                     .text_color(rgb(if applied.is_some() { SUCCESS } else { TEXT_DIM }))
                     .child(match applied {
+                        Some(seconds) if seconds < 1.0 => {
+                            format!("{label}  [applied {:.0}ms]", seconds * 1000.0)
+                        }
                         Some(seconds) => format!("{label}  [applied {seconds:.1}s]"),
                         None => label.clone(),
                     }),
