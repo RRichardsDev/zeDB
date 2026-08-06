@@ -88,6 +88,7 @@ actions!(
         OpenAbout,
         CheckForUpdates,
         OpenPreferences,
+        ToggleAgentPane,
         QuitZeDb,
         RunQuery,
         RunSelection,
@@ -4761,6 +4762,15 @@ fn main() {
             KeyBinding::new("cmd-enter", RunQuery, None),
             KeyBinding::new("ctrl-x", RunSelection, None),
             KeyBinding::new("cmd-,", OpenPreferences, None),
+            KeyBinding::new("cmd-i", ToggleAgentPane, None),
+            // In multi-line inputs the composer sends on plain enter;
+            // shift-enter keeps inserting a newline via the secondary
+            // Enter action (which the composer ignores).
+            KeyBinding::new(
+                "shift-enter",
+                gpui_component::input::Enter { secondary: true },
+                Some("Input"),
+            ),
         ]);
         cx.set_menus(vec![Menu {
             name: "zeDB".into(),
@@ -4805,6 +4815,12 @@ fn main() {
                 cx.on_action(move |_: &CheckForUpdates, cx| {
                     updates_workspace.update(cx, |workspace, cx| {
                         workspace.check_for_updates_now(cx);
+                    });
+                });
+                let agent_workspace = workspace.clone();
+                cx.on_action(move |_: &ToggleAgentPane, cx| {
+                    agent_workspace.update(cx, |workspace, cx| {
+                        workspace.agent_toggle(cx);
                     });
                 });
                 cx.new(|cx| Root::new(workspace, window, cx))

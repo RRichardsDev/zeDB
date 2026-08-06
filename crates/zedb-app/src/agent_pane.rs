@@ -137,17 +137,30 @@ impl Workspace {
 
         self.agent.next_generation += 1;
         let generation = self.agent.next_generation;
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .auto_grow(1, 6)
+                .placeholder("Message the agent...")
+        });
+        // Enter sends; shift-enter (bound app-side to the secondary
+        // Enter action) stays a newline and is ignored here.
+        cx.subscribe_in(
+            &input,
+            window,
+            |this, _, event: &gpui_component::input::InputEvent, window, cx| {
+                if let gpui_component::input::InputEvent::PressEnter { secondary: false } = event {
+                    this.agent_send(window, cx);
+                }
+            },
+        )
+        .detach();
         self.agent.thread = Some(ThreadState {
             agent_name: name.to_string(),
             connection: connection.clone(),
             session_id: None,
             entries: Vec::new(),
-            input: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .multi_line(true)
-                    .auto_grow(1, 6)
-                    .placeholder("Message the agent...")
-            }),
+            input,
             running: false,
             status: Some("starting...".into()),
             pending_permission: None,
