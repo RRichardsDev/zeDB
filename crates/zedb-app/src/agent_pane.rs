@@ -501,13 +501,27 @@ impl Workspace {
                                         },
                                     );
                                     for (index, (name, icon, _, _)) in AGENTS.iter().enumerate() {
-                                        menu = menu.menu_with_icon(
-                                            *name,
-                                            gpui_component::Icon::default()
-                                                .path(*icon)
-                                                .size(px(18.))
-                                                .mr_1(),
+                                        let name = *name;
+                                        let icon_path = *icon;
+                                        // Custom rows: the stock item
+                                        // renderer clamps icon size and
+                                        // keeps an arrow cursor.
+                                        menu = menu.menu_element(
                                             Box::new(StartAgentThread { index }),
+                                            move |_, _| {
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .cursor_pointer()
+                                                    .child(
+                                                        svg()
+                                                            .path(icon_path)
+                                                            .size(px(19.))
+                                                            .text_color(rgb(TEXT_DIM)),
+                                                    )
+                                                    .child(name)
+                                            },
                                         );
                                     }
                                     menu.separator().menu_with_enable(
