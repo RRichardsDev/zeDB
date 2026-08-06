@@ -3234,11 +3234,16 @@ impl Workspace {
                                 } else {
                                     button
                                         .border_color(rgb(BORDER))
+                                        .when(!self.show_fleet, |button| button.bg(rgb(0x2c3a4d)))
                                         .child(
                                             svg()
                                                 .path("icons/query-plus.svg")
                                                 .size(px(14.))
-                                                .text_color(rgb(TEXT_DIM))
+                                                .text_color(rgb(if self.show_fleet {
+                                                    TEXT_DIM
+                                                } else {
+                                                    TEXT
+                                                }))
                                                 .group_hover("btn-query", |icon| {
                                                     icon.text_color(rgb(TEXT))
                                                 }),
@@ -3295,15 +3300,15 @@ impl Workspace {
                                 .items_center()
                                 .justify_center()
                                 .rounded(px(3.))
-                                .bg(rgb(0x3d2528))
-                                .text_color(rgb(DANGER))
+                                .border_1()
+                                .border_color(rgb(DANGER))
                                 .child(
                                     svg()
                                         .path("icons/stop.svg")
                                         .size(px(12.))
                                         .text_color(rgb(DANGER)),
                                 )
-                                .hover(|button| button.bg(rgb(0x563034)).cursor_pointer())
+                                .hover(|button| button.bg(rgb(0x3d2528)).cursor_pointer())
                                 .tooltip(|window, cx| {
                                     gpui_component::tooltip::Tooltip::new("Disconnect")
                                         .build(window, cx)
