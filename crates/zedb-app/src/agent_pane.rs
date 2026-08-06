@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, px, rgb, svg, Action, Context, Entity, Window};
+use gpui::{div, prelude::*, px, rgb, svg, Action, Context, Entity, Focusable, Window};
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{DropdownMenu, PopupMenu};
@@ -53,6 +53,28 @@ struct BridgeRequest {
     respond: oneshot::Sender<(String, bool)>,
 }
 
+/// Sent once at the start of every thread: orientation on zeDB and
+/// its tools. Deliberately light-touch: the user knows whose agent
+/// they are running and it must still do anything they ask.
+const AGENT_PRIMER: &str = "[zeDB agent primer]\n\
+You are running inside zeDB, a ClickHouse explorer and fleet migration tool; \
+this thread lives in its agent pane.\n\
+- The zedb MCP tools (mcp__zedb__*) answer for THIS app's open migration repo \
+and connection: fleet_status, list_migrations, migration_sql, dry_run, drift, \
+list_databases, list_tables, describe, run_query (read-only, capped), \
+propose_migration (fills the migration authoring overlay with a draft), \
+propose_query (puts SQL in the query editor), navigate (switch views, select \
+a database).\n\
+- Prefer them over any other configured ClickHouse MCP servers for anything \
+about what is on screen here; other servers may point at unrelated clusters.\n\
+- zeDB's write paths are consent-gated: you cannot apply migrations or run \
+writes through the zedb tools. Propose drafts (propose_migration, \
+propose_query) and the user reviews, checks, and applies through zeDB.\n\
+- Migrations template with ${db} and ${cluster}; each lives in \
+migrations/YYYY/MM/NNNNN as upgrade.sql plus rollback.sql whose first line is \
+'-- rollback-class: clean|structural|irreversible'.\n\
+This is orientation, not restriction: do whatever the user asks.";
+
 /// The icon shipped for a discovered agent id.
 fn icon_for(id: &str) -> &'static str {
     match id {
@@ -92,6 +114,12 @@ pub struct ThreadState {
     /// next chunk starts a fresh paragraph instead of gluing onto the
     /// previous one (approval notices and answers otherwise merge).
     pub break_assistant: bool,
+    /// The session primer has been sent (first send of the thread).
+    pub primed: bool,
+    /// Transcript scroll position, for stick-to-bottom streaming.
+    pub scroll: gpui::ScrollHandle,
+    /// Follow new content while the user has not scrolled away.
+    pub stick_to_bottom: bool,
     pub connection: Arc<AgentConnection>,
     pub session_id: Option<String>,
     pub entries: Vec<ThreadEntry>,
@@ -173,12 +201,21 @@ fn agent_log(kind: &str, data: serde_json::Value) {
 }
 
 impl Workspace {
-    pub(crate) fn agent_toggle(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn agent_toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.agent.open = !self.agent.open;
         if self.agent.open {
             self.agent_refresh_registry();
+            self.agent_focus_composer(window, cx);
         }
         cx.notify();
+    }
+
+    /// Land keyboard focus in the composer when there is one.
+    fn agent_focus_composer(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(thread) = self.agent.thread.as_ref() {
+            let handle = thread.input.read(cx).focus_handle(cx);
+            window.focus(&handle);
+        }
     }
 
     /// Re-run discovery and re-resolve the user's custom agents.
@@ -286,6 +323,9 @@ impl Workspace {
             include_context: true,
             cache_key: cache_key.clone(),
             break_assistant: false,
+            primed: false,
+            scroll: gpui::ScrollHandle::new(),
+            stick_to_bottom: true,
             connection: connection.clone(),
             session_id: None,
             entries: Vec::new(),
@@ -296,6 +336,7 @@ impl Workspace {
             generation,
         });
         self.agent.picker_open = false;
+        self.agent_focus_composer(window, cx);
         cx.notify();
 
         // Watch the open repo while this thread lives: agents edit
@@ -877,6 +918,12 @@ impl Workspace {
         }
         match event {
             AgentEvent::MessageChunk { text } => {
+                if thread.entries.len() > 600 {
+                    thread.entries.drain(..100);
+                    thread
+                        .entries
+                        .insert(0, ThreadEntry::Info("(older messages trimmed)".into()));
+                }
                 match thread.entries.last_mut() {
                     Some(ThreadEntry::Assistant(existing)) if !thread.break_assistant => {
                         existing.push_str(&text);
@@ -978,11 +1025,26 @@ impl Workspace {
         let connection = thread.connection.clone();
         cx.notify();
 
-        let full_text = if include_context {
-            format!("{}\n\n{text}", self.agent_ambient_context())
+        let primer = if let Some(thread) = self.agent.thread.as_mut() {
+            if thread.primed {
+                None
+            } else {
+                thread.primed = true;
+                Some(AGENT_PRIMER)
+            }
         } else {
-            text
+            None
         };
+        let mut full_text = String::new();
+        if let Some(primer) = primer {
+            full_text.push_str(primer);
+            full_text.push_str("\n\n");
+        }
+        if include_context {
+            full_text.push_str(&self.agent_ambient_context());
+            full_text.push_str("\n\n");
+        }
+        full_text.push_str(&text);
         agent_log(
             "prompt",
             serde_json::json!({ "session_id": session_id, "text": full_text }),
@@ -1113,11 +1175,7 @@ impl Workspace {
             ));
         }
         format!(
-            "[zeDB screen context, attached by the app. For anything about THIS \
-             app's fleet, repo, schema, or connection, use the zedb MCP tools \
-             (mcp__zedb__*): they answer for the connection shown below. Other \
-             configured ClickHouse MCP servers may point at unrelated clusters; \
-             do not use them for questions about what is on screen here.]\n{}",
+            "[zeDB screen context, attached by the app]\n{}",
             lines.join("\n")
         )
     }
@@ -1199,7 +1257,13 @@ impl Workspace {
             .agent
             .thread
             .as_ref()
-            .map(|thread| format!("{} Thread", thread.agent_name))
+            .map(|thread| {
+                if thread.running {
+                    format!("{} Thread · working", thread.agent_name)
+                } else {
+                    format!("{} Thread", thread.agent_name)
+                }
+            })
             .unwrap_or_else(|| "New Thread".into());
         panel = panel.child(
             div()
@@ -1454,6 +1518,35 @@ impl Workspace {
             .flex_col()
             .gap_2();
         if let Some(thread) = self.agent.thread.as_ref() {
+            transcript = transcript.track_scroll(&thread.scroll);
+            if thread.stick_to_bottom {
+                thread.scroll.scroll_to_bottom();
+            }
+            let scroll = thread.scroll.clone();
+            transcript = transcript.on_scroll_wheel(cx.listener(
+                move |this, event: &gpui::ScrollWheelEvent, _, cx| {
+                    let Some(thread) = this.agent.thread.as_mut() else {
+                        return;
+                    };
+                    let upward = match event.delta {
+                        gpui::ScrollDelta::Pixels(delta) => delta.y > gpui::px(0.),
+                        gpui::ScrollDelta::Lines(delta) => delta.y > 0.,
+                    };
+                    if upward {
+                        thread.stick_to_bottom = false;
+                    } else {
+                        // Re-stick when the wheel brings us near the end.
+                        let max = scroll.max_offset().height;
+                        let position = -scroll.offset().y;
+                        if max - position < gpui::px(40.) {
+                            thread.stick_to_bottom = true;
+                        }
+                    }
+                    cx.notify();
+                },
+            ));
+        }
+        if let Some(thread) = self.agent.thread.as_ref() {
             for (index, entry) in thread.entries.iter().enumerate() {
                 transcript = transcript.child(render_entry(index, entry, window, cx));
             }
@@ -1465,6 +1558,16 @@ impl Workspace {
                         .child("working..."),
                 );
             }
+        } else {
+            transcript = transcript.child(
+                div()
+                    .w_full()
+                    .py_8()
+                    .flex()
+                    .justify_center()
+                    .text_color(rgb(TEXT_DIM))
+                    .child("Start a thread with the + menu above"),
+            );
         }
         panel = panel.child(transcript);
 
@@ -1657,7 +1760,10 @@ fn render_entry(
             .rounded(px(4.))
             .bg(rgb(0x2c3a4d))
             .text_color(rgb(TEXT))
-            .child(text.clone())
+            .child(
+                TextView::markdown(("agent-user", index), text.clone(), window, cx)
+                    .selectable(true),
+            )
             .into_any_element(),
         ThreadEntry::Assistant(text) => {
             if text.is_empty() {
@@ -1672,12 +1778,16 @@ fn render_entry(
                     .border_color(rgb(0xd7a65f))
                     .text_xs()
                     .text_color(rgb(0xd7a65f))
-                    .child(text.clone())
+                    .child(
+                        TextView::markdown(("agent-notice", index), text.clone(), window, cx)
+                            .selectable(true),
+                    )
                     .into_any_element()
             } else {
                 let blocks = fenced_sql_blocks(text);
                 let mut body = div().text_color(rgb(TEXT)).flex().flex_col().gap_1().child(
-                    TextView::markdown(("agent-md", index), text.clone(), window, cx),
+                    TextView::markdown(("agent-md", index), text.clone(), window, cx)
+                        .selectable(true),
                 );
                 for (block_index, block) in blocks.into_iter().enumerate() {
                     let label = if block_index == 0 {

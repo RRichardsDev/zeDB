@@ -3272,7 +3272,9 @@ impl Workspace {
                                 )
                                 .build(window, cx)
                             })
-                            .on_click(cx.listener(|this, _, _, cx| this.agent_toggle(cx))),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.agent_toggle(window, cx)),
+                            ),
                     )
                     .when(selected_connected, |toolbar| {
                         toolbar.child(
@@ -4378,6 +4380,9 @@ impl Render for Workspace {
                     this.agent_open_add_form(window, cx)
                 }),
             )
+            .on_action(
+                cx.listener(|this, _: &ToggleAgentPane, window, cx| this.agent_toggle(window, cx)),
+            )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.resizing_sidebar {
                     this.sidebar_width = f32::from(event.position.x).clamp(180.0, 480.0);
@@ -4912,12 +4917,6 @@ fn main() {
                 cx.on_action(move |_: &CheckForUpdates, cx| {
                     updates_workspace.update(cx, |workspace, cx| {
                         workspace.check_for_updates_now(cx);
-                    });
-                });
-                let agent_workspace = workspace.clone();
-                cx.on_action(move |_: &ToggleAgentPane, cx| {
-                    agent_workspace.update(cx, |workspace, cx| {
-                        workspace.agent_toggle(cx);
                     });
                 });
                 cx.new(|cx| Root::new(workspace, window, cx))
