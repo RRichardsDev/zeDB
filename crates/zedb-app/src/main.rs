@@ -2448,6 +2448,38 @@ impl Workspace {
         }
     }
 
+    /// Agent-facing: show the query editor, creating a tab if none.
+    pub(crate) fn open_query_editor_for_agent(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.query_tabs.is_empty() {
+            self.add_query_tab(window, cx);
+        } else {
+            self.show_query_editor = true;
+            self.show_fleet = false;
+            cx.notify();
+        }
+    }
+
+    /// Agent-facing: a new query tab pre-filled with SQL, focused.
+    pub(crate) fn open_query_tab_with(
+        &mut self,
+        sql: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let id = self.next_query_tab_id;
+        self.next_query_tab_id += 1;
+        let tab = Self::make_query_tab(id, sql, window, cx);
+        self.query_tabs.push(tab);
+        self.active_query_tab = self.query_tabs.len() - 1;
+        self.show_query_editor = true;
+        self.show_fleet = false;
+        cx.notify();
+    }
+
     fn add_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.next_query_tab_id;
         self.next_query_tab_id += 1;
@@ -4294,6 +4326,8 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Agent-requested effects need a Window; apply them here.
+        self.agent_drain_effects(window, cx);
         div()
             .size_full()
             .flex()
@@ -4776,7 +4810,10 @@ fn run_mcp_serve(config_path: &str) -> ! {
                 database: None,
                 read_only: true,
             });
-        let server = zedb_ch::mcp::McpServer::new(repo, connection, Default::default());
+        let mut server = zedb_ch::mcp::McpServer::new(repo, connection, Default::default());
+        if let Some(socket) = config.get("app_socket").and_then(|value| value.as_str()) {
+            server = server.with_app_bridge(std::path::PathBuf::from(socket));
+        }
         let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
         runtime
             .block_on(zedb_ch::mcp::serve_stdio(server))

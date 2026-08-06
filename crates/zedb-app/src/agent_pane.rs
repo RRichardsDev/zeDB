@@ -17,6 +17,7 @@ use gpui_component::text::TextView;
 use tokio::sync::oneshot;
 use zedb_acp::{AcpError, AgentConnection, AgentEvent, PermissionOption, PermissionOutcome};
 
+use crate::author::RollbackChoice;
 use crate::rt;
 use crate::theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
 use crate::Workspace;
@@ -30,6 +31,27 @@ pub struct StartAgentThread {
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json, no_register)]
 pub struct OpenAddAgent;
+
+/// Window-needing work requested by an agent over the bridge.
+pub enum AgentEffect {
+    ProposeMigration {
+        upgrade_sql: String,
+        rollback_sql: Option<String>,
+        rollback_class: String,
+        targeted: bool,
+    },
+    ProposeQuery {
+        sql: String,
+    },
+    OpenQueryView,
+}
+
+/// One forwarded tool call awaiting the app's answer.
+struct BridgeRequest {
+    tool: String,
+    arguments: serde_json::Value,
+    respond: oneshot::Sender<(String, bool)>,
+}
 
 /// The icon shipped for a discovered agent id.
 fn icon_for(id: &str) -> &'static str {
@@ -93,6 +115,12 @@ pub struct AgentPaneState {
     /// multi-session, and respawning per thread made macOS re-ask
     /// keychain approvals for the agent's credentials on every thread.
     pub connections: std::collections::HashMap<String, Arc<AgentConnection>>,
+    /// The unix socket where app-hosted tools (propose_*, navigate)
+    /// arrive from the MCP serve subprocess; created lazily once.
+    pub bridge_socket: Option<std::path::PathBuf>,
+    /// Effects that need a Window (editor creation); queued by the
+    /// bridge pump and drained at the top of render.
+    pub pending_effects: Vec<AgentEffect>,
     /// The Add More Agents form, when open.
     pub add_form: Option<AddAgentForm>,
 }
@@ -114,6 +142,8 @@ impl AgentPaneState {
             next_generation: 0,
             agents: Vec::new(),
             connections: std::collections::HashMap::new(),
+            bridge_socket: None,
+            pending_effects: Vec::new(),
             add_form: None,
         }
     }
@@ -273,7 +303,8 @@ impl Workspace {
         // hidden serve mode) so the agent gets the fleet and query
         // tools. Credentials travel via a 0600 file the server deletes
         // on read, never argv or env.
-        let mcp_servers = self.agent_mcp_server_config();
+        let bridge_socket = self.agent_ensure_bridge(cx);
+        let mcp_servers = self.agent_mcp_server_config(bridge_socket);
         let handshake_connection = connection.clone();
         let handshake_cwd = cwd.clone().unwrap_or_else(|| "/".into());
         let handle = rt::tokio().spawn(async move {
@@ -402,9 +433,280 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Bind the app-tool bridge socket once; returns its path.
+    fn agent_ensure_bridge(&mut self, cx: &mut Context<Self>) -> Option<std::path::PathBuf> {
+        if let Some(path) = &self.agent.bridge_socket {
+            return Some(path.clone());
+        }
+        let dir = dirs::data_local_dir()?.join("zedb").join("mcp");
+        std::fs::create_dir_all(&dir).ok()?;
+        let path = dir.join(format!("app-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let _runtime = rt::tokio().enter();
+        let listener = tokio::net::UnixListener::bind(&path).ok()?;
+        let (requests_tx, mut requests_rx) = tokio::sync::mpsc::unbounded_channel();
+        rt::tokio().spawn(async move {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let requests_tx = requests_tx.clone();
+                tokio::spawn(async move {
+                    let (read_half, mut write_half) = stream.into_split();
+                    let mut line = String::new();
+                    if BufReader::new(read_half)
+                        .read_line(&mut line)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                        return;
+                    };
+                    let (respond_tx, respond_rx) = oneshot::channel();
+                    let request = BridgeRequest {
+                        tool: value
+                            .get("tool")
+                            .and_then(|tool| tool.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        arguments: value
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                        respond: respond_tx,
+                    };
+                    if requests_tx.send(request).is_err() {
+                        return;
+                    }
+                    let (text, is_error) =
+                        respond_rx.await.unwrap_or(("app closed".to_string(), true));
+                    let reply = serde_json::json!({ "text": text, "isError": is_error });
+                    let _ = write_half.write_all(reply.to_string().as_bytes()).await;
+                    let _ = write_half.write_all(b"\n").await;
+                });
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            while let Some(request) = requests_rx.recv().await {
+                let live = this
+                    .update(cx, |this, cx| {
+                        let BridgeRequest {
+                            tool,
+                            arguments,
+                            respond,
+                        } = request;
+                        let outcome = this.agent_handle_bridge_tool(&tool, &arguments, cx);
+                        let _ = respond.send(outcome);
+                    })
+                    .is_ok();
+                if !live {
+                    break;
+                }
+            }
+        })
+        .detach();
+        self.agent.bridge_socket = Some(path.clone());
+        Some(path)
+    }
+
+    /// Execute one app tool; narrated in the thread so the UI never
+    /// changes unexplained. Returns (reply text, is_error).
+    fn agent_handle_bridge_tool(
+        &mut self,
+        tool: &str,
+        arguments: &serde_json::Value,
+        cx: &mut Context<Self>,
+    ) -> (String, bool) {
+        let narrate = |this: &mut Self, line: String, cx: &mut Context<Self>| {
+            if let Some(thread) = this.agent.thread.as_mut() {
+                thread.entries.push(ThreadEntry::Info(line));
+            }
+            cx.notify();
+        };
+        match tool {
+            "navigate" => {
+                let view = arguments
+                    .get("view")
+                    .and_then(|view| view.as_str())
+                    .unwrap_or_default();
+                let database = arguments
+                    .get("database")
+                    .and_then(|database| database.as_str())
+                    .map(str::to_string);
+                match view {
+                    "fleet" => {
+                        self.show_fleet = true;
+                        self.show_query_editor = false;
+                        if self.fleet.repo.is_none()
+                            && !self.fleet.repo_path.read(cx).text().trim().is_empty()
+                        {
+                            self.fleet_open_repo(cx);
+                        }
+                        if let Some(database) = &database {
+                            self.fleet.selected = Some(database.clone());
+                        }
+                        narrate(
+                            self,
+                            format!(
+                                "agent: opened fleet view{}",
+                                database
+                                    .as_ref()
+                                    .map(|database| format!(" ({database} selected)"))
+                                    .unwrap_or_default()
+                            ),
+                            cx,
+                        );
+                        ("fleet view opened".into(), false)
+                    }
+                    "query" => {
+                        self.agent.pending_effects.push(AgentEffect::OpenQueryView);
+                        narrate(self, "agent: opened the query editor".into(), cx);
+                        ("query editor opened".into(), false)
+                    }
+                    "connections" => {
+                        self.show_fleet = false;
+                        self.show_query_editor = false;
+                        narrate(self, "agent: opened the connections view".into(), cx);
+                        ("connections view opened".into(), false)
+                    }
+                    other => (format!("unknown view: {other}"), true),
+                }
+            }
+            "propose_query" => {
+                let Some(sql) = arguments.get("sql").and_then(|sql| sql.as_str()) else {
+                    return ("sql argument required".into(), true);
+                };
+                self.agent.pending_effects.push(AgentEffect::ProposeQuery {
+                    sql: sql.to_string(),
+                });
+                narrate(self, "agent: placed SQL in a query tab".into(), cx);
+                (
+                    "SQL placed in a new query editor tab for the user to review and run".into(),
+                    false,
+                )
+            }
+            "propose_migration" => {
+                if self.fleet.repo.is_none() {
+                    return (
+                        "no migration repo is open in zeDB; ask the user to open one \
+                         in the fleet view first"
+                            .into(),
+                        true,
+                    );
+                }
+                if self.author.is_some() {
+                    return (
+                        "the authoring overlay is already open with a draft; ask the user \
+                         to close or save it first, then propose again"
+                            .into(),
+                        true,
+                    );
+                }
+                let Some(upgrade_sql) = arguments.get("upgrade_sql").and_then(|sql| sql.as_str())
+                else {
+                    return ("upgrade_sql argument required".into(), true);
+                };
+                self.agent
+                    .pending_effects
+                    .push(AgentEffect::ProposeMigration {
+                        upgrade_sql: upgrade_sql.to_string(),
+                        rollback_sql: arguments
+                            .get("rollback_sql")
+                            .and_then(|sql| sql.as_str())
+                            .map(str::to_string),
+                        rollback_class: arguments
+                            .get("rollback_class")
+                            .and_then(|class| class.as_str())
+                            .unwrap_or("clean")
+                            .to_string(),
+                        targeted: arguments
+                            .get("targeted")
+                            .and_then(|targeted| targeted.as_bool())
+                            .unwrap_or(false),
+                    });
+                narrate(
+                    self,
+                    "agent: proposed a migration draft (authoring overlay)".into(),
+                    cx,
+                );
+                (
+                    "draft placed in the authoring overlay; the user reviews, checks \
+                     against the pinned server, and saves"
+                        .into(),
+                    false,
+                )
+            }
+            other => (format!("unknown app tool: {other}"), true),
+        }
+    }
+
+    /// Apply queued effects; called from render, where a Window exists.
+    pub(crate) fn agent_drain_effects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let effects = std::mem::take(&mut self.agent.pending_effects);
+        for effect in effects {
+            match effect {
+                AgentEffect::OpenQueryView => {
+                    self.open_query_editor_for_agent(window, cx);
+                }
+                AgentEffect::ProposeQuery { sql } => {
+                    self.open_query_tab_with(&sql, window, cx);
+                }
+                AgentEffect::ProposeMigration {
+                    upgrade_sql,
+                    rollback_sql,
+                    rollback_class,
+                    targeted,
+                } => {
+                    // The overlay lives in the fleet view; surface it.
+                    self.show_fleet = true;
+                    self.show_query_editor = false;
+                    self.author_open(window, cx);
+                    let Some(author) = self.author.as_mut() else {
+                        continue;
+                    };
+                    let choice = match rollback_class.as_str() {
+                        "structural" => RollbackChoice::Structural,
+                        "irreversible" => {
+                            if rollback_sql.is_none() {
+                                RollbackChoice::NoFile
+                            } else {
+                                RollbackChoice::Irreversible
+                            }
+                        }
+                        _ => RollbackChoice::Clean,
+                    };
+                    author.targeted = targeted;
+                    author.rollback_choice = choice;
+                    author.upgrade.update(cx, |input, cx| {
+                        input.set_value(upgrade_sql.clone(), window, cx);
+                    });
+                    if let (Some(rollback_sql), Some(marker)) =
+                        (rollback_sql.as_deref(), choice.marker())
+                    {
+                        let text = if rollback_sql.trim_start().starts_with("-- rollback-class:") {
+                            rollback_sql.to_string()
+                        } else {
+                            format!("{marker}\n{rollback_sql}")
+                        };
+                        author.rollback.update(cx, |input, cx| {
+                            input.set_value(text, window, cx);
+                        });
+                    }
+                    cx.notify();
+                }
+            }
+        }
+    }
+
     /// The zedb MCP server registration for a new session, when there
     /// is anything to serve (an open repo, a connection, or both).
-    fn agent_mcp_server_config(&self) -> Vec<zedb_acp::McpServerConfig> {
+    fn agent_mcp_server_config(
+        &self,
+        bridge_socket: Option<std::path::PathBuf>,
+    ) -> Vec<zedb_acp::McpServerConfig> {
         let repo = self
             .fleet
             .repo
@@ -417,9 +719,6 @@ impl Workspace {
                 connected.client_config.password.clone().unwrap_or_default(),
             )
         });
-        if repo.is_none() && connection.is_none() {
-            return Vec::new();
-        }
         let mut config = serde_json::Map::new();
         if let Some(repo) = repo {
             config.insert("repo".into(), repo.into());
@@ -428,6 +727,9 @@ impl Workspace {
             config.insert("url".into(), url.into());
             config.insert("user".into(), user.into());
             config.insert("password".into(), password.into());
+        }
+        if let Some(socket) = bridge_socket {
+            config.insert("app_socket".into(), socket.display().to_string().into());
         }
         let Some(dir) = dirs::data_local_dir().map(|dir| dir.join("zedb").join("mcp")) else {
             return Vec::new();

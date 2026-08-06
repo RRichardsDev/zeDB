@@ -41,6 +41,10 @@ pub struct McpServer {
     repo: Option<MigrationRepo>,
     config: Option<ChConfig>,
     caps: QueryCaps,
+    /// When set, the app-hosted tools (propose_migration, propose_query,
+    /// navigate) are offered and forwarded over this unix socket to the
+    /// running zeDB app, which owns the editors these tools fill.
+    app_socket: Option<std::path::PathBuf>,
 }
 
 impl McpServer {
@@ -50,7 +54,59 @@ impl McpServer {
             config.read_only = true;
             config
         });
-        Self { repo, config, caps }
+        Self {
+            repo,
+            config,
+            caps,
+            app_socket: None,
+        }
+    }
+
+    /// Enable the app-hosted tools, forwarded to `socket`.
+    pub fn with_app_bridge(mut self, socket: std::path::PathBuf) -> Self {
+        self.app_socket = Some(socket);
+        self
+    }
+
+    /// Forward an app tool call over the bridge; one JSONL round trip.
+    async fn forward_app_tool(&self, name: &str, arguments: &Value) -> Result<String, String> {
+        let Some(socket) = &self.app_socket else {
+            return Err("this tool needs the zeDB app; the pane provides it".into());
+        };
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let stream = tokio::net::UnixStream::connect(socket)
+            .await
+            .map_err(|error| format!("app bridge unavailable: {error}"))?;
+        let (read_half, mut write_half) = stream.into_split();
+        let request = json!({ "tool": name, "arguments": arguments });
+        write_half
+            .write_all(request.to_string().as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
+        write_half
+            .write_all(b"\n")
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut line = String::new();
+        BufReader::new(read_half)
+            .read_line(&mut line)
+            .await
+            .map_err(|error| error.to_string())?;
+        let reply: Value = serde_json::from_str(&line).map_err(|error| error.to_string())?;
+        let text = reply
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("(no reply)")
+            .to_string();
+        if reply
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            Err(text)
+        } else {
+            Ok(text)
+        }
     }
 
     fn client(&self) -> Result<ChClient, String> {
@@ -106,7 +162,9 @@ impl McpServer {
                 },
             })),
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": tool_definitions() })),
+            "tools/list" => Ok(json!({
+                "tools": tool_definitions(self.app_socket.is_some())
+            })),
             "tools/call" => self.call_tool(&params).await,
             other => Err(format!("method not supported: {other}")),
         };
@@ -136,6 +194,9 @@ impl McpServer {
             "list_tables" => self.tool_list_tables(&arguments).await,
             "describe" => self.tool_describe(&arguments).await,
             "run_query" => self.tool_run_query(&arguments).await,
+            "propose_migration" | "propose_query" | "navigate" => {
+                self.forward_app_tool(name, &arguments).await
+            }
             other => Err(format!("unknown tool: {other}")),
         };
         // Tool errors are results with isError, per MCP; protocol errors
@@ -393,7 +454,7 @@ fn sql_quote(text: &str) -> String {
     format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
-fn tool_definitions() -> Value {
+fn tool_definitions(with_app_tools: bool) -> Value {
     let string_arg = |name: &str, description: &str| {
         json!({
             "type": "object",
@@ -401,7 +462,7 @@ fn tool_definitions() -> Value {
             "required": [name],
         })
     };
-    json!([
+    let tools = json!([
         {
             "name": "fleet_status",
             "description": "Migration state of every database in the fleet: head, pending, customised, failed, excluded.",
@@ -458,7 +519,44 @@ fn tool_definitions() -> Value {
             "description": "Run a read-only SQL query on the connected ClickHouse. Server enforces read-only plus execution-time, row, and byte caps.",
             "inputSchema": string_arg("sql", "the SQL to run"),
         },
-    ])
+    ]);
+    let Value::Array(mut items) = tools else {
+        unreachable!("tool list is an array")
+    };
+    if with_app_tools {
+        items.push(json!({
+            "name": "propose_migration",
+            "description": "Fill zeDB's migration authoring overlay with a draft: upgrade SQL, rollback SQL, rollback class, targeted flag. Writes NOTHING; the user reviews, checks against the pinned server, and saves. Use ${db} and ${cluster} placeholders as the repo's migrations do.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "upgrade_sql": { "type": "string" },
+                    "rollback_sql": { "type": "string", "description": "omit for an irreversible migration" },
+                    "rollback_class": { "type": "string", "enum": ["clean", "structural", "irreversible"] },
+                    "targeted": { "type": "boolean" },
+                },
+                "required": ["upgrade_sql"],
+            },
+        }));
+        items.push(json!({
+            "name": "propose_query",
+            "description": "Put SQL into a zeDB query editor tab for the user to run themselves. Use this for any statement you cannot or should not run (writes, DDL) and for queries the user asked to have in the editor.",
+            "inputSchema": string_arg("sql", "the SQL to place in the editor"),
+        }));
+        items.push(json!({
+            "name": "navigate",
+            "description": "Switch what the zeDB window shows: view is one of fleet, query, connections; optionally select a database row in the fleet.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "view": { "type": "string", "enum": ["fleet", "query", "connections"] },
+                    "database": { "type": "string" },
+                },
+                "required": ["view"],
+            },
+        }));
+    }
+    Value::Array(items)
 }
 
 /// Serve MCP over stdio until stdin closes.

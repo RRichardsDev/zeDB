@@ -46,7 +46,7 @@ impl RollbackChoice {
         }
     }
 
-    fn marker(self) -> Option<&'static str> {
+    pub(crate) fn marker(self) -> Option<&'static str> {
         match self {
             Self::Clean => Some("-- rollback-class: clean"),
             Self::Structural => Some("-- rollback-class: structural"),
