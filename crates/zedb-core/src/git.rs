@@ -169,6 +169,13 @@ pub fn push(root: &Path) -> Result<String, String> {
     run_git(root, &["push"])
 }
 
+/// Pull the current branch, fast-forward only: zeDB never merges or
+/// resolves conflicts. Diverged history comes back as git's own
+/// message and the checkout is left exactly as it was.
+pub fn pull(root: &Path) -> Result<String, String> {
+    run_git(root, &["pull", "--ff-only"])
+}
+
 /// Does this look like a git remote URL rather than a local path?
 pub fn is_remote_url(text: &str) -> bool {
     let text = text.trim();

@@ -331,17 +331,48 @@ impl Workspace {
         };
         let dest = base.join(zedb_core::git::clone_directory_name(&url));
         if dest.join(".git").exists() {
-            // Already cloned from a previous paste: open the checkout.
-            let dest_text = dest.display().to_string();
-            self.fleet
-                .repo_path
-                .update(cx, |input, cx| input.set_text(dest_text, cx));
-            self.notice = Some(format!(
-                "Already cloned; opened the existing checkout at {}",
-                dest.display()
-            ));
+            // Already cloned from a previous paste: pull (fast-forward
+            // only), then open the checkout either way.
+            self.fleet.cloning = true;
+            self.fleet.repo_error = None;
+            self.notice = Some(format!("Pulling {}...", dest.display()));
             self.notice_warning = false;
-            self.fleet_open_repo(cx);
+            cx.notify();
+            let pull_dest = dest.clone();
+            let handle = rt::tokio().spawn(async move {
+                tokio::task::spawn_blocking(move || zedb_core::git::pull(&pull_dest))
+                    .await
+                    .map_err(|error| error.to_string())?
+            });
+            cx.spawn(async move |this, cx| {
+                let result = handle.await;
+                this.update(cx, |this, cx| {
+                    this.fleet.cloning = false;
+                    let dest_text = dest.display().to_string();
+                    this.fleet
+                        .repo_path
+                        .update(cx, |input, cx| input.set_text(dest_text, cx));
+                    match result.map_err(|error| error.to_string()) {
+                        Ok(Ok(output)) => {
+                            this.notice = Some(format!("Pulled: {output}"));
+                            this.notice_warning = false;
+                        }
+                        Ok(Err(error)) | Err(error) => {
+                            // Opened anyway: a stale checkout still
+                            // works read-only, and the git chip plus
+                            // deploy warnings carry the staleness.
+                            this.notice =
+                                Some(format!("Pull failed, opened the checkout as-is: {error}"));
+                            this.notice_warning = true;
+                            this.notice_flash_id += 1;
+                        }
+                    }
+                    this.fleet_open_repo(cx);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
             return;
         }
         self.fleet.cloning = true;
@@ -376,6 +407,48 @@ impl Workspace {
                         this.notice = None;
                     }
                 }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Pull the open checkout (fast-forward only), then reopen it so
+    /// the chain and matrix reflect what arrived.
+    pub(crate) fn fleet_pull(&mut self, cx: &mut Context<Self>) {
+        if self.fleet.cloning {
+            return;
+        }
+        let Some(repo) = self.fleet.repo.clone() else {
+            return;
+        };
+        self.fleet.cloning = true;
+        self.notice = Some("Pulling...".into());
+        self.notice_warning = false;
+        cx.notify();
+        let root = repo.root.clone();
+        let handle = rt::tokio().spawn(async move {
+            tokio::task::spawn_blocking(move || zedb_core::git::pull(&root))
+                .await
+                .map_err(|error| error.to_string())?
+        });
+        cx.spawn(async move |this, cx| {
+            let result = handle.await;
+            this.update(cx, |this, cx| {
+                this.fleet.cloning = false;
+                match result.map_err(|error| error.to_string()) {
+                    Ok(Ok(output)) => {
+                        this.notice = Some(format!("Pulled: {output}"));
+                        this.notice_warning = false;
+                    }
+                    Ok(Err(error)) | Err(error) => {
+                        this.notice = Some(format!("Pull failed: {error}"));
+                        this.notice_warning = true;
+                        this.notice_flash_id += 1;
+                    }
+                }
+                this.fleet_open_repo(cx);
                 cx.notify();
             })
             .ok();
@@ -1572,6 +1645,21 @@ impl Workspace {
                         "icons/commit.svg",
                         "Commit the repo's own changes and push to your remote",
                         cx.listener(|this, _, window, cx| this.commit_open(window, cx)),
+                    ))
+                },
+            )
+            .when(
+                self.fleet
+                    .git
+                    .as_ref()
+                    .and_then(|git| git.ahead_behind)
+                    .is_some_and(|(_, behind)| behind > 0),
+                |controls| {
+                    controls.child(fleet_icon_button(
+                        "fleet-pull",
+                        "icons/pull.svg",
+                        "Pull: the checkout is behind its upstream (fast-forward only)",
+                        cx.listener(|this, _, _, cx| this.fleet_pull(cx)),
                     ))
                 },
             )

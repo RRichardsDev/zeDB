@@ -150,6 +150,7 @@ impl AssetSource for Assets {
             "icons/lock.svg" => Some(include_bytes!("../assets/icons/lock.svg")),
             "icons/lock-open.svg" => Some(include_bytes!("../assets/icons/lock-open.svg")),
             "icons/plug.svg" => Some(include_bytes!("../assets/icons/plug.svg")),
+            "icons/pull.svg" => Some(include_bytes!("../assets/icons/pull.svg")),
             "icons/query-plus.svg" => Some(include_bytes!("../assets/icons/query-plus.svg")),
             "icons/refresh.svg" => Some(include_bytes!("../assets/icons/refresh.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
