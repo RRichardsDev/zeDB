@@ -180,18 +180,22 @@ impl<'a> Runner<'a> {
                 })
             }
             Targets::All => {
-                let query = self
-                    .repo
-                    .config
-                    .fleet
-                    .registry_query
-                    .as_deref()
-                    .ok_or_else(|| {
-                        RunnerError::Repo(
-                            "--all needs [fleet].registry_query in zedb.toml to discover databases"
-                                .into(),
-                        )
-                    })?;
+                // Without a configured registry, the fleet is every
+                // non-system database except the tracking database
+                // itself; [fleet].registry_query narrows it.
+                let default_query;
+                let query = match self.repo.config.fleet.registry_query.as_deref() {
+                    Some(query) => query,
+                    None => {
+                        default_query = format!(
+                            "SELECT name FROM system.databases WHERE name NOT IN \
+                             ('system', 'information_schema', 'INFORMATION_SCHEMA', '{}') \
+                             ORDER BY name",
+                            self.repo.config.tracking.database
+                        );
+                        &default_query
+                    }
+                };
                 let result = self
                     .client
                     .query(query)

@@ -35,8 +35,10 @@ database = "default"
 cluster_param = "cluster"
 
 [fleet]
-# Optional SQL returning one database name per row; merged with system
-# table discovery. The ancestor hardcoded this per deployment.
+# Optional SQL returning one database name per row. When absent, the
+# fleet defaults to every non-system database except the tracking
+# database itself; set this to narrow it. The ancestor hardcoded this
+# per deployment.
 registry_query = "SELECT name FROM system.databases WHERE name LIKE 'org_%'"
 
 [scopes]
