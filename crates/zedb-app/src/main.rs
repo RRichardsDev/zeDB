@@ -13,7 +13,7 @@ mod vim;
 
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -394,6 +394,9 @@ struct Workspace {
     schema_connection: Option<String>,
     schema_cache: Option<SchemaCache>,
     schema_provider: Rc<SchemaProvider>,
+    /// Databases with a column fetch in flight, so warm-up paths
+    /// (sidebar, object clicks, editor references) never double-fetch.
+    schema_warming: HashSet<String>,
     schema_loading: bool,
     schema_databases: Vec<DatabaseNode>,
     schema_error: Option<String>,
@@ -518,6 +521,7 @@ impl Workspace {
                 schema_connection: None,
                 schema_cache: None,
                 schema_provider: schema_provider.clone(),
+                schema_warming: HashSet::new(),
                 schema_loading: false,
                 schema_databases: Vec::new(),
                 schema_error: None,
@@ -571,6 +575,7 @@ impl Workspace {
                 schema_connection: None,
                 schema_cache: None,
                 schema_provider,
+                schema_warming: HashSet::new(),
                 schema_loading: false,
                 schema_databases: Vec::new(),
                 schema_error: None,
@@ -2235,6 +2240,45 @@ impl Workspace {
         .detach();
     }
 
+    /// Fetch a database's column metadata in the background if the cache
+    /// is missing it; on success, re-run analysis so open editors update.
+    fn warm_schema_columns(&mut self, database: String, cx: &mut Context<Self>) {
+        let (Some(cache), Some(connected)) = (self.schema_cache.clone(), self.connected.as_ref())
+        else {
+            return;
+        };
+        if !cache.needs_columns(&database) || !self.schema_warming.insert(database.clone()) {
+            return;
+        }
+        let config = connected.client_config.clone();
+        let task = rt::tokio().spawn({
+            let database = database.clone();
+            async move {
+                let client = ChClient::new(config);
+                cache.refresh_columns(&client, &database).await.is_ok()
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let warmed = task.await.unwrap_or(false);
+            this.update(cx, |this, cx| {
+                this.schema_warming.remove(&database);
+                if warmed {
+                    let editors: Vec<(usize, Entity<InputState>)> = this
+                        .query_tabs
+                        .iter()
+                        .map(|tab| (tab.id, tab.editor.clone()))
+                        .collect();
+                    for (id, editor) in editors {
+                        this.schedule_schema_analysis(id, editor, cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn toggle_schema_database(&mut self, database_index: usize, cx: &mut Context<Self>) {
         let Some(database) = self.schema_databases.get_mut(database_index) else {
             return;
@@ -2254,7 +2298,14 @@ impl Workspace {
                 }
             }
         }
-        if !database.expanded || database.objects.is_some() || database.loading {
+        let needs_object_load =
+            database.expanded && database.objects.is_none() && !database.loading;
+        let expanded = database.expanded;
+        let database_name = database.meta.name.clone();
+        if expanded {
+            self.warm_schema_columns(database_name.clone(), cx);
+        }
+        if !needs_object_load {
             cx.notify();
             return;
         }
@@ -2263,7 +2314,9 @@ impl Workspace {
         };
         let connection_name = connected.name.clone();
         let config = connected.client_config.clone();
-        let database_name = database.meta.name.clone();
+        let Some(database) = self.schema_databases.get_mut(database_index) else {
+            return;
+        };
         database.loading = true;
         database.error = None;
         cx.notify();
@@ -2338,17 +2391,10 @@ impl Workspace {
         self.show_query_editor = false;
         cx.notify();
 
-        if let Some(cache) = self.schema_cache.clone() {
+        if let Some(cache) = &self.schema_cache {
             cache.touch_database(&database_name);
-            if cache.needs_columns(&database_name) {
-                let cache_config = config.clone();
-                let cache_database = database_name.clone();
-                rt::tokio().spawn(async move {
-                    let client = ChClient::new(cache_config);
-                    let _ = cache.refresh_columns(&client, &cache_database).await;
-                });
-            }
         }
+        self.warm_schema_columns(database_name.clone(), cx);
 
         let task = rt::tokio().spawn({
             let database_name = database_name.clone();
@@ -2741,13 +2787,21 @@ impl Workspace {
                 default_database.as_deref(),
                 &sql,
             );
-            (sql, issues)
+            let referenced = zedb_ch::schema_intelligence::referenced_databases(
+                &snapshot,
+                default_database.as_deref(),
+                &sql,
+            );
+            (sql, issues, referenced)
         });
         cx.spawn(async move |this, cx| {
-            let Ok((sql, issues)) = task.await else {
+            let Ok((sql, issues, referenced)) = task.await else {
                 return;
             };
             this.update(cx, |this, cx| {
+                for database in referenced {
+                    this.warm_schema_columns(database, cx);
+                }
                 let Some(tab) = this.query_tabs.iter().find(|tab| tab.id == tab_id) else {
                     return;
                 };

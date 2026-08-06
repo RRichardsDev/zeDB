@@ -250,6 +250,26 @@ pub fn hover(
     Some(HoverInfo { range, markdown })
 }
 
+/// Databases whose column metadata the given SQL would use, resolved
+/// through the same bindings as analysis. Only databases the snapshot
+/// already knows are returned, so callers can warm them safely.
+pub fn referenced_databases(
+    snapshot: &SchemaSnapshot,
+    default_database: Option<&str>,
+    sql: &str,
+) -> Vec<String> {
+    let tokens = tokenize(sql);
+    let (bindings, _) = resolve_bindings(snapshot, default_database, &tokens);
+    let mut databases: Vec<String> = bindings
+        .aliases
+        .values()
+        .map(|(database, _)| database.clone())
+        .collect();
+    databases.sort();
+    databases.dedup();
+    databases
+}
+
 fn resolve_bindings(
     snapshot: &SchemaSnapshot,
     default_database: Option<&str>,
@@ -577,6 +597,16 @@ mod tests {
         .unwrap();
         assert!(info.markdown.contains("UInt64"));
         assert!(info.markdown.contains("Primary event id"));
+    }
+
+    #[test]
+    fn reports_databases_referenced_through_bindings() {
+        let snapshot = snapshot(None);
+        assert_eq!(
+            referenced_databases(&snapshot, None, "SELECT e.x FROM analytics.events e"),
+            vec!["analytics"]
+        );
+        assert!(referenced_databases(&snapshot, None, "SELECT 1").is_empty());
     }
 
     #[test]
