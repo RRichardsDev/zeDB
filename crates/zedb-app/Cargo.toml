@@ -14,6 +14,7 @@ zedb-core.workspace = true
 zedb-ch.workspace = true
 gpui.workspace = true
 gpui-component = { version = "0.5.1", features = ["tree-sitter-languages"] }
+log = "0.4"
 modalkit = "0.0.25"
 reqwest.workspace = true
 serde = { version = "1", features = ["derive"] }

@@ -4463,7 +4463,7 @@ impl Workspace {
             .bg(gpui::rgba(0x00000088))
             .child(
                 div()
-                    .w(px(440.))
+                    .w(px(560.))
                     .p_5()
                     .rounded(px(8.))
                     .border_1()
@@ -4473,7 +4473,15 @@ impl Workspace {
                     .flex_col()
                     .items_center()
                     .gap_2()
-                    .child(img("about-logo.png").size(px(96.)))
+                    .child(
+                        // Explicit Embedded: a bare filename parses as
+                        // a relative URI, so From<&str> routes it to
+                        // the HTTP client and it never loads.
+                        img(gpui::ImageSource::Resource(gpui::Resource::Embedded(
+                            "about-logo.png".into(),
+                        )))
+                        .size(px(96.)),
+                    )
                     .child(
                         div()
                             .text_xl()
@@ -4677,6 +4685,22 @@ fn quit_ze_db(_: &QuitZeDb, cx: &mut App) {
 }
 
 fn main() {
+    // ZEDB_LOG=1 surfaces log-crate records (gpui swallows asset and
+    // image errors into log::error, which is silence without a logger).
+    if std::env::var_os("ZEDB_LOG").is_some() {
+        struct StderrLogger;
+        impl log::Log for StderrLogger {
+            fn enabled(&self, _: &log::Metadata) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record) {
+                eprintln!("[{}] {}", record.level(), record.args());
+            }
+            fn flush(&self) {}
+        }
+        let _ = log::set_logger(&StderrLogger);
+        log::set_max_level(log::LevelFilter::Warn);
+    }
     Application::new().with_assets(Assets).run(|cx: &mut App| {
         gpui_component::init(cx);
         configure_component_theme(cx);
