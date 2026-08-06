@@ -1797,14 +1797,25 @@ impl Workspace {
                             composer.child(
                                 div()
                                     .id("agent-cancel")
-                                    .px_3()
-                                    .py_1()
+                                    .size(px(28.))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
                                     .rounded(px(3.))
                                     .border_1()
                                     .border_color(rgb(DANGER))
-                                    .text_color(rgb(DANGER))
-                                    .child("Stop")
-                                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                    .child(
+                                        svg()
+                                            .path("icons/stop.svg")
+                                            .size(px(12.))
+                                            .text_color(rgb(DANGER)),
+                                    )
+                                    .hover(|button| button.bg(rgb(0x3d2528)).cursor_pointer())
+                                    .tooltip(|window, cx| {
+                                        gpui_component::tooltip::Tooltip::new("Stop the turn")
+                                            .build(window, cx)
+                                    })
                                     .on_click(cx.listener(|this, _, _, cx| this.agent_cancel(cx))),
                             )
                         } else {

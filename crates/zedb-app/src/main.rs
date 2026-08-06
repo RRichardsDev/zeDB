@@ -162,6 +162,7 @@ impl AssetSource for Assets {
             "icons/send.svg" => Some(include_bytes!("../assets/icons/send.svg")),
             "icons/verify.svg" => Some(include_bytes!("../assets/icons/verify.svg")),
             "icons/sparkle.svg" => Some(include_bytes!("../assets/icons/sparkle.svg")),
+            "icons/stop.svg" => Some(include_bytes!("../assets/icons/stop.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             "about-logo.png" => Some(include_bytes!("../assets/about-logo.png")),
             _ => None,
@@ -810,6 +811,8 @@ impl Workspace {
             .px_2()
             .py(px(2.))
             .rounded(px(3.))
+            .border_1()
+            .border_color(rgb(foreground))
             .bg(rgb(background))
             .text_color(rgb(foreground))
             .text_xs()
@@ -823,16 +826,19 @@ impl Workspace {
             .px_2()
             .py(px(2.))
             .rounded(px(3.))
+            .border_1()
             .text_xs()
             .map(|badge| {
                 if read_only {
                     badge
                         .bg(rgb(0x2a2f37))
+                        .border_color(rgb(TEXT_DIM))
                         .text_color(rgb(TEXT_DIM))
                         .child("READ-ONLY")
                 } else {
                     badge
                         .bg(rgb(0x4d2c2c))
+                        .border_color(rgb(0xe0806f))
                         .text_color(rgb(0xe0806f))
                         .child("WRITE")
                 }
