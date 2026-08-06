@@ -152,6 +152,8 @@ pub struct AgentPaneState {
     pub pending_effects: Vec<AgentEffect>,
     /// The Add More Agents form, when open.
     pub add_form: Option<AddAgentForm>,
+    /// A previous session's transcript, reopened read-only.
+    pub restored: Option<(String, Vec<(String, String)>)>,
 }
 
 pub struct AddAgentForm {
@@ -174,8 +176,64 @@ impl AgentPaneState {
             bridge_socket: None,
             pending_effects: Vec::new(),
             add_form: None,
+            restored: None,
         }
     }
+}
+
+/// Where the last thread's transcript persists for read-only reopen.
+fn transcript_path() -> Option<std::path::PathBuf> {
+    dirs::data_local_dir().map(|dir| dir.join("zedb").join("last-thread.json"))
+}
+
+/// Serialize the live transcript; called after each completed turn.
+fn persist_transcript(thread: &ThreadState) {
+    let Some(path) = transcript_path() else {
+        return;
+    };
+    let entries: Vec<serde_json::Value> = thread
+        .entries
+        .iter()
+        .map(|entry| {
+            let (kind, text) = match entry {
+                ThreadEntry::User(text) => ("user", text.clone()),
+                ThreadEntry::Assistant(text) => ("assistant", text.clone()),
+                ThreadEntry::Tool { title, status, .. } => ("tool", format!("{title} ({status})")),
+                ThreadEntry::Permission {
+                    title, answered, ..
+                } => (
+                    "permission",
+                    format!("{title} ({})", answered.as_deref().unwrap_or("unanswered")),
+                ),
+                ThreadEntry::Info(text) => ("info", text.clone()),
+            };
+            serde_json::json!({ "kind": kind, "text": text })
+        })
+        .collect();
+    let value = serde_json::json!({ "agent": thread.agent_name, "entries": entries });
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, value.to_string());
+}
+
+/// Load the persisted transcript, if any.
+fn load_transcript() -> Option<(String, Vec<(String, String)>)> {
+    let raw = std::fs::read_to_string(transcript_path()?).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let agent = value.get("agent")?.as_str()?.to_string();
+    let entries = value
+        .get("entries")?
+        .as_array()?
+        .iter()
+        .filter_map(|entry| {
+            Some((
+                entry.get("kind")?.as_str()?.to_string(),
+                entry.get("text")?.as_str()?.to_string(),
+            ))
+        })
+        .collect();
+    Some((agent, entries))
 }
 
 /// Append one line to the agent debug log
@@ -337,6 +395,7 @@ impl Workspace {
             generation,
         });
         self.agent.picker_open = false;
+        self.agent.restored = None;
         self.agent_focus_composer(window, cx);
         cx.notify();
 
@@ -1118,6 +1177,7 @@ impl Workspace {
                         thread.status = Some(error);
                     }
                 }
+                persist_transcript(thread);
                 cx.notify();
             })
             .ok();
@@ -1611,15 +1671,72 @@ impl Workspace {
                         .child("working..."),
                 );
             }
+        } else if let Some((agent_name, entries)) = self.agent.restored.as_ref() {
+            transcript = transcript.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(TEXT_DIM))
+                    .child(format!("{agent_name} thread (read-only)")),
+            );
+            for (index, (kind, text)) in entries.iter().enumerate() {
+                let element = match kind.as_str() {
+                    "user" => div()
+                        .p_2()
+                        .rounded(px(4.))
+                        .bg(rgb(0x2c3a4d))
+                        .text_color(rgb(TEXT_DIM))
+                        .child(
+                            TextView::markdown(("agent-restored", index), text.clone(), window, cx)
+                                .selectable(true),
+                        )
+                        .into_any_element(),
+                    "assistant" => div()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(
+                            TextView::markdown(("agent-restored", index), text.clone(), window, cx)
+                                .selectable(true),
+                        )
+                        .into_any_element(),
+                    _ => div()
+                        .text_xs()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(text.clone())
+                        .into_any_element(),
+                };
+                transcript = transcript.child(element);
+            }
         } else {
+            let has_saved = transcript_path()
+                .map(|path| path.is_file())
+                .unwrap_or(false);
             transcript = transcript.child(
                 div()
                     .w_full()
                     .py_8()
                     .flex()
-                    .justify_center()
+                    .flex_col()
+                    .items_center()
+                    .gap_2()
                     .text_color(rgb(TEXT_DIM))
-                    .child("Start a thread with the + menu above"),
+                    .child("Start a thread with the + menu above")
+                    .when(has_saved, |hint| {
+                        hint.child(
+                            div()
+                                .id("agent-reopen-last")
+                                .px_3()
+                                .py_1()
+                                .rounded(px(3.))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .text_xs()
+                                .child("Reopen last thread (read-only)")
+                                .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.agent.restored = load_transcript();
+                                    cx.notify();
+                                })),
+                        )
+                    }),
             );
         }
         panel = panel.child(transcript);

@@ -709,3 +709,20 @@ Status: implementation complete, awaiting UI acceptance.
 - Verified live through the real permission flow: an agent navigated
   the app to the fleet view (repo auto-opened) and proposed a draft;
   both tool calls approved via the pane's cards.
+
+## Phase 3.1 M5: permissions and daily-driver polish (2026-08-06)
+
+- Transcript text is selectable and copyable everywhere it matters
+  (assistant markdown, user bubbles, approval notices) via selectable
+  TextViews, and the transcript sticks to the bottom while streaming,
+  unsticking when the user scrolls up and re-sticking near the end.
+- Each session's first send carries the AGENT_PRIMER (orientation on
+  zeDB, the tool menu, draft-not-deed, templating), slimming the
+  per-send ambient context to just the screen snapshot. Cmd-i and
+  thread start focus the composer.
+- Permissions finished: requests queue rather than superseding, cards
+  preview the tool's raw input, and Always Allow choices persist in
+  preferences per agent-and-tool, auto-approving across sessions with
+  a narrated line. Pane width persists. Transcripts persist per turn
+  and reopen read-only from the empty pane; long threads trim past
+  600 entries; the empty-pane hint finally renders.
