@@ -160,6 +160,7 @@ impl AssetSource for Assets {
             "icons/agent-claude.svg" => Some(include_bytes!("../assets/icons/agent-claude.svg")),
             "icons/agent-codex.svg" => Some(include_bytes!("../assets/icons/agent-codex.svg")),
             "icons/send.svg" => Some(include_bytes!("../assets/icons/send.svg")),
+            "icons/verify.svg" => Some(include_bytes!("../assets/icons/verify.svg")),
             "icons/sparkle.svg" => Some(include_bytes!("../assets/icons/sparkle.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             "about-logo.png" => Some(include_bytes!("../assets/about-logo.png")),
