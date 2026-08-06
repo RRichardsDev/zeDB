@@ -293,6 +293,21 @@ impl Workspace {
             (Some(rest), Some(home)) => Path::new(&home).join(rest),
             _ => Path::new(&path_text).to_path_buf(),
         };
+        // An effectively empty directory (fresh clone, nothing beyond
+        // git bookkeeping and a README) becomes a format-1 repo on the
+        // spot; anything with real content is left alone and errors as
+        // before.
+        match zedb_core::repo::init_repo_if_empty(&expanded) {
+            Ok(true) => {
+                self.notice = Some(
+                    "Initialized an empty checkout as a format-1 migration repo; \
+                     commit zedb.toml when ready"
+                        .into(),
+                );
+                self.notice_warning = false;
+            }
+            Ok(false) | Err(_) => {}
+        }
         match MigrationRepo::open(&expanded) {
             Ok(repo) => {
                 self.fleet.git = zedb_core::git::read_git_status(&repo.root);
