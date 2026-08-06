@@ -183,6 +183,13 @@ reflected in the matrix and git chip without a manual refresh.
 
 ### M5. Permissions and daily-driver polish
 
+Also the focus primer: pane sessions get a lightweight AGENTS.md-style
+context brief (what zeDB is, the open repo, the zedb mcp tools and
+when to reach for them) so threads start oriented on this
+application's world. Deliberately light-touch: the user knows whose
+agent they are running and it must still do anything they ask; this
+is orientation, not restriction.
+
 The ACP permission flow rendered properly (what the agent wants to do,
 approve or deny, per request), session restore for the pane across app
 restarts (reopen the last thread's transcript read-only), keyboard
