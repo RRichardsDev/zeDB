@@ -1495,13 +1495,31 @@ impl Workspace {
             .text_color(rgb(TEXT_DIM))
             .child(div().w(px(200.)).flex_none().px_2().child("database"))
             .child(div().w(px(70.)).flex_none().px_1().child("head"));
-        for (number, targeted) in &migrations {
+        for (index, (number, targeted)) in migrations.iter().enumerate() {
             let label = if *targeted {
                 format!("{number:05}*")
             } else {
                 format!("{number:05}")
             };
-            header = header.child(div().w(px(64.)).flex_none().text_center().child(label));
+            let number = *number;
+            header = header.child(
+                div()
+                    .id(("fleet-migration-header", index))
+                    .w(px(64.))
+                    .flex_none()
+                    .text_center()
+                    .child(label)
+                    .hover(|cell| cell.text_color(rgb(TEXT)).cursor_pointer())
+                    .tooltip(|window, cx| {
+                        gpui_component::tooltip::Tooltip::new(
+                            "View this migration; editable until it has been applied anywhere",
+                        )
+                        .build(window, cx)
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.author_open_migration(number, window, cx);
+                    })),
+            );
         }
         header = header.child(div().flex_1().px_2().child("state"));
 

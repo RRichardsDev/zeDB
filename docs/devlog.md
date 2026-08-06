@@ -545,3 +545,19 @@ Status: implementation complete, awaiting UI acceptance.
 - With that fixed, the same walk produced the next, correct error:
   the draft altered a table the chain never creates, which the replay
   catches and syntax checks cannot. The modal wording is doing its job.
+
+## Migration view/edit from the matrix header (2026-08-06)
+
+- Clicking a migration number in the matrix header opens it in the
+  authoring overlay. Editability follows the only rule that matters:
+  a migration is a draft until it has been applied (or
+  customised-applied for targeted ones) on ANY database, judged from
+  the fleet status rows (head passed it and not pending); after that
+  it opens read-only with the applied count in the header, since
+  history that ran somewhere is immutable. Not git state: an
+  uncommitted-but-applied migration is just as frozen.
+- Edit mode saves in place (upgrade.sql, rollback.sql presence
+  following the class picker, targeted.toml following the toggle)
+  behind the same check-then-save gate as new drafts. With no fleet
+  status loaded, editing stays possible but carries an explicit
+  warning to confirm the migration never ran anywhere.
