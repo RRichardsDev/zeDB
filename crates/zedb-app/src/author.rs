@@ -511,6 +511,8 @@ impl Workspace {
                     .gap_3()
                     .child(div().text_color(rgb(TEXT_DIM)).child("rollback:"))
                     .child(classes)
+                    .child(div().w(px(1.)).h(px(18.)).bg(rgb(BORDER)).mx_2())
+                    .child(div().text_color(rgb(TEXT_DIM)).child("scope:"))
                     .child(
                         div()
                             .id("author-targeted")
