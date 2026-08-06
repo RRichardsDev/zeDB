@@ -180,6 +180,13 @@ Phased; each phase is usable on its own.
   schema, chain, drift, dry-runs); write paths stay CLI-only behind
   explicit consent. See PHASE-3.1.md.
 
+**Phase 3.2: schema intelligence.**
+- A per-connection schema cache (hybrid warm-up on connect, persisted
+  snapshots, DDL-aware invalidation) powers validity marking,
+  autocomplete, and hover info in the query editor, under hard
+  budgets: nothing on the keystroke path ever touches the network.
+  See PHASE-3.2.md.
+
 **Follow-ups (explicitly not v1):** embedded runners, i.e. client
 libraries (Java, Python, Node, C++, Rust, PHP) that let an application
 read the repo's current state, deploy the databases it owns, and stamp
