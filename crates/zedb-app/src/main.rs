@@ -3299,8 +3299,8 @@ impl Workspace {
                                 .text_color(rgb(DANGER))
                                 .child(
                                     svg()
-                                        .path("icons/close.svg")
-                                        .size(px(14.))
+                                        .path("icons/stop.svg")
+                                        .size(px(12.))
                                         .text_color(rgb(DANGER)),
                                 )
                                 .hover(|button| button.bg(rgb(0x563034)).cursor_pointer())
