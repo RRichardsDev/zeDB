@@ -7,6 +7,7 @@
 //! own auth and its own tools. Headless and GUI-free by design; the
 //! pane is a thin consumer of `AgentEvent`s.
 
+pub mod discovery;
 pub mod protocol;
 
 use std::collections::HashMap;

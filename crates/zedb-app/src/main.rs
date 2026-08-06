@@ -4338,6 +4338,11 @@ impl Render for Workspace {
                     }
                 }),
             )
+            .on_action(
+                cx.listener(|this, _: &agent_pane::OpenAddAgent, window, cx| {
+                    this.agent_open_add_form(window, cx)
+                }),
+            )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.resizing_sidebar {
                     this.sidebar_width = f32::from(event.position.x).clamp(180.0, 480.0);

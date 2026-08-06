@@ -638,3 +638,22 @@ Status: implementation complete, awaiting UI acceptance.
   auth; Codex boots but showers first-run keychain prompts for its own
   credential items (its design, not ours; per-item Always Allow is
   durable).
+
+## Phase 3.1 M2: agent discovery and settings (2026-08-06)
+
+- zedb-acp gains a discovery module: known agents (Claude Code, Codex)
+  resolved against the machine with commands as absolute paths, because
+  GUI apps launch with a skinny PATH; lookup covers PATH plus homebrew,
+  /usr/local, ~/.local/bin, ~/bin, and nvm's per-version bins.
+  Availability is Ready / NeedsLogin / Missing with human-actionable
+  hints, keyed off binaries and each agent's auth markers (~/.claude*,
+  ~/.codex/auth.json); NeedsLogin stays launchable since the heuristic
+  can be stale.
+- The + menu is built from discovery each open: ready agents plain,
+  needs-login with a dim hint line, missing entries disabled with the
+  install hint. Add More Agents now works: a name plus a command line
+  saved to preferences (custom_agents), listed with remove buttons,
+  re-resolved on every registry refresh, wearing the sparkle mark.
+- Verified live: both built-ins Ready with no configuration, and a
+  hand-added custom agent (the test crate's fake-agent binary) appears
+  in the menu, threads, streams a reply, and shows its tool call.

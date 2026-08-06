@@ -27,23 +27,18 @@ pub struct StartAgentThread {
     pub index: usize,
 }
 
-/// Built-in agents until M2's discovery: (name, icon, program, args).
-/// The icon files are stable names; drop official brand assets over
-/// them and they show up everywhere the agent is named.
-pub const AGENTS: &[(&str, &str, &str, &[&str])] = &[
-    (
-        "Claude Code",
-        "icons/agent-claude.svg",
-        "npx",
-        &["-y", "@agentclientprotocol/claude-agent-acp"],
-    ),
-    (
-        "Codex",
-        "icons/agent-codex.svg",
-        "npx",
-        &["-y", "@zed-industries/codex-acp"],
-    ),
-];
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+pub struct OpenAddAgent;
+
+/// The icon shipped for a discovered agent id.
+fn icon_for(id: &str) -> &'static str {
+    match id {
+        "claude-code" => "icons/agent-claude.svg",
+        "codex" => "icons/agent-codex.svg",
+        _ => "icons/sparkle.svg",
+    }
+}
 
 /// One rendered item in the transcript.
 pub enum ThreadEntry {
@@ -84,6 +79,16 @@ pub struct AgentPaneState {
     pub thread: Option<ThreadState>,
     pub picker_open: bool,
     pub next_generation: u64,
+    /// What discovery found, in menu order: built-ins then customs.
+    pub agents: Vec<zedb_acp::discovery::DiscoveredAgent>,
+    /// The Add More Agents form, when open.
+    pub add_form: Option<AddAgentForm>,
+}
+
+pub struct AddAgentForm {
+    pub name: Entity<InputState>,
+    pub command: Entity<InputState>,
+    pub error: Option<String>,
 }
 
 impl AgentPaneState {
@@ -95,6 +100,8 @@ impl AgentPaneState {
             thread: None,
             picker_open: false,
             next_generation: 0,
+            agents: Vec::new(),
+            add_form: None,
         }
     }
 }
@@ -102,10 +109,23 @@ impl AgentPaneState {
 impl Workspace {
     pub(crate) fn agent_toggle(&mut self, cx: &mut Context<Self>) {
         self.agent.open = !self.agent.open;
-        if self.agent.open && self.agent.thread.is_none() {
-            self.agent.picker_open = true;
+        if self.agent.open {
+            self.agent_refresh_registry();
         }
         cx.notify();
+    }
+
+    /// Re-run discovery and re-resolve the user's custom agents.
+    pub(crate) fn agent_refresh_registry(&mut self) {
+        let mut agents = zedb_acp::discovery::discover_known();
+        for custom in &self.preferences.custom_agents {
+            agents.push(zedb_acp::discovery::resolve_custom(
+                &custom.name,
+                &custom.command,
+                &custom.args,
+            ));
+        }
+        self.agent.agents = agents;
     }
 
     /// Spawn an agent and open a thread with it. The spawn is cheap and
@@ -116,10 +136,23 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((name, icon, program, args)) = AGENTS.get(agent_index).copied() else {
+        if self.agent.agents.is_empty() {
+            self.agent_refresh_registry();
+        }
+        let Some(agent) = self.agent.agents.get(agent_index).cloned() else {
             return;
         };
-        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        if let zedb_acp::discovery::Availability::Missing { hint } = &agent.availability {
+            self.notice = Some(format!("{}: {hint}", agent.name));
+            self.notice_warning = true;
+            self.notice_flash_id += 1;
+            cx.notify();
+            return;
+        }
+        let name = agent.name.clone();
+        let icon = icon_for(&agent.id).to_string();
+        let program = agent.command.clone();
+        let args = agent.args.clone();
         let cwd = self
             .fleet
             .repo
@@ -131,7 +164,7 @@ impl Workspace {
         // both need the runtime context or they abort the app from
         // inside an AppKit event handler.
         let _runtime = rt::tokio().enter();
-        let mut connection = match AgentConnection::spawn(program, &args, &[], cwd.as_deref()) {
+        let mut connection = match AgentConnection::spawn(&program, &args, &[], cwd.as_deref()) {
             Ok(connection) => connection,
             Err(error) => {
                 self.notice = Some(format!("Could not start {name}: {error}"));
@@ -166,7 +199,7 @@ impl Workspace {
         .detach();
         self.agent.thread = Some(ThreadState {
             agent_name: name.to_string(),
-            agent_icon: icon.to_string(),
+            agent_icon: icon.clone(),
             connection: connection.clone(),
             session_id: None,
             entries: Vec::new(),
@@ -232,6 +265,61 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    pub(crate) fn agent_open_add_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent.open = true;
+        self.agent.add_form = Some(AddAgentForm {
+            name: cx.new(|cx| InputState::new(window, cx).placeholder("Name")),
+            command: cx.new(|cx| {
+                InputState::new(window, cx).placeholder("command and args, e.g. my-agent --acp")
+            }),
+            error: None,
+        });
+        cx.notify();
+    }
+
+    fn agent_save_custom(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = &self.agent.add_form else {
+            return;
+        };
+        let name = form.name.read(cx).value().trim().to_string();
+        let command_line = form.command.read(cx).value().trim().to_string();
+        let mut parts = command_line.split_whitespace().map(str::to_string);
+        let command = parts.next().unwrap_or_default();
+        if name.is_empty() || command.is_empty() {
+            if let Some(form) = &mut self.agent.add_form {
+                form.error = Some("both a name and a command are needed".into());
+            }
+            cx.notify();
+            return;
+        }
+        self.preferences.custom_agents.push(zedb_core::CustomAgent {
+            name,
+            command,
+            args: parts.collect(),
+        });
+        if let Err(error) = zedb_core::save_preferences(&self.preferences) {
+            self.notice = Some(format!("Could not save preferences: {error}"));
+            self.notice_warning = true;
+            self.notice_flash_id += 1;
+        }
+        self.agent.add_form = None;
+        self.agent_refresh_registry();
+        cx.notify();
+    }
+
+    fn agent_remove_custom(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.preferences.custom_agents.len() {
+            self.preferences.custom_agents.remove(index);
+            if let Err(error) = zedb_core::save_preferences(&self.preferences) {
+                self.notice = Some(format!("Could not save preferences: {error}"));
+                self.notice_warning = true;
+                self.notice_flash_id += 1;
+            }
+            self.agent_refresh_registry();
+        }
+        cx.notify();
     }
 
     /// Fold one agent event into the transcript. Returns whether this
@@ -487,50 +575,86 @@ impl Workspace {
                                 .label("+")
                                 .compact()
                                 .outline()
-                                .dropdown_menu(move |menu: PopupMenu, _, _| {
-                                    // A Zed-style section header: small
-                                    // and dim, unmistakably not an item.
-                                    let mut menu = menu.menu_element_with_disabled(
-                                        Box::new(StartAgentThread { index: usize::MAX }),
-                                        true,
-                                        |_, _| {
-                                            div()
-                                                .text_xs()
-                                                .text_color(rgb(TEXT_DIM))
-                                                .child("External Agents")
-                                        },
-                                    );
-                                    for (index, (name, icon, _, _)) in AGENTS.iter().enumerate() {
-                                        let name = *name;
-                                        let icon_path = *icon;
-                                        // Custom rows: the stock item
-                                        // renderer clamps icon size and
-                                        // keeps an arrow cursor.
-                                        menu = menu.menu_element(
-                                            Box::new(StartAgentThread { index }),
-                                            move |_, _| {
+                                .dropdown_menu({
+                                    // Snapshot the registry for the
+                                    // closure: (name, icon, hint, missing).
+                                    let rows: Vec<(String, String, Option<String>, bool)> = self
+                                        .agent
+                                        .agents
+                                        .iter()
+                                        .map(|agent| {
+                                            use zedb_acp::discovery::Availability;
+                                            let (hint, missing) = match &agent.availability {
+                                                Availability::Ready => (None, false),
+                                                Availability::NeedsLogin { hint } => {
+                                                    (Some(hint.clone()), false)
+                                                }
+                                                Availability::Missing { hint } => {
+                                                    (Some(hint.clone()), true)
+                                                }
+                                            };
+                                            (
+                                                agent.name.clone(),
+                                                icon_for(&agent.id).to_string(),
+                                                hint,
+                                                missing,
+                                            )
+                                        })
+                                        .collect();
+                                    move |menu: PopupMenu, _, _| {
+                                        // A Zed-style section header: small
+                                        // and dim, unmistakably not an item.
+                                        let mut menu = menu.menu_element_with_disabled(
+                                            Box::new(StartAgentThread { index: usize::MAX }),
+                                            true,
+                                            |_, _| {
                                                 div()
-                                                    .w_full()
-                                                    .py_0p5()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .cursor_pointer()
-                                                    .child(
-                                                        svg()
-                                                            .path(icon_path)
-                                                            .size(px(19.))
-                                                            .text_color(rgb(TEXT_DIM)),
-                                                    )
-                                                    .child(name)
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT_DIM))
+                                                    .child("External Agents")
                                             },
                                         );
+                                        for (index, (name, icon_path, hint, missing)) in
+                                            rows.clone().into_iter().enumerate()
+                                        {
+                                            menu = menu.menu_element_with_disabled(
+                                                Box::new(StartAgentThread { index }),
+                                                missing,
+                                                move |_, _| {
+                                                    div()
+                                                        .w_full()
+                                                        .py_0p5()
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap_0p5()
+                                                        .when(!missing, |row| row.cursor_pointer())
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap_2()
+                                                                .child(
+                                                                    svg()
+                                                                        .path(icon_path.clone())
+                                                                        .size(px(19.))
+                                                                        .text_color(rgb(TEXT_DIM)),
+                                                                )
+                                                                .child(name.clone()),
+                                                        )
+                                                        .when_some(hint.clone(), |row, hint| {
+                                                            row.child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .text_color(rgb(TEXT_DIM))
+                                                                    .child(hint),
+                                                            )
+                                                        })
+                                                },
+                                            );
+                                        }
+                                        menu.separator()
+                                            .menu("Add More Agents", Box::new(OpenAddAgent))
                                     }
-                                    menu.separator().menu_with_enable(
-                                        "Add More Agents",
-                                        Box::new(StartAgentThread { index: usize::MAX }),
-                                        false,
-                                    )
                                 }),
                         )
                         .child(
@@ -549,6 +673,112 @@ impl Workspace {
                         ),
                 ),
         );
+
+        // The Add More Agents form.
+        if let Some(form) = &self.agent.add_form {
+            let mut card = div()
+                .flex_none()
+                .p_2()
+                .border_b_1()
+                .border_color(rgb(BORDER))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(TEXT_DIM))
+                        .child("Add an ACP-speaking agent (name + command line):"),
+                )
+                .child(
+                    div()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .bg(rgb(BG))
+                        .child(
+                            Input::new(&form.name)
+                                .appearance(false)
+                                .bordered(false)
+                                .focus_bordered(false)
+                                .pl(px(4.)),
+                        ),
+                )
+                .child(
+                    div()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .bg(rgb(BG))
+                        .child(
+                            Input::new(&form.command)
+                                .appearance(false)
+                                .bordered(false)
+                                .focus_bordered(false)
+                                .pl(px(4.)),
+                        ),
+                );
+            if let Some(error) = &form.error {
+                card = card.child(div().text_xs().text_color(rgb(DANGER)).child(error.clone()));
+            }
+            // Existing custom agents, removable.
+            for (index, custom) in self.preferences.custom_agents.iter().enumerate() {
+                card = card.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .text_xs()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(format!("{} ({})", custom.name, custom.command))
+                        .child(
+                            div()
+                                .id(("agent-custom-remove", index))
+                                .px_2()
+                                .rounded(px(3.))
+                                .child("remove")
+                                .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.agent_remove_custom(index, cx);
+                                })),
+                        ),
+                );
+            }
+            card = card.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("agent-add-save")
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .text_color(rgb(TEXT))
+                            .child("Add")
+                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .on_click(cx.listener(|this, _, _, cx| this.agent_save_custom(cx))),
+                    )
+                    .child(
+                        div()
+                            .id("agent-add-cancel")
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .text_color(rgb(TEXT_DIM))
+                            .child("Cancel")
+                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.agent.add_form = None;
+                                cx.notify();
+                            })),
+                    ),
+            );
+            panel = panel.child(card);
+        }
 
         // Transcript.
         let mut transcript = div()

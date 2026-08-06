@@ -13,6 +13,17 @@ pub struct Preferences {
     pub fleet_repo: Option<String>,
     /// Value rendered into ${cluster} for fleet operations.
     pub fleet_cluster: Option<String>,
+    /// User-added ACP agents for the agent pane, beyond the built-ins.
+    pub custom_agents: Vec<CustomAgent>,
+}
+
+/// A user-configured ACP-speaking agent: a name and a command line.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomAgent {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 fn preferences_path() -> Result<PathBuf, StoreError> {
@@ -70,6 +81,11 @@ mod tests {
             vim_mode: true,
             fleet_repo: Some("/tmp/repo".into()),
             fleet_cluster: None,
+            custom_agents: vec![CustomAgent {
+                name: "My Agent".into(),
+                command: "my-agent".into(),
+                args: vec!["acp".into()],
+            }],
         };
         save_preferences(&preferences).unwrap();
         assert_eq!(load_preferences().unwrap(), preferences);
