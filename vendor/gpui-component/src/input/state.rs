@@ -539,6 +539,14 @@ impl InputState {
         cx.notify();
     }
 
+    /// zeDB patch: schedule an LSP refresh (document colors and
+    /// highlighter) on the next render, e.g. after schema metadata
+    /// arrives without the text changing.
+    pub fn refresh_lsp(&mut self, cx: &mut Context<Self>) {
+        self._pending_update = true;
+        cx.notify();
+    }
+
     #[inline]
     pub fn diagnostics(&self) -> Option<&DiagnosticSet> {
         self.mode.diagnostics()

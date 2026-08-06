@@ -2034,6 +2034,9 @@ impl Workspace {
                 }
                 this.schema_provider
                     .set_context(this.schema_cache.clone(), connection.database.clone());
+                for tab in &this.query_tabs {
+                    tab.editor.update(cx, |editor, cx| editor.refresh_lsp(cx));
+                }
                 this.start_health_poll(cx);
                 this.notice = Some(format!(
                     "Connected to {name} via {} ({reachable}/{total} nodes reachable)",
@@ -2274,6 +2277,7 @@ impl Workspace {
                         .map(|tab| (tab.id, tab.editor.clone()))
                         .collect();
                     for (id, editor) in editors {
+                        editor.update(cx, |editor, cx| editor.refresh_lsp(cx));
                         this.schedule_schema_analysis(id, editor, window, cx);
                     }
                     // If the user already typed the trigger (say `e.`)
