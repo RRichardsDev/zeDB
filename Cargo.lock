@@ -8341,8 +8341,10 @@ dependencies = [
 name = "zedb-acp"
 version = "0.1.1"
 dependencies = [
+ "dirs 6.0.0",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
 ]
@@ -8351,10 +8353,12 @@ dependencies = [
 name = "zedb-app"
 version = "0.1.1"
 dependencies = [
+ "anyhow",
  "dirs 6.0.0",
  "gpui",
  "gpui-component",
  "log",
+ "lsp-types",
  "modalkit",
  "reqwest",
  "serde",
@@ -8370,11 +8374,14 @@ dependencies = [
 name = "zedb-ch"
 version = "0.1.1"
 dependencies = [
+ "arc-swap",
  "chrono",
  "dirs 6.0.0",
  "futures-util",
  "regex",
  "reqwest",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",

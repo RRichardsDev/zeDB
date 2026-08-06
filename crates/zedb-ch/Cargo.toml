@@ -16,6 +16,8 @@ tempfile = "3"
 futures-util.workspace = true
 tokio = { workspace = true, features = ["io-util", "io-std", "net"] }
 thiserror.workspace = true
+arc-swap = "1"
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros"] }

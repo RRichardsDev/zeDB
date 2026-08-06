@@ -1,6 +1,9 @@
 use zedb_core::{QueryResult, Value};
 
-use crate::{ChClient, ChError, Result};
+use crate::{
+    schema_cache::{CachedColumn, CachedObjectKind, ColumnRecord, TableRecord},
+    ChClient, ChError, Result,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatabaseMeta {
@@ -51,6 +54,40 @@ pub struct ObjectDetails {
 }
 
 impl ChClient {
+    /// Fetch the cheap, fleet-wide portion of the schema cache in one sweep.
+    /// Column metadata is intentionally fetched separately per database.
+    pub async fn list_schema_cache_tables(&self) -> Result<Vec<TableRecord>> {
+        let result = self
+            .query(
+                "SELECT database, name, engine, \
+                    multiIf(engine = 'View', 'view', \
+                            engine = 'MaterializedView', 'materialized_view', \
+                            engine = 'Dictionary', 'dictionary', 'table') AS kind, \
+                    total_rows, comment \
+                 FROM system.tables \
+                 WHERE database NOT IN ('INFORMATION_SCHEMA', 'information_schema', 'system') \
+                 ORDER BY database, name",
+            )
+            .await?;
+        parse_cache_tables(result)
+    }
+
+    /// Fetch every column for one database. Keeping the database predicate
+    /// mandatory prevents a large fleet scan during connection warm-up.
+    pub async fn list_schema_cache_columns(&self, database: &str) -> Result<Vec<ColumnRecord>> {
+        let database = escape_string(database);
+        let result = self
+            .query(&format!(
+                "SELECT table, name, type, default_kind, default_expression, \
+                        compression_codec, comment \
+                 FROM system.columns \
+                 WHERE database = '{database}' \
+                 ORDER BY table, position"
+            ))
+            .await?;
+        parse_cache_columns(result)
+    }
+
     pub async fn list_databases(&self) -> Result<Vec<DatabaseMeta>> {
         let result = self
             .query(
@@ -106,6 +143,64 @@ impl ChClient {
             .await?;
         parse_object_details(result)
     }
+}
+
+fn parse_cache_tables(result: QueryResult) -> Result<Vec<TableRecord>> {
+    result
+        .rows
+        .into_iter()
+        .map(|row| {
+            let kind = match string_at(&row, 3, "schema object kind")?.as_str() {
+                "table" => CachedObjectKind::Table,
+                "view" => CachedObjectKind::View,
+                "materialized_view" => CachedObjectKind::MaterializedView,
+                "dictionary" => CachedObjectKind::Dictionary,
+                value => {
+                    return Err(ChError::Decode(format!(
+                        "unknown schema object kind {value:?}"
+                    )))
+                }
+            };
+            Ok(TableRecord {
+                database: string_at(&row, 0, "database name")?,
+                name: string_at(&row, 1, "schema object name")?,
+                engine: string_at(&row, 2, "schema object engine")?,
+                kind,
+                total_rows: optional_u64_at(&row, 4, "schema object row count")?,
+                comment: string_at(&row, 5, "schema object comment")?,
+            })
+        })
+        .collect()
+}
+
+fn parse_cache_columns(result: QueryResult) -> Result<Vec<ColumnRecord>> {
+    result
+        .rows
+        .into_iter()
+        .map(|row| {
+            let default_kind = string_at(&row, 3, "column default kind")?;
+            let default_expression = string_at(&row, 4, "column default expression")?;
+            let codec = string_at(&row, 5, "column codec")?;
+            let codec_expression = match (default_kind.is_empty(), default_expression.is_empty()) {
+                (true, _) => codec,
+                (false, true) if codec.is_empty() => default_kind,
+                (false, true) => format!("{default_kind}; {codec}"),
+                (false, false) if codec.is_empty() => {
+                    format!("{default_kind} {default_expression}")
+                }
+                (false, false) => format!("{default_kind} {default_expression}; {codec}"),
+            };
+            Ok(ColumnRecord {
+                object: string_at(&row, 0, "schema object name")?,
+                column: CachedColumn {
+                    name: string_at(&row, 1, "column name")?,
+                    type_name: string_at(&row, 2, "column type")?,
+                    codec_expression,
+                    comment: string_at(&row, 6, "column comment")?,
+                },
+            })
+        })
+        .collect()
 }
 
 fn escape_string(value: &str) -> String {

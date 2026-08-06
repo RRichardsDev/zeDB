@@ -6,6 +6,7 @@ mod components;
 mod fleet;
 mod grid_spike;
 mod rt;
+mod schema_intelligence_ui;
 mod theme;
 mod updates;
 mod vim;
@@ -13,6 +14,7 @@ mod vim;
 use std::{
     borrow::Cow,
     collections::HashMap,
+    rc::Rc,
     time::{Duration, Instant},
 };
 
@@ -25,14 +27,15 @@ use gpui::{
 };
 use gpui_component::{
     button::Button,
-    highlighter::HighlightTheme,
-    input::{Input, InputState, Position},
+    highlighter::{Diagnostic, DiagnosticSeverity, HighlightTheme},
+    input::{Input, InputEvent, InputState, Position},
     menu::{ContextMenuExt, DropdownMenu, PopupMenu},
     scroll::ScrollableElement,
     Disableable, Root, Theme,
 };
 use tokio::task::AbortHandle;
 use zedb_ch::{
+    schema_cache::{CachedObjectKind, SchemaCache},
     ChClient, ChConfig, ColumnInfo, DatabaseMeta, ObjectDetails, QueryStreamEvent,
     QueryStreamSummary, SchemaObjectKind, SchemaObjectMeta,
 };
@@ -44,6 +47,7 @@ use zedb_core::{
 use components::text_input::{self, TextInput};
 use fleet::FleetState;
 use grid_spike::GridSpike;
+use schema_intelligence_ui::{byte_range_to_lsp, SchemaProvider};
 use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
 use vim::{CommandLineSnapshot, VimController};
 
@@ -257,6 +261,40 @@ struct DatabaseNode {
     error: Option<String>,
 }
 
+fn database_nodes_from_cache(cache: &SchemaCache) -> Vec<DatabaseNode> {
+    let snapshot = cache.snapshot();
+    let mut databases: Vec<_> = snapshot
+        .databases
+        .values()
+        .map(|database| DatabaseNode {
+            meta: DatabaseMeta {
+                name: database.name.clone(),
+            },
+            expanded: false,
+            loading: false,
+            objects: None,
+            error: None,
+        })
+        .collect();
+    databases.sort_by(|left, right| left.meta.name.cmp(&right.meta.name));
+    databases
+}
+
+fn schema_object_from_cache(object: &zedb_ch::schema_cache::CachedObject) -> SchemaObjectMeta {
+    SchemaObjectMeta {
+        name: object.name.clone(),
+        engine: object.engine.clone(),
+        kind: match object.kind {
+            CachedObjectKind::Table => SchemaObjectKind::Table,
+            CachedObjectKind::View => SchemaObjectKind::View,
+            CachedObjectKind::MaterializedView => SchemaObjectKind::MaterializedView,
+            CachedObjectKind::Dictionary => SchemaObjectKind::Dictionary,
+        },
+        total_rows: object.total_rows,
+        total_bytes: None,
+    }
+}
+
 struct SelectedSchemaObject {
     database: String,
     object: SchemaObjectMeta,
@@ -297,6 +335,7 @@ struct QueryTab {
     vim: VimController,
     vim_command_line: Option<CommandLineSnapshot>,
     vim_recording: Option<char>,
+    schema_analysis_generation: u64,
 }
 
 enum QueryOutcome {
@@ -353,6 +392,8 @@ struct Workspace {
     pending_delete: Option<String>,
     schema_filter: Entity<TextInput>,
     schema_connection: Option<String>,
+    schema_cache: Option<SchemaCache>,
+    schema_provider: Rc<SchemaProvider>,
     schema_loading: bool,
     schema_databases: Vec<DatabaseNode>,
     schema_error: Option<String>,
@@ -455,10 +496,13 @@ impl Workspace {
             .map(|session| session.active_tab.min(tab_contents.len() - 1))
             .unwrap_or(0);
         let next_query_tab_id = tab_contents.len() + 1;
+        let schema_provider = SchemaProvider::new();
         let query_tabs: Vec<QueryTab> = tab_contents
             .into_iter()
             .enumerate()
-            .map(|(index, sql)| Self::make_query_tab(index + 1, &sql, window, cx))
+            .map(|(index, sql)| {
+                Self::make_query_tab(index + 1, &sql, schema_provider.clone(), window, cx)
+            })
             .collect();
         match load_connections() {
             Ok(connections) => Self {
@@ -472,6 +516,8 @@ impl Workspace {
                 pending_delete: None,
                 schema_filter,
                 schema_connection: None,
+                schema_cache: None,
+                schema_provider: schema_provider.clone(),
                 schema_loading: false,
                 schema_databases: Vec::new(),
                 schema_error: None,
@@ -523,6 +569,8 @@ impl Workspace {
                 pending_delete: None,
                 schema_filter,
                 schema_connection: None,
+                schema_cache: None,
+                schema_provider,
                 schema_loading: false,
                 schema_databases: Vec::new(),
                 schema_error: None,
@@ -1172,6 +1220,14 @@ impl Workspace {
 
     fn schema_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let filter = self.schema_filter.read(cx).text().to_lowercase();
+        let cache_status = self.schema_cache.as_ref().map(|cache| {
+            let snapshot = cache.snapshot();
+            format!(
+                "{} of {} databases ready",
+                snapshot.warmed_databases(),
+                snapshot.databases.len()
+            )
+        });
         let selected = self
             .selected_schema_object
             .as_ref()
@@ -1351,6 +1407,16 @@ impl Workspace {
             )
             .when(self.connected.is_some(), |panel| {
                 panel.child(div().px_2().pb_2().child(self.schema_filter.clone()))
+            })
+            .when_some(cache_status, |panel, status| {
+                panel.child(
+                    div()
+                        .px_3()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(status),
+                )
             })
             .child(
                 div()
@@ -1880,7 +1946,9 @@ impl Workspace {
         self.notice = Some(format!("Testing {} node(s) for {name}...", nodes.len()));
         cx.notify();
 
+        let cache_name = name.clone();
         let task = rt::tokio().spawn(async move {
+            let schema_cache = SchemaCache::for_connection(&cache_name);
             let mut health = Vec::with_capacity(nodes.len());
             for (node_index, node) in nodes.into_iter().enumerate() {
                 let client = ChClient::new(ChConfig {
@@ -1897,10 +1965,17 @@ impl Workspace {
                     reachable: client.test_connection().await.is_ok(),
                 });
             }
-            health
+            (health, schema_cache)
         });
         cx.spawn(async move |this, cx| {
-            let health = task.await.unwrap_or_default();
+            let Ok((health, schema_cache)) = task.await else {
+                this.update(cx, |this, cx| {
+                    this.connecting = None;
+                    this.flash_warning("Connection task stopped unexpectedly", cx);
+                })
+                .ok();
+                return;
+            };
             this.update(cx, |this, cx| {
                 this.connecting = None;
                 let active_node = health.iter().find(|node| node.reachable).cloned();
@@ -1942,6 +2017,18 @@ impl Workspace {
                 });
                 this.password_cache
                     .insert(name.clone(), connected_password.clone());
+                match schema_cache {
+                    Ok(cache) => this.schema_cache = Some(cache),
+                    Err(error) => {
+                        this.schema_cache = None;
+                        this.flash_warning(
+                            format!("Connected, but the schema cache could not open: {error}"),
+                            cx,
+                        );
+                    }
+                }
+                this.schema_provider
+                    .set_context(this.schema_cache.clone(), connection.database.clone());
                 this.start_health_poll(cx);
                 this.notice = Some(format!(
                     "Connected to {name} via {} ({reachable}/{total} nodes reachable)",
@@ -1967,6 +2054,7 @@ impl Workspace {
         let config = connected.client_config.clone();
         let name = connected.name.clone();
         let node_index = connected.active_node;
+        let schema_cache = self.schema_cache.clone();
         cx.spawn(async move |this, cx| loop {
             Timer::after(Duration::from_secs(300)).await;
             let stale = this
@@ -1976,8 +2064,18 @@ impl Workspace {
                 break;
             }
             let probe = config.clone();
+            let cache = schema_cache.clone();
             let healthy = rt::tokio()
-                .spawn(async move { ChClient::new(probe).query("SELECT 1").await.is_ok() })
+                .spawn(async move {
+                    let client = ChClient::new(probe);
+                    if client.query("SELECT 1").await.is_err() {
+                        return false;
+                    }
+                    if let Some(cache) = cache {
+                        let _ = cache.refresh_tables(&client).await;
+                    }
+                    true
+                })
                 .await
                 .unwrap_or(false);
             if healthy {
@@ -1996,6 +2094,8 @@ impl Workspace {
                         return true;
                     }
                     this.connected = None;
+                    this.schema_cache = None;
+                    this.schema_provider.set_context(None, None);
                     this.fleet.write_unlocked = false;
                     if let Some(health) = this.endpoint_health.get_mut(&name) {
                         if let Some(node) =
@@ -2023,6 +2123,8 @@ impl Workspace {
         if let Some(connected) = self.connected.take() {
             self.notice = Some(format!("Disconnected from {}", connected.name));
         }
+        self.schema_cache = None;
+        self.schema_provider.set_context(None, None);
         self.clear_schema();
         cx.notify();
     }
@@ -2079,9 +2181,39 @@ impl Workspace {
         self.schema_databases.clear();
         self.schema_error = None;
         self.selected_schema_object = None;
+        if let Some(cache) = &self.schema_cache {
+            self.schema_databases = database_nodes_from_cache(cache);
+        }
         cx.notify();
 
-        let task = rt::tokio().spawn(async move { ChClient::new(config).list_databases().await });
+        let cache = self.schema_cache.clone();
+        let task = rt::tokio().spawn(async move {
+            let client = ChClient::new(config);
+            if let Some(cache) = cache {
+                cache
+                    .refresh_tables(&client)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(database_nodes_from_cache(&cache))
+            } else {
+                client
+                    .list_databases()
+                    .await
+                    .map(|databases| {
+                        databases
+                            .into_iter()
+                            .map(|meta| DatabaseNode {
+                                meta,
+                                expanded: false,
+                                loading: false,
+                                objects: None,
+                                error: None,
+                            })
+                            .collect()
+                    })
+                    .map_err(|error| error.to_string())
+            }
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
@@ -2092,19 +2224,8 @@ impl Workspace {
                 }
                 this.schema_loading = false;
                 match result {
-                    Ok(Ok(databases)) => {
-                        this.schema_databases = databases
-                            .into_iter()
-                            .map(|meta| DatabaseNode {
-                                meta,
-                                expanded: false,
-                                loading: false,
-                                objects: None,
-                                error: None,
-                            })
-                            .collect();
-                    }
-                    Ok(Err(error)) => this.schema_error = Some(error.to_string()),
+                    Ok(Ok(databases)) => this.schema_databases = databases,
+                    Ok(Err(error)) => this.schema_error = Some(error),
                     Err(error) => this.schema_error = Some(error.to_string()),
                 }
                 cx.notify();
@@ -2119,6 +2240,20 @@ impl Workspace {
             return;
         };
         database.expanded = !database.expanded;
+        if database.expanded {
+            if let Some(cache) = &self.schema_cache {
+                cache.touch_database(&database.meta.name);
+                if let Some(cached) = cache.snapshot().database(&database.meta.name) {
+                    database.objects = Some(
+                        cached
+                            .objects
+                            .values()
+                            .map(schema_object_from_cache)
+                            .collect(),
+                    );
+                }
+            }
+        }
         if !database.expanded || database.objects.is_some() || database.loading {
             cx.notify();
             return;
@@ -2202,6 +2337,18 @@ impl Workspace {
         });
         self.show_query_editor = false;
         cx.notify();
+
+        if let Some(cache) = self.schema_cache.clone() {
+            cache.touch_database(&database_name);
+            if cache.needs_columns(&database_name) {
+                let cache_config = config.clone();
+                let cache_database = database_name.clone();
+                rt::tokio().spawn(async move {
+                    let client = ChClient::new(cache_config);
+                    let _ = cache.refresh_columns(&client, &cache_database).await;
+                });
+            }
+        }
 
         let task = rt::tokio().spawn({
             let database_name = database_name.clone();
@@ -2486,17 +2633,32 @@ impl Workspace {
     fn make_query_tab(
         id: usize,
         sql: &str,
+        schema_provider: Rc<SchemaProvider>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> QueryTab {
         let default_value = sql.to_string();
+        let editor = cx.new(|cx| {
+            let mut editor = InputState::new(window, cx)
+                .code_editor("sql")
+                .default_value(default_value);
+            editor.lsp.completion_provider = Some(schema_provider.clone());
+            editor.lsp.hover_provider = Some(schema_provider);
+            editor
+        });
+        cx.subscribe_in(
+            &editor,
+            window,
+            move |this, state, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.schedule_schema_analysis(id, state.clone(), cx);
+                }
+            },
+        )
+        .detach();
         QueryTab {
             id,
-            editor: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .code_editor("sql")
-                    .default_value(default_value)
-            }),
+            editor,
             result_grid: cx.new(GridSpike::new),
             result_columns: 0,
             result_rows: 0,
@@ -2515,6 +2677,7 @@ impl Workspace {
             vim: VimController::new(sql),
             vim_command_line: None,
             vim_recording: None,
+            schema_analysis_generation: 0,
         }
     }
 
@@ -2542,7 +2705,7 @@ impl Workspace {
     ) {
         let id = self.next_query_tab_id;
         self.next_query_tab_id += 1;
-        let tab = Self::make_query_tab(id, sql, window, cx);
+        let tab = Self::make_query_tab(id, sql, self.schema_provider.clone(), window, cx);
         self.query_tabs.push(tab);
         self.active_query_tab = self.query_tabs.len() - 1;
         self.show_query_editor = true;
@@ -2550,10 +2713,74 @@ impl Workspace {
         cx.notify();
     }
 
+    fn schedule_schema_analysis(
+        &mut self,
+        tab_id: usize,
+        editor: Entity<InputState>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+        tab.schema_analysis_generation += 1;
+        let generation = tab.schema_analysis_generation;
+        let sql = editor.read(cx).value().to_string();
+        let Some((snapshot, default_database)) = self.schema_provider.snapshot() else {
+            editor.update(cx, |editor, cx| {
+                if let Some(diagnostics) = editor.diagnostics_mut() {
+                    diagnostics.clear();
+                }
+                cx.notify();
+            });
+            return;
+        };
+        let task = rt::tokio().spawn(async move {
+            tokio::time::sleep(Duration::from_millis(180)).await;
+            let issues = zedb_ch::schema_intelligence::analyze_sql(
+                &snapshot,
+                default_database.as_deref(),
+                &sql,
+            );
+            (sql, issues)
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok((sql, issues)) = task.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                let Some(tab) = this.query_tabs.iter().find(|tab| tab.id == tab_id) else {
+                    return;
+                };
+                if tab.schema_analysis_generation != generation {
+                    return;
+                }
+                editor.update(cx, |editor, cx| {
+                    let Some(diagnostics) = editor.diagnostics_mut() else {
+                        return;
+                    };
+                    diagnostics.clear();
+                    diagnostics.extend(issues.into_iter().map(|issue| {
+                        let range = byte_range_to_lsp(&sql, issue.range);
+                        Diagnostic {
+                            range: range.start..range.end,
+                            severity: DiagnosticSeverity::Hint,
+                            source: Some("zeDB schema".into()),
+                            message: issue.message.into(),
+                            ..Default::default()
+                        }
+                    }));
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn add_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.next_query_tab_id;
         self.next_query_tab_id += 1;
-        let tab = Self::make_query_tab(id, "", window, cx);
+        let tab = Self::make_query_tab(id, "", self.schema_provider.clone(), window, cx);
         self.query_tabs.push(tab);
         self.active_query_tab = self.query_tabs.len() - 1;
         self.show_query_editor = true;
@@ -2883,6 +3110,7 @@ impl Workspace {
             let total = statements.len();
             let mut summary: Option<QueryStreamSummary> = None;
             let mut skipped = 0usize;
+            let mut succeeded = Vec::new();
             for (index, sql) in statements.iter().enumerate() {
                 let outcome = client
                     .query_stream(sql, row_limit.unwrap_or(usize::MAX), |event| {
@@ -2890,7 +3118,10 @@ impl Workspace {
                     })
                     .await;
                 match outcome {
-                    Ok(current) => summary = Some(current),
+                    Ok(current) => {
+                        summary = Some(current);
+                        succeeded.push(sql.clone());
+                    }
                     Err(error) => {
                         let message = if total > 1 {
                             format!("Statement {} of {total} failed: {error}", index + 1)
@@ -2917,7 +3148,7 @@ impl Workspace {
                     }
                 }
             }
-            Ok((summary, skipped))
+            Ok((summary, skipped, succeeded))
         });
         self.query_abort = Some(task.abort_handle());
         cx.notify();
@@ -2992,26 +3223,63 @@ impl Workspace {
                     return;
                 };
                 tab.elapsed = tab.started_at.take().map(|started| started.elapsed());
+                let mut successful_statements = Vec::new();
                 tab.outcome = match result {
-                    Ok(Ok((summary, skipped))) => {
+                    Ok(Ok((summary, skipped, succeeded))) => {
                         let capped = summary.map(|summary| summary.capped).unwrap_or(false);
                         tab.result_capped = capped;
                         tab.result_grid
                             .update(cx, |grid, cx| grid.finish_result(capped, cx));
-                        QueryOutcome::Complete {
+                        let outcome = QueryOutcome::Complete {
                             columns: tab.result_columns,
                             rows: tab.result_rows,
                             skipped,
-                        }
+                        };
+                        successful_statements = succeeded;
+                        outcome
                     }
                     Ok(Err(error)) => QueryOutcome::Error(error),
                     Err(error) => QueryOutcome::Error(error.to_string()),
                 };
+                this.refresh_schema_after_statements(&successful_statements);
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    fn refresh_schema_after_statements(&self, statements: &[String]) {
+        let (Some(cache), Some(connected)) = (self.schema_cache.clone(), self.connected.as_ref())
+        else {
+            return;
+        };
+        let mut databases = statements
+            .iter()
+            .flat_map(|statement| {
+                zedb_ch::schema_intelligence::touched_databases(
+                    statement,
+                    connected.client_config.database.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        databases.sort();
+        databases.dedup();
+        if databases.is_empty() {
+            return;
+        }
+        let config = connected.client_config.clone();
+        rt::tokio().spawn(async move {
+            for database in &databases {
+                let _ = cache.invalidate_database(database);
+            }
+            let client = ChClient::new(config);
+            if cache.refresh_tables(&client).await.is_ok() {
+                for database in databases {
+                    let _ = cache.refresh_columns(&client, &database).await;
+                }
+            }
+        });
     }
 
     fn select_max_rows(&mut self, max_rows: MaxRows, cx: &mut Context<Self>) {
