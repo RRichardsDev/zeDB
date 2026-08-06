@@ -657,7 +657,11 @@ impl Workspace {
             ));
         }
         format!(
-            "[zeDB screen context, attached by the app; the zedb MCP tools go deeper]\n{}",
+            "[zeDB screen context, attached by the app. For anything about THIS \
+             app's fleet, repo, schema, or connection, use the zedb MCP tools \
+             (mcp__zedb__*): they answer for the connection shown below. Other \
+             configured ClickHouse MCP servers may point at unrelated clusters; \
+             do not use them for questions about what is on screen here.]\n{}",
             lines.join("\n")
         )
     }
