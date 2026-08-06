@@ -86,14 +86,6 @@ impl TextInput {
         self.content.to_string()
     }
 
-    pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.content = text.into();
-        let end = self.content.len();
-        self.selected_range = end..end;
-        self.marked_range = None;
-        cx.notify();
-    }
-
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), cx);
