@@ -594,3 +594,31 @@ Status: implementation complete, awaiting UI acceptance.
   zedb_config.zedb_migrations with repo='demo-fleet', verified by
   status parity before dropping the old default.* tables; check all
   stays green with the new schema.
+
+## Phase 3.2: schema intelligence (2026-08-06)
+
+- Added a per-connection schema cache in zedb-ch. Readers load immutable
+  snapshots through ArcSwap, while tables refresh fleet-wide in one
+  system.tables sweep and columns load only for touched databases. Snapshots
+  persist atomically under the app cache directory, survive relaunch, and
+  retain at most 64 warmed column sets while preserving every database and
+  table entry.
+- The first performance test caught a linear column lookup. Cached columns
+  now use hash maps, and 100,000 lookups against a synthetic 500-database,
+  10,000-table fleet stay inside the debug-build budget. Missing column data
+  remains distinct from a known-empty column set, so partial or stale caches
+  never create false diagnostics.
+- Query editors now get conservative schema diagnostics after a 180 ms
+  off-thread debounce, in-process table and alias-qualified column
+  completions, and Markdown hover details for known tables and columns. CTEs,
+  unqualified ambiguity, missing default databases, and unwarmed columns all
+  stay neutral. Nothing in these paths calls the network.
+- Connection startup opens the persisted snapshot in the background, shows
+  its databases immediately, refreshes tables after connect and on the
+  existing five-minute health cadence, and prioritizes columns when a
+  database or object is touched. Successful DDL invalidates and refreshes the
+  affected database in the background. The schema pane quietly reports
+  warmed databases without adding a new control pattern.
+- Verification: cargo check --workspace and cargo test --workspace pass,
+  including 99 unit, integration, live ClickHouse, replay, import, runner,
+  drift, and repository-format tests.

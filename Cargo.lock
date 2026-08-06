@@ -8340,9 +8340,11 @@ dependencies = [
 name = "zedb-app"
 version = "0.1.1"
 dependencies = [
+ "anyhow",
  "gpui",
  "gpui-component",
  "log",
+ "lsp-types",
  "modalkit",
  "reqwest",
  "serde",
@@ -8357,11 +8359,14 @@ dependencies = [
 name = "zedb-ch"
 version = "0.1.1"
 dependencies = [
+ "arc-swap",
  "chrono",
  "dirs 6.0.0",
  "futures-util",
  "regex",
  "reqwest",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",

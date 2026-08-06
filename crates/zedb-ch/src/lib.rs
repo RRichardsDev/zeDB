@@ -19,6 +19,8 @@ pub mod replay;
 mod rowbinary;
 pub mod runner;
 mod schema;
+pub mod schema_cache;
+pub mod schema_intelligence;
 mod types;
 pub mod verify;
 
