@@ -169,6 +169,71 @@ pub fn push(root: &Path) -> Result<String, String> {
     run_git(root, &["push"])
 }
 
+/// Does this look like a git remote URL rather than a local path?
+pub fn is_remote_url(text: &str) -> bool {
+    let text = text.trim();
+    text.starts_with("git@")
+        || text.starts_with("ssh://")
+        || text.starts_with("git://")
+        || ((text.starts_with("http://") || text.starts_with("https://"))
+            && text.trim_end_matches('/').ends_with(".git"))
+}
+
+/// The checkout directory name a remote URL clones into: its last path
+/// segment minus `.git`, sanitized to filesystem-safe characters.
+pub fn clone_directory_name(url: &str) -> String {
+    let tail = url
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or("repo");
+    let name: String = tail
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if name.is_empty() {
+        "repo".into()
+    } else {
+        name
+    }
+}
+
+/// Where zeDB keeps checkouts it cloned itself.
+pub fn managed_repos_dir() -> Option<std::path::PathBuf> {
+    dirs::data_local_dir().map(|dir| dir.join("zedb").join("repos"))
+}
+
+/// Clone `url` into `dest` with the user's own git (and therefore their
+/// auth: ssh agent, credential helper). Git's message comes back
+/// verbatim on failure.
+pub fn clone_repo(url: &str, dest: &Path) -> Result<(), String> {
+    if dest.exists() {
+        return Err(format!("{} already exists", dest.display()));
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let output = Command::new("git")
+        .arg("clone")
+        .arg(url)
+        .arg(dest)
+        .output()
+        .map_err(|error| format!("could not run git: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
 fn parse_porcelain_v2(text: &str) -> GitStatus {
     let mut branch = None;
     let mut ahead_behind = None;
@@ -298,5 +363,62 @@ mod tests {
         let status = read_git_status(dir.path()).unwrap();
         assert_eq!(status.dirty, 1, "unrelated.txt must stay uncommitted");
         assert!(push(dir.path()).is_err(), "push without a remote must fail");
+    }
+
+    #[test]
+    fn recognizes_remote_urls() {
+        for url in [
+            "git@github.com:acme/fleet-ddl.git",
+            "ssh://git@host/x.git",
+            "https://github.com/acme/fleet-ddl.git",
+            "git://host/x",
+        ] {
+            assert!(is_remote_url(url), "{url}");
+        }
+        for path in [
+            "~/code/repo",
+            "/tmp/repo",
+            "https://example.com/page",
+            "repo",
+        ] {
+            assert!(!is_remote_url(path), "{path}");
+        }
+        assert_eq!(
+            clone_directory_name("git@github.com:acme/fleet-ddl.git"),
+            "fleet-ddl"
+        );
+        assert_eq!(clone_directory_name("https://host/team/x.y.git/"), "x.y");
+    }
+
+    #[test]
+    fn clones_with_the_users_git() {
+        let source = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(source.path())
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(source.path().join("zedb.toml"), "format = 1\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "seed"]);
+
+        let target = tempfile::tempdir().unwrap();
+        let dest = target.path().join("clone");
+        clone_repo(source.path().to_str().unwrap(), &dest).unwrap();
+        assert!(dest.join(".git").is_dir());
+        assert!(dest.join("zedb.toml").is_file());
+        assert!(
+            clone_repo(source.path().to_str().unwrap(), &dest).is_err(),
+            "cloning onto an existing directory must refuse"
+        );
     }
 }

@@ -132,6 +132,8 @@ pub struct FleetState {
     /// Width of the detail panel; user-draggable.
     pub detail_width: f32,
     pub resizing_detail: bool,
+    /// A pasted git URL is being cloned in the background.
+    pub cloning: bool,
 }
 
 impl FleetState {
@@ -176,6 +178,7 @@ impl FleetState {
             filter_open: false,
             detail_width: 420.0,
             resizing_detail: false,
+            cloning: false,
         }
     }
 }
@@ -277,8 +280,13 @@ impl Workspace {
     pub(crate) fn fleet_open_repo(&mut self, cx: &mut Context<Self>) {
         let path_text = self.fleet.repo_path.read(cx).text().trim().to_string();
         if path_text.is_empty() {
-            self.fleet.repo_error = Some("Enter the path of a migration repo checkout".into());
+            self.fleet.repo_error =
+                Some("Enter the path of a migration repo checkout, or a git URL to clone".into());
             cx.notify();
+            return;
+        }
+        if zedb_core::git::is_remote_url(&path_text) {
+            self.fleet_clone_repo(path_text, cx);
             return;
         }
         let expanded = match (path_text.strip_prefix("~/"), std::env::var_os("HOME")) {
@@ -307,6 +315,72 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// Clone a pasted git URL into the managed repos directory and open
+    /// the checkout, with the user's own git doing the network and auth
+    /// work. An existing clone of the same URL is opened as-is.
+    fn fleet_clone_repo(&mut self, url: String, cx: &mut Context<Self>) {
+        if self.fleet.cloning {
+            return;
+        }
+        let Some(base) = zedb_core::git::managed_repos_dir() else {
+            self.fleet.repo_error = Some("No data directory available for clones".into());
+            cx.notify();
+            return;
+        };
+        let dest = base.join(zedb_core::git::clone_directory_name(&url));
+        if dest.join(".git").exists() {
+            // Already cloned from a previous paste: open the checkout.
+            let dest_text = dest.display().to_string();
+            self.fleet
+                .repo_path
+                .update(cx, |input, cx| input.set_text(dest_text, cx));
+            self.notice = Some(format!(
+                "Already cloned; opened the existing checkout at {}",
+                dest.display()
+            ));
+            self.notice_warning = false;
+            self.fleet_open_repo(cx);
+            return;
+        }
+        self.fleet.cloning = true;
+        self.fleet.repo_error = None;
+        self.notice = Some(format!("Cloning {url}..."));
+        self.notice_warning = false;
+        cx.notify();
+
+        let clone_url = url.clone();
+        let clone_dest = dest.clone();
+        let handle = rt::tokio().spawn(async move {
+            tokio::task::spawn_blocking(move || zedb_core::git::clone_repo(&clone_url, &clone_dest))
+                .await
+                .map_err(|error| error.to_string())?
+        });
+        cx.spawn(async move |this, cx| {
+            let result = handle.await;
+            this.update(cx, |this, cx| {
+                this.fleet.cloning = false;
+                match result.map_err(|error| error.to_string()) {
+                    Ok(Ok(())) => {
+                        let dest_text = dest.display().to_string();
+                        this.fleet
+                            .repo_path
+                            .update(cx, |input, cx| input.set_text(dest_text, cx));
+                        this.notice = Some(format!("Cloned {url} to {}", dest.display()));
+                        this.notice_warning = false;
+                        this.fleet_open_repo(cx);
+                    }
+                    Ok(Err(error)) | Err(error) => {
+                        this.fleet.repo_error = Some(format!("clone failed: {error}"));
+                        this.notice = None;
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn fleet_refresh(&mut self, cx: &mut Context<Self>) {
