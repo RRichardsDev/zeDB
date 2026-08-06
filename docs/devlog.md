@@ -531,3 +531,17 @@ Status: implementation complete, awaiting UI acceptance.
   editable in a multi-line input. Push is a separate button with its
   own progress and verbatim git errors; the git chip refreshes after
   both steps. No forge, no conflict resolution, no history rewriting.
+
+## Decluster missed quoted cluster names (2026-08-06)
+
+- First real M4-loop walk found it: an authored migration using
+  ON CLUSTER '${cluster}' (quoted, which ClickHouse accepts) survived
+  decluster because the regex only matched bare identifiers, so the
+  replay hit QUERY_IS_PROHIBITED on clickhouse-local. The regex now
+  accepts bare, single-quoted, double-quoted, and backticked names,
+  with unit tests for each and for ON CLUSTER inside a string literal
+  staying untouched. CRITICAL blast radius per impact analysis (regen,
+  verify, runner, CLI and app), but strictly widening.
+- With that fixed, the same walk produced the next, correct error:
+  the draft altered a table the chain never creates, which the replay
+  catches and syntax checks cannot. The modal wording is doing its job.
