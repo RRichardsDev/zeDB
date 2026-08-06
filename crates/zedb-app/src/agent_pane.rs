@@ -64,6 +64,8 @@ pub struct ThreadState {
     pub agent_icon: String,
     /// Attach a snapshot of what the user is looking at to each send.
     pub include_context: bool,
+    /// Which cached connection this thread belongs to.
+    pub cache_key: String,
     pub connection: Arc<AgentConnection>,
     pub session_id: Option<String>,
     pub entries: Vec<ThreadEntry>,
@@ -83,6 +85,10 @@ pub struct AgentPaneState {
     pub next_generation: u64,
     /// What discovery found, in menu order: built-ins then customs.
     pub agents: Vec<zedb_acp::discovery::DiscoveredAgent>,
+    /// One live process per agent, shared across threads: ACP is
+    /// multi-session, and respawning per thread made macOS re-ask
+    /// keychain approvals for the agent's credentials on every thread.
+    pub connections: std::collections::HashMap<String, Arc<AgentConnection>>,
     /// The Add More Agents form, when open.
     pub add_form: Option<AddAgentForm>,
 }
@@ -103,6 +109,7 @@ impl AgentPaneState {
             picker_open: false,
             next_generation: 0,
             agents: Vec::new(),
+            connections: std::collections::HashMap::new(),
             add_form: None,
         }
     }
@@ -162,22 +169,34 @@ impl Workspace {
             .map(|repo| repo.root.clone())
             .or_else(dirs::home_dir);
 
-        // AgentConnection spawns tokio tasks and a tokio child process;
-        // both need the runtime context or they abort the app from
-        // inside an AppKit event handler.
-        let _runtime = rt::tokio().enter();
-        let mut connection = match AgentConnection::spawn(&program, &args, &[], cwd.as_deref()) {
-            Ok(connection) => connection,
-            Err(error) => {
-                self.notice = Some(format!("Could not start {name}: {error}"));
-                self.notice_warning = true;
-                self.notice_flash_id += 1;
-                cx.notify();
-                return;
+        // Reuse the agent's live process when one exists; otherwise
+        // spawn and pump. AgentConnection spawns tokio tasks and a
+        // tokio child process; both need the runtime context or they
+        // abort the app from inside an AppKit event handler.
+        let cache_key = format!("{}|{program}", agent.id);
+        let (connection, fresh_events) = match self.agent.connections.get(&cache_key) {
+            Some(connection) => (connection.clone(), None),
+            None => {
+                let _runtime = rt::tokio().enter();
+                let mut connection =
+                    match AgentConnection::spawn(&program, &args, &[], cwd.as_deref()) {
+                        Ok(connection) => connection,
+                        Err(error) => {
+                            self.notice = Some(format!("Could not start {name}: {error}"));
+                            self.notice_warning = true;
+                            self.notice_flash_id += 1;
+                            cx.notify();
+                            return;
+                        }
+                    };
+                let events = connection.take_events();
+                let connection = Arc::new(connection);
+                self.agent
+                    .connections
+                    .insert(cache_key.clone(), connection.clone());
+                (connection, Some(events))
             }
         };
-        let mut events = connection.take_events();
-        let connection = Arc::new(connection);
 
         self.agent.next_generation += 1;
         let generation = self.agent.next_generation;
@@ -199,10 +218,12 @@ impl Workspace {
             },
         )
         .detach();
+        let reused = fresh_events.is_none();
         self.agent.thread = Some(ThreadState {
             agent_name: name.to_string(),
             agent_icon: icon.clone(),
             include_context: true,
+            cache_key: cache_key.clone(),
             connection: connection.clone(),
             session_id: None,
             entries: Vec::new(),
@@ -224,7 +245,9 @@ impl Workspace {
         let handshake_connection = connection.clone();
         let handshake_cwd = cwd.clone().unwrap_or_else(|| "/".into());
         let handle = rt::tokio().spawn(async move {
-            handshake_connection.initialize().await?;
+            if !reused {
+                handshake_connection.initialize().await?;
+            }
             let session = handshake_connection
                 .new_session(&handshake_cwd, mcp_servers)
                 .await?;
@@ -261,18 +284,30 @@ impl Workspace {
         })
         .detach();
 
-        // Event pump: the conversation streams through here.
-        cx.spawn(async move |this, cx| {
-            while let Some(event) = events.recv().await {
-                let alive = this
-                    .update(cx, |this, cx| this.agent_apply_event(generation, event, cx))
-                    .unwrap_or(false);
-                if !alive {
-                    break;
+        // Event pump: one per process, surviving across threads. Events
+        // land in whichever thread currently belongs to this process;
+        // a Closed event also evicts the cached connection so the next
+        // thread respawns cleanly.
+        if let Some(mut events) = fresh_events {
+            let pump_key = cache_key.clone();
+            cx.spawn(async move |this, cx| {
+                while let Some(event) = events.recv().await {
+                    let closed = matches!(event, AgentEvent::Closed { .. });
+                    let alive = this
+                        .update(cx, |this, cx| {
+                            if closed {
+                                this.agent.connections.remove(&pump_key);
+                            }
+                            this.agent_apply_event_for(&pump_key, event, cx)
+                        })
+                        .unwrap_or(false);
+                    if closed || !alive {
+                        break;
+                    }
                 }
-            }
-        })
-        .detach();
+            })
+            .detach();
+        }
     }
 
     pub(crate) fn agent_open_add_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -382,18 +417,20 @@ impl Workspace {
     }
 
     /// Fold one agent event into the transcript. Returns whether this
-    /// thread is still the live one (stale pumps stop themselves).
-    fn agent_apply_event(
+    /// process still has a pane consumer (the pane may show another
+    /// agent's thread; events for an idle cached process are dropped
+    /// but the pump stays alive for its next thread).
+    fn agent_apply_event_for(
         &mut self,
-        generation: u64,
+        cache_key: &str,
         event: AgentEvent,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(thread) = self.agent.thread.as_mut() else {
-            return false;
+            return true;
         };
-        if thread.generation != generation {
-            return false;
+        if thread.cache_key != cache_key {
+            return true;
         }
         match event {
             AgentEvent::MessageChunk { text } => {
