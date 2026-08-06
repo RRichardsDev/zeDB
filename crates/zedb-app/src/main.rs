@@ -26,7 +26,7 @@ use gpui_component::{
     button::Button,
     highlighter::HighlightTheme,
     input::{Input, InputState, Position},
-    menu::{DropdownMenu, PopupMenu},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenu},
     scroll::ScrollableElement,
     Disableable, Root, Theme,
 };
@@ -215,6 +215,12 @@ struct EndpointHealth {
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json, no_register)]
 struct SelectNode {
+    index: usize,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct DuplicateConnection {
     index: usize,
 }
 
@@ -807,6 +813,9 @@ impl Workspace {
                         this.notice = None;
                         cx.notify();
                     }))
+                    .context_menu(move |menu, _, _| {
+                        menu.menu("Duplicate", Box::new(DuplicateConnection { index }))
+                    })
                     .child(
                         div()
                             .flex()
@@ -1492,6 +1501,41 @@ impl Workspace {
             editing: form.editing,
             original_name: form.original_name.clone(),
         })
+    }
+
+    /// Duplicate a saved connection under a fresh name. Passwords live
+    /// in the keychain keyed by connection name, so the copy has no
+    /// credentials until its first connect asks for them.
+    fn duplicate_connection(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(original) = self.connections.get(index) else {
+            return;
+        };
+        let mut copy = original.clone();
+        let base = format!("{} copy", copy.name);
+        let mut name = base.clone();
+        let mut suffix = 2;
+        while self.connections.iter().any(|c| c.name == name) {
+            name = format!("{base} {suffix}");
+            suffix += 1;
+        }
+        copy.name = name.clone();
+        self.connections.push(copy);
+        match save_connections(&self.connections) {
+            Ok(()) => {
+                self.selected = Some(self.connections.len() - 1);
+                self.notice = Some(format!(
+                    "Duplicated as \"{name}\"; the password is not copied, connecting will ask for it"
+                ));
+                self.notice_warning = false;
+            }
+            Err(error) => {
+                self.connections.pop();
+                self.notice = Some(format!("Could not save connections: {error}"));
+                self.notice_warning = true;
+                self.notice_flash_id += 1;
+            }
+        }
+        cx.notify();
     }
 
     fn sidebar_resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4199,6 +4243,9 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, action: &SelectNode, _, cx| this.select_node(action.index, cx)),
             )
+            .on_action(cx.listener(|this, action: &DuplicateConnection, _, cx| {
+                this.duplicate_connection(action.index, cx)
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.resizing_sidebar {
                     this.sidebar_width = f32::from(event.position.x).clamp(180.0, 480.0);
