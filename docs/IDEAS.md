@@ -15,8 +15,11 @@ phase assignment.
 
 ## Migrations / fleet
 
-- zeDB writes to git: commit scaffolded migrations, push branches
-  (first follow-up after v1; already noted in SPEC.md).
+- Embedded runners: client libraries (Java, Python, Node, C++, Rust,
+  PHP) that read current state, deploy, and stamp tracking from
+  application code. Opt-in per repo and per language in zedb.toml,
+  disabled by default; one engine, thin bindings. Candidate Phase 4;
+  design sketch in PHASE-3.md.
 - Fleet-wide "apply wave" orchestration: staged rollout groups with
   pause/resume and failure isolation.
 - Migration authoring assistance: live check-as-you-type against the

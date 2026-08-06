@@ -45,8 +45,12 @@ about migration layout and workflow; those opinions are the product.
    read-only-by-default connections, mandatory rendered dry-run diff before
    apply, rollback-class acknowledgement, and a local audit log. Safety is
    architecture, not a dialog box.
-5. **BYO git.** Migration repos are plain directories under any git remote.
-   No forge coupling, no GitHub assumptions.
+5. **BYO git, our workflow.** Migration repos are plain directories under
+   any git remote: no forge coupling, no GitHub assumptions. But BYO git
+   is about where the repo lives, not who drives it. The full lifecycle
+   (creating migrations, checks, regenerating current-state, commit and
+   push, deploy, verify) is managed through zeDB; the user's git remote
+   is the storage and review substrate, not a required manual workflow.
 6. **Provision from current state, upgrade through the chain.** New
    databases are provisioned from generated `current-state/`; existing ones
    walk the ordered migration chain. Humans write migrations only;
@@ -160,9 +164,21 @@ Phased; each phase is usable on its own.
 - Read-only first: status matrix, drift indicators, rendered dry-run diffs.
 - Then applies from the GUI, behind the full safety ladder.
 
-**Follow-ups (explicitly not v1):** zeDB writing to git itself (commit
-scaffolded migrations, push); until then it reads the repo and the user
-commits through their normal workflow. Everything else parked in IDEAS.md.
+**Phase 3: the managed lifecycle.**
+- The whole loop in the app: author a migration, check it against the
+  pinned local server, regenerate current-state with a readable diff,
+  commit and push to the user's remote (plain git, no forge), deploy
+  through the safety ladder, verify.
+- Until Phase 3 lands, the app reads the repo and the user commits
+  through their normal git workflow.
+
+**Follow-ups (explicitly not v1):** embedded runners, i.e. client
+libraries (Java, Python, Node, C++, Rust, PHP) that let an application
+read the repo's current state, deploy the databases it owns, and stamp
+the tracking tables when done. Opt-in per repo and per language via
+zedb.toml, disabled by default, and built as bindings over the one
+engine rather than six reimplementations (design sketch in PHASE-3.md).
+Everything else parked in IDEAS.md.
 
 ## Non-goals
 

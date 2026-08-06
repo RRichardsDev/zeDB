@@ -18,8 +18,8 @@ Phase 2 adds no new engine semantics.
   layering.
 - BYO git stands: the app opens a migration repo as a local directory
   (any git checkout); committing and pushing stay in the user's normal
-  git workflow. zedb writing to git itself remains a post-v1 follow-up
-  (SPEC), not Phase 2 scope.
+  git workflow for now. zedb managing the lifecycle itself (authoring,
+  codegen, commit, push) is Phase 3 (PHASE-3.md), not Phase 2 scope.
 - Mutating anything from the GUI is forbidden until M4. The safety
   ladder must exist before the first mutating action ships, not after
   (SPEC principle 4).
@@ -119,14 +119,13 @@ surface) → M5.
 
 ## Explicitly not in Phase 2
 
-zedb writing to git (commit/push of scaffolded migrations; post-v1
-follow-up), apply-wave orchestration with pause/resume (IDEAS.md),
+the managed lifecycle (authoring, codegen, commit/push; Phase 3),
+apply-wave orchestration with pause/resume (IDEAS.md),
 migration authoring assistance, ops panels (replication lag, queues;
 parked hard in IDEAS.md), guest-driver fleets, Windows.
 
 ## Phase exit
 
-Phase 2 is done when M5's done-condition holds on real fleet use. That
-completes the v1 scope from SPEC.md: explorer, migration engine, fleet
-view. What follows is the v1 release checklist (naming, license,
-packaging) and the follow-ups queue, starting with zedb writing to git.
+Phase 2 is done when M5's done-condition holds on real fleet use. What
+follows is Phase 3 (PHASE-3.md): the managed lifecycle, where authoring,
+codegen, and commit/push move into the app.
