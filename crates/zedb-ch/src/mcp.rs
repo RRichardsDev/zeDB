@@ -91,11 +91,8 @@ impl McpServer {
         let id = message.get("id").cloned();
         let method = message.get("method").and_then(Value::as_str)?;
         let params = message.get("params").cloned().unwrap_or(Value::Null);
-        if id.is_none() {
-            // Notifications (notifications/initialized etc.) need no reply.
-            return None;
-        }
-        let id = id.expect("checked above");
+        // Notifications (notifications/initialized etc.) need no reply.
+        let id = id?;
         let result = match method {
             "initialize" => Ok(json!({
                 "protocolVersion": params
