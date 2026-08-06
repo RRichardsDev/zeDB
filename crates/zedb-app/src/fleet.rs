@@ -1537,9 +1537,11 @@ impl Workspace {
                         && !row.pending.contains(&number)
                 }
             });
+            let group_name = gpui::SharedString::from(format!("fleet-migration-header-{index}"));
             header = header.child(
                 div()
                     .id(("fleet-migration-header", index))
+                    .group(group_name.clone())
                     .w(px(64.))
                     .h_full()
                     .flex_none()
@@ -1547,12 +1549,10 @@ impl Workspace {
                     .items_center()
                     .justify_center()
                     .rounded(px(3.))
-                    .child(label)
-                    .hover(move |cell| {
-                        cell.bg(rgb(0x303640))
-                            .text_color(rgb(if applied_anywhere { TEXT } else { SUCCESS }))
-                            .cursor_pointer()
-                    })
+                    .child(div().child(label).group_hover(group_name, move |cell| {
+                        cell.text_color(rgb(if applied_anywhere { TEXT } else { SUCCESS }))
+                    }))
+                    .hover(|cell| cell.bg(rgb(0x303640)).cursor_pointer())
                     .tooltip(move |window, cx| {
                         gpui_component::tooltip::Tooltip::new(if applied_anywhere {
                             "View migration (applied; read-only)"
