@@ -12,6 +12,9 @@ jobs:
   macos-app:
     name: Package zeDB.app (macOS)
     runs-on: macos-latest
+    env:
+      HAS_CERT: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_APPLE_ID != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,7 +28,7 @@ jobs:
           fi
 
       - name: Import Developer ID certificate
-        if: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+        if: ${{ env.HAS_CERT == 'true' }}
         env:
           CERT_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -50,7 +53,7 @@ jobs:
         run: ./scripts/bundle-macos.sh
 
       - name: Notarize and staple
-        if: ${{ secrets.NOTARY_APPLE_ID != '' && env.ZEDB_CODESIGN_IDENTITY != '' }}
+        if: ${{ env.HAS_NOTARY == 'true' && env.ZEDB_CODESIGN_IDENTITY != '' }}
         env:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
@@ -82,7 +85,7 @@ jobs:
           echo "dmg_name=$dmg_name" >> "$GITHUB_OUTPUT"
 
       - name: Notarize and staple DMG
-        if: ${{ secrets.NOTARY_APPLE_ID != '' && env.ZEDB_CODESIGN_IDENTITY != '' }}
+        if: ${{ env.HAS_NOTARY == 'true' && env.ZEDB_CODESIGN_IDENTITY != '' }}
         env:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
