@@ -1323,6 +1323,44 @@ impl Workspace {
                     .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
                     .on_click(cx.listener(|this, _, window, cx| this.author_open(window, cx))),
             )
+            .child(
+                div()
+                    .id("fleet-regen")
+                    .px_3()
+                    .py_1()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .text_color(rgb(TEXT_DIM))
+                    .child("Regen")
+                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                    .tooltip(|window, cx| {
+                        gpui_component::tooltip::Tooltip::new(
+                            "Replay the chain and preview current-state churn before writing",
+                        )
+                        .build(window, cx)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.codegen_start_regen(cx))),
+            )
+            .child(
+                div()
+                    .id("fleet-checks")
+                    .px_3()
+                    .py_1()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .text_color(rgb(TEXT_DIM))
+                    .child("Check chain")
+                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                    .tooltip(|window, cx| {
+                        gpui_component::tooltip::Tooltip::new(
+                            "Run sql, equivalence, and lifecycle checks against the pinned server",
+                        )
+                        .build(window, cx)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.codegen_start_checks(cx))),
+            )
             .when(unlocked, |controls| {
                 controls.child(
                     div()
@@ -1764,5 +1802,6 @@ impl Workspace {
             })
             .when_some(modal, |root, modal| root.child(modal))
             .when_some(self.author_panel(cx), |root, panel| root.child(panel))
+            .when_some(self.codegen_panel(cx), |root, panel| root.child(panel))
     }
 }

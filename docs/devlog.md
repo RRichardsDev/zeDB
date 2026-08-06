@@ -498,3 +498,19 @@ Status: implementation complete, awaiting UI acceptance.
   authoring editors (query tabs only for now), editing an existing tip
   migration, check-as-you-type debounce (IDEAS.md has the live-check
   entry).
+
+## Phase 3 M2: codegen in the app (2026-08-06)
+
+- Two fleet-toolbar buttons. Regen replays the chain through the pinned
+  binary in the background and shows diff_tree's churn lines (stale /
+  missing / unexpected per generated file) in a modal; writing
+  current-state is a separate explicit button, absent entirely when the
+  tree is in sync. Check chain runs sql, equivalence, and lifecycle
+  concurrently with per-check progress lines, passing summaries phrased
+  like the CLI's and failures rendered as the reports' difference lines.
+- Same functions as the CLI end to end (Regenerator, diff_tree,
+  write_tree, check_sql, check_equivalence, check_lifecycle), so the
+  M2 exactly-the-tree-zedb-regen-produces condition holds by
+  construction; verified on a demo-fleet copy where an app-style
+  authored migration produced the expected single stale line, the
+  written tree carried the new column, and equivalence passed.

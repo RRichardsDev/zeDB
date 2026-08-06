@@ -1,4 +1,5 @@
 mod author;
+mod codegen;
 mod components;
 mod fleet;
 mod grid_spike;
@@ -298,6 +299,8 @@ enum QueryResizeTarget {
 struct Workspace {
     fleet: FleetState,
     author: Option<author::AuthorState>,
+    regen: Option<codegen::RegenState>,
+    checks: Option<codegen::ChecksState>,
     show_fleet: bool,
     health_poll_generation: u64,
     connections: Vec<ConnectionConfig>,
@@ -442,6 +445,8 @@ impl Workspace {
                 ),
                 show_fleet: false,
                 author: None,
+                regen: None,
+                checks: None,
                 health_poll_generation: 0,
                 query_abort: None,
                 query_error_decision: None,
@@ -486,6 +491,8 @@ impl Workspace {
                 ),
                 show_fleet: false,
                 author: None,
+                regen: None,
+                checks: None,
                 health_poll_generation: 0,
                 query_abort: None,
                 query_error_decision: None,
