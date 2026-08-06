@@ -293,6 +293,18 @@ impl Workspace {
             (Some(rest), Some(home)) => Path::new(&home).join(rest),
             _ => Path::new(&path_text).to_path_buf(),
         };
+        self.fleet_open_local(expanded, path_text, cx);
+    }
+
+    /// Open a local checkout. `source` is what the user typed and what
+    /// preferences remember: the git URL stays the visible alias for a
+    /// managed clone; the checkout path is plumbing.
+    fn fleet_open_local(
+        &mut self,
+        expanded: std::path::PathBuf,
+        source: String,
+        cx: &mut Context<Self>,
+    ) {
         // An effectively empty directory (fresh clone, nothing beyond
         // git bookkeeping and a README) becomes a format-1 repo on the
         // spot; anything with real content is left alone and errors as
@@ -341,7 +353,7 @@ impl Workspace {
                 self.fleet.editing_repo_path = false;
                 self.fleet.rows.clear();
                 self.fleet.fetched_at = None;
-                self.preferences.fleet_repo = Some(path_text);
+                self.preferences.fleet_repo = Some(source);
                 if let Err(error) = save_preferences(&self.preferences) {
                     self.notice = Some(format!("Could not save preferences: {error}"));
                 }
@@ -374,16 +386,12 @@ impl Workspace {
             if !zedb_core::git::has_upstream(&dest) {
                 // Nothing upstream to pull (the remote is still empty);
                 // open the checkout without the pull noise.
-                let dest_text = dest.display().to_string();
-                self.fleet
-                    .repo_path
-                    .update(cx, |input, cx| input.set_text(dest_text, cx));
                 self.notice = Some(format!(
                     "Opened the existing checkout at {} (no upstream commits to pull yet)",
                     dest.display()
                 ));
                 self.notice_warning = false;
-                self.fleet_open_repo(cx);
+                self.fleet_open_local(dest, url, cx);
                 return;
             }
             // Already cloned from a previous paste: pull (fast-forward
@@ -403,10 +411,6 @@ impl Workspace {
                 let result = handle.await;
                 this.update(cx, |this, cx| {
                     this.fleet.cloning = false;
-                    let dest_text = dest.display().to_string();
-                    this.fleet
-                        .repo_path
-                        .update(cx, |input, cx| input.set_text(dest_text, cx));
                     match result.map_err(|error| error.to_string()) {
                         Ok(Ok(output)) => {
                             this.notice = Some(format!("Pulled: {output}"));
@@ -422,7 +426,7 @@ impl Workspace {
                             this.notice_flash_id += 1;
                         }
                     }
-                    this.fleet_open_repo(cx);
+                    this.fleet_open_local(dest, url, cx);
                     cx.notify();
                 })
                 .ok();
@@ -449,13 +453,9 @@ impl Workspace {
                 this.fleet.cloning = false;
                 match result.map_err(|error| error.to_string()) {
                     Ok(Ok(())) => {
-                        let dest_text = dest.display().to_string();
-                        this.fleet
-                            .repo_path
-                            .update(cx, |input, cx| input.set_text(dest_text, cx));
                         this.notice = Some(format!("Cloned {url} to {}", dest.display()));
                         this.notice_warning = false;
-                        this.fleet_open_repo(cx);
+                        this.fleet_open_local(dest, url, cx);
                     }
                     Ok(Err(error)) | Err(error) => {
                         this.fleet.repo_error = Some(format!("clone failed: {error}"));
