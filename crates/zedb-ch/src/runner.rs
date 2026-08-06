@@ -133,6 +133,18 @@ impl<'a> Runner<'a> {
         format!("{}.zedb_migrations", self.repo.config.tracking.database)
     }
 
+    /// This repo's identity in the tracking rows; several repos can
+    /// share one tracking database without reading each other's rows.
+    fn tracking_repo(&self) -> String {
+        self.repo.config.tracking.repo.clone().unwrap_or_else(|| {
+            self.repo
+                .root
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "default".into())
+        })
+    }
+
     fn require_write(&self, action: &str) -> Result<(), RunnerError> {
         if self.options.server.read_only || !self.options.write {
             return Err(RunnerError::Refused(format!(
@@ -189,7 +201,8 @@ impl<'a> Runner<'a> {
                     None => {
                         default_query = format!(
                             "SELECT name FROM system.databases WHERE name NOT IN \
-                             ('system', 'information_schema', 'INFORMATION_SCHEMA', '{}') \
+                             ('system', 'information_schema', 'INFORMATION_SCHEMA', \
+                             'default', '{}') \
                              ORDER BY name",
                             self.repo.config.tracking.database
                         );
@@ -208,6 +221,9 @@ impl<'a> Runner<'a> {
                     .collect();
                 databases.sort();
                 databases.dedup();
+                // The tracking database is never a migration target,
+                // however the registry is written.
+                databases.retain(|database| *database != self.repo.config.tracking.database);
                 let skipped: Vec<(String, String)> = databases
                     .iter()
                     .filter_map(|database| {
@@ -264,12 +280,13 @@ impl<'a> Runner<'a> {
             ),
             format!(
                 "CREATE TABLE IF NOT EXISTS {database}.zedb_migrations{on_cluster} (\
+                 repo LowCardinality(String) DEFAULT 'default', \
                  db String, migration UInt32, action LowCardinality(String), \
                  status LowCardinality(String), error Nullable(String), \
                  recorded_at DateTime64(3) DEFAULT now64(3), \
                  duration_secs Decimal(9, 2) DEFAULT 0, run_id UUID, \
                  params Map(String, String)) \
-                 ENGINE = {engine_rows} ORDER BY (db, migration)"
+                 ENGINE = {engine_rows} ORDER BY (repo, db, migration)"
             ),
         ];
         for statement in statements {
@@ -308,8 +325,9 @@ impl<'a> Runner<'a> {
             "SELECT migration, \
              argMax(action, (recorded_at, run_id)) AS last_action, \
              argMax(status, (recorded_at, run_id)) AS last_status \
-             FROM {} WHERE db = {} AND status != 'started' GROUP BY migration",
+             FROM {} WHERE repo = {} AND db = {} AND status != 'started' GROUP BY migration",
             self.tracking_table(),
+            quote(&self.tracking_repo()),
             quote(database)
         );
         let result = match self.client.query(&sql).await {
@@ -479,9 +497,10 @@ impl<'a> Runner<'a> {
             None => "NULL".into(),
         };
         let sql = format!(
-            "INSERT INTO {} (db, migration, action, status, error, duration_secs, run_id, params) \
-             VALUES ({}, {migration}, {}, {}, {error_sql}, {duration_secs:.2}, {}, {{{}}})",
+            "INSERT INTO {} (repo, db, migration, action, status, error, duration_secs, run_id, params) \
+             VALUES ({}, {}, {migration}, {}, {}, {error_sql}, {duration_secs:.2}, {}, {{{}}})",
             self.tracking_table(),
+            quote(&self.tracking_repo()),
             quote(database),
             quote(action),
             quote(status),
@@ -881,7 +900,11 @@ impl<'a> Runner<'a> {
         self.ensure_tracking().await?;
         let existing = self
             .client
-            .query(&format!("SELECT count() FROM {}", self.tracking_table()))
+            .query(&format!(
+                "SELECT count() FROM {} WHERE repo = {}",
+                self.tracking_table(),
+                quote(&self.tracking_repo())
+            ))
             .await
             .map_err(|error| RunnerError::Server(error.to_string()))?;
         let count = existing
@@ -898,14 +921,19 @@ impl<'a> Runner<'a> {
         }
         self.client
             .execute(&format!(
-                "INSERT INTO {} (db, migration, action, status, error, recorded_at,                  duration_secs, run_id, params)                  SELECT db, migration, action, status, error, recorded_at,                  duration_secs, run_id, map() FROM {source_table}",
-                self.tracking_table()
+                "INSERT INTO {} (repo, db, migration, action, status, error, recorded_at,                  duration_secs, run_id, params)                  SELECT {} AS repo, db, migration, action, status, error, recorded_at,                  duration_secs, run_id, map() FROM {source_table}",
+                self.tracking_table(),
+                quote(&self.tracking_repo())
             ))
             .await
             .map_err(|error| RunnerError::Server(error.to_string()))?;
         let imported = self
             .client
-            .query(&format!("SELECT count() FROM {}", self.tracking_table()))
+            .query(&format!(
+                "SELECT count() FROM {} WHERE repo = {}",
+                self.tracking_table(),
+                quote(&self.tracking_repo())
+            ))
             .await
             .map_err(|error| RunnerError::Server(error.to_string()))?;
         let imported: u64 = imported

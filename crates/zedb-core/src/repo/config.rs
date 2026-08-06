@@ -38,6 +38,11 @@ pub struct TrackingConfig {
     pub database: String,
     #[serde(default)]
     pub cluster_param: Option<String>,
+    /// This repo's identity in the tracking rows. Several repos can
+    /// share one tracking database on a cluster without reading each
+    /// other's history. Defaults to the repo directory's name.
+    #[serde(default)]
+    pub repo: Option<String>,
 }
 
 impl Default for TrackingConfig {
@@ -45,12 +50,13 @@ impl Default for TrackingConfig {
         Self {
             database: default_tracking_database(),
             cluster_param: None,
+            repo: None,
         }
     }
 }
 
 fn default_tracking_database() -> String {
-    "default".into()
+    "zedb_config".into()
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

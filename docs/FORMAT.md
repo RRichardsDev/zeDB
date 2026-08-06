@@ -29,16 +29,23 @@ version = "25.3.2.1"
 
 [tracking]
 # Database that holds the tracking tables. The tables themselves are
-# zedb_migrations and zedb_meta (see Tracking below).
-database = "default"
+# zedb_migrations and zedb_meta (see Tracking below). One tracking
+# database per cluster is the expected shape; the repo identity below
+# keeps several repos apart within it. Never a migration target.
+database = "zedb_config"
 # Optional: when set, tracking DDL and migrations run ON CLUSTER ${cluster}.
 cluster_param = "cluster"
+# Optional: this repo's identity in the tracking rows; defaults to the
+# repo directory's name. Lets repos share a tracking database without
+# reading each other's history.
+repo = "org-fleet"
 
 [fleet]
 # Optional SQL returning one database name per row. When absent, the
-# fleet defaults to every non-system database except the tracking
-# database itself; set this to narrow it. The ancestor hardcoded this
-# per deployment.
+# fleet defaults to every non-system database except `default` and the
+# tracking database; set this to narrow it. The tracking database is
+# excluded from targeting even when the query matches it. The ancestor
+# hardcoded this per deployment.
 registry_query = "SELECT name FROM system.databases WHERE name LIKE 'org_%'"
 
 [scopes]
@@ -149,6 +156,7 @@ ENGINE = MergeTree ORDER BY key;
 
 CREATE TABLE zedb_migrations
 (
+    repo          LowCardinality(String) DEFAULT 'default',
     db            String,
     migration     UInt32,
     action        LowCardinality(String),  -- upgrade | rollback | stamp | apply
@@ -159,7 +167,7 @@ CREATE TABLE zedb_migrations
     run_id        UUID,
     params        Map(String, String)      -- rendered parameter values
 )
-ENGINE = MergeTree ORDER BY (db, migration);
+ENGINE = MergeTree ORDER BY (repo, db, migration);
 ```
 
 - `params` is new: the rendered parameter values for the run, making

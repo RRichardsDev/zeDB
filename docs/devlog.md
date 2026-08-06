@@ -576,3 +576,21 @@ Status: implementation complete, awaiting UI acceptance.
   signature and enforcement, so no real apply path can reach the
   bypass. The step narration says the bypass happened. check all on
   demo-fleet is green across sql, equivalence, and lifecycle.
+
+## Tracking gets a home and an identity (2026-08-06)
+
+- Surfaced by pointing a second, empty repo at the demo cluster: it
+  read demo-fleet's tracking rows, because both repos used
+  default.zedb_migrations and the rows carry no notion of whose they
+  are. Two changes. Tracking now defaults to its own zedb_config
+  database (one per cluster is the expected shape), and
+  zedb_migrations gains a repo identity column (ORDER BY (repo, db,
+  migration)), filtered in every read and written by every insert,
+  with [tracking].repo overriding the default of the repo directory
+  name.
+- The tracking database is never a migration target, however the
+  registry is written; the default registry also excludes `default`.
+  The demo cluster's 93 tracking rows moved to
+  zedb_config.zedb_migrations with repo='demo-fleet', verified by
+  status parity before dropping the old default.* tables; check all
+  stays green with the new schema.

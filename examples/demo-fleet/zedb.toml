@@ -5,8 +5,9 @@ kind = "clickhouse"
 version = "26.3.12.3"
 
 [tracking]
-database = "default"
+database = "zedb_config"
 cluster_param = "cluster"
+repo = "demo-fleet"
 
 [fleet]
 registry_query = "SELECT name FROM system.databases WHERE name LIKE 'zedb_%' ORDER BY name"

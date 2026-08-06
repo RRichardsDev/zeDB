@@ -13,7 +13,7 @@ kind = "clickhouse"
 version = "25.3.2.1"
 
 [tracking]
-database = "default"
+database = "zedb_config"
 
 [scopes]
 global = { }
