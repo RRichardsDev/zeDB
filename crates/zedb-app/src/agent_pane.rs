@@ -1252,6 +1252,18 @@ fn render_entry(
         ThreadEntry::Assistant(text) => {
             if text.is_empty() {
                 div().into_any_element()
+            } else if text.trim_start().starts_with("Automatic approval review") {
+                // Adapter housekeeping (Codex's auto-approval notices),
+                // visually separated from the agent's actual reply.
+                div()
+                    .p_2()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(rgb(0xd7a65f))
+                    .text_xs()
+                    .text_color(rgb(0xd7a65f))
+                    .child(text.clone())
+                    .into_any_element()
             } else {
                 div()
                     .text_color(rgb(TEXT))
