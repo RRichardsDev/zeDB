@@ -678,3 +678,14 @@ Status: implementation complete, awaiting UI acceptance.
   toggleable per thread. Remaining for live sign-off: the deictic
   what's-wrong-with-this-database walk, which needs a Touch ID
   connect.
+
+## Phase 3.1 M3 sign-off (2026-08-06)
+
+- The deictic drift walk, from the agent log: asked what's wrong with
+  zedb_kappa, the agent went straight to mcp__zedb__fleet_status and
+  mcp__zedb__drift (ignoring the user's unrelated ClickHouse MCP
+  servers, so the steering line works), the permission cards answered
+  allow_always, and the diagnosis separated clean migration state from
+  schema drift, named both rogue columns, noted the read-only dev
+  posture, and offered to draft the reconciling migration. M3 done;
+  that offer is M4's cue.
