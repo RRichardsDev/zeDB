@@ -298,6 +298,11 @@ impl Workspace {
         self.agent.picker_open = false;
         cx.notify();
 
+        // Watch the open repo while this thread lives: agents edit
+        // files through their own tools and the chain, matrix, and git
+        // chip must not go silently stale.
+        self.agent_watch_repo(generation, cx);
+
         // Handshake: initialize, then open the session in the repo,
         // registering the zedb MCP server (this same executable in a
         // hidden serve mode) so the agent gets the fleet and query
@@ -431,6 +436,80 @@ impl Workspace {
             self.agent_refresh_registry();
         }
         cx.notify();
+    }
+
+    /// Poll the open repo's file signature while `generation` is the
+    /// live thread; on change, reopen the repo and refresh git state.
+    fn agent_watch_repo(&mut self, generation: u64, cx: &mut Context<Self>) {
+        fn signature(root: &std::path::Path) -> u64 {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            let stamp = |path: &std::path::Path, hasher: &mut _| {
+                if let Ok(meta) = std::fs::metadata(path) {
+                    path.hash(hasher);
+                    meta.len().hash(hasher);
+                    if let Ok(modified) = meta.modified() {
+                        modified.hash(hasher);
+                    }
+                }
+            };
+            stamp(&root.join("zedb.toml"), &mut hasher);
+            stamp(&root.join("exclusions.toml"), &mut hasher);
+            let mut stack = vec![root.join("migrations")];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else {
+                        stamp(&path, &mut hasher);
+                    }
+                }
+            }
+            hasher.finish()
+        }
+
+        let Some(root) = self.fleet.repo.as_ref().map(|repo| repo.root.clone()) else {
+            return;
+        };
+        let mut last = signature(&root);
+        cx.spawn(async move |this, cx| loop {
+            gpui::Timer::after(std::time::Duration::from_secs(2)).await;
+            let stale = this
+                .update(cx, |this, cx| {
+                    let live = this
+                        .agent
+                        .thread
+                        .as_ref()
+                        .is_some_and(|thread| thread.generation == generation);
+                    if !live {
+                        return true;
+                    }
+                    let current = signature(&root);
+                    if current != last {
+                        last = current;
+                        if let Ok(reopened) = zedb_core::repo::MigrationRepo::open_root(&root) {
+                            this.fleet.repo = Some(Arc::new(reopened));
+                        }
+                        this.fleet.git = zedb_core::git::read_git_status(&root);
+                        if let Some(thread) = this.agent.thread.as_mut() {
+                            thread
+                                .entries
+                                .push(ThreadEntry::Info("repo files changed on disk".into()));
+                        }
+                        cx.notify();
+                    }
+                    false
+                })
+                .unwrap_or(true);
+            if stale {
+                break;
+            }
+        })
+        .detach();
     }
 
     /// Bind the app-tool bridge socket once; returns its path.
@@ -1537,6 +1616,35 @@ fn clean_log_line(line: &str) -> String {
     out.trim().to_string()
 }
 
+/// Fenced code blocks in a markdown reply, for insert-into-editor;
+/// untagged and sql/clickhouse-tagged fences count.
+fn fenced_sql_blocks(text: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut in_fence = false;
+    let mut takes_sql = false;
+    let mut current = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("```") {
+            if in_fence {
+                if takes_sql && !current.trim().is_empty() {
+                    blocks.push(current.trim_end().to_string());
+                }
+                current.clear();
+                in_fence = false;
+            } else {
+                in_fence = true;
+                let language = rest.trim().to_lowercase();
+                takes_sql = language.is_empty() || language == "sql" || language == "clickhouse";
+            }
+        } else if in_fence {
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    blocks
+}
+
 fn render_entry(
     index: usize,
     entry: &ThreadEntry,
@@ -1567,15 +1675,34 @@ fn render_entry(
                     .child(text.clone())
                     .into_any_element()
             } else {
-                div()
-                    .text_color(rgb(TEXT))
-                    .child(TextView::markdown(
-                        ("agent-md", index),
-                        text.clone(),
-                        window,
-                        cx,
-                    ))
-                    .into_any_element()
+                let blocks = fenced_sql_blocks(text);
+                let mut body = div().text_color(rgb(TEXT)).flex().flex_col().gap_1().child(
+                    TextView::markdown(("agent-md", index), text.clone(), window, cx),
+                );
+                for (block_index, block) in blocks.into_iter().enumerate() {
+                    let label = if block_index == 0 {
+                        "insert into editor".to_string()
+                    } else {
+                        format!("insert block {} into editor", block_index + 1)
+                    };
+                    body = body.child(
+                        div()
+                            .id(("agent-insert-sql", index * 16 + block_index))
+                            .px_2()
+                            .py_0p5()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .text_xs()
+                            .text_color(rgb(TEXT_DIM))
+                            .child(label)
+                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_query_tab_with(&block, window, cx);
+                            })),
+                    );
+                }
+                body.into_any_element()
             }
         }
         ThreadEntry::Tool { title, status, .. } => div()

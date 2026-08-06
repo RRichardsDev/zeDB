@@ -689,3 +689,23 @@ Status: implementation complete, awaiting UI acceptance.
   schema drift, named both rogue columns, noted the read-only dev
   posture, and offered to draft the reconciling migration. M3 done;
   that offer is M4's cue.
+
+## Phase 3.1 M4: the authoring and editor bridges (2026-08-06)
+
+- App-hosted tools reach pane agents through a unix-socket bridge: the
+  MCP serve subprocess forwards propose_migration, propose_query, and
+  navigate to the running app, whose window-needing effects (editor
+  creation) queue and apply at render. propose_migration fills the
+  authoring overlay (class, targeted, marker-line handling), surfaces
+  the fleet view, and refuses honestly when no repo is open or a draft
+  is already up; propose_query lands SQL in a fresh query tab;
+  navigate switches views, selects fleet rows, and auto-opens the
+  repo. Every app-tool use is narrated in the transcript.
+- Assistant replies containing fenced SQL grow insert-into-editor
+  buttons per block, and a repo watcher polls the open checkout's file
+  signature every two seconds while a thread lives, reopening the
+  chain and refreshing the git chip when agents edit files with their
+  own tools (narrated as repo files changed on disk).
+- Verified live through the real permission flow: an agent navigated
+  the app to the fleet view (repo auto-opened) and proposed a draft;
+  both tool calls approved via the pane's cards.
