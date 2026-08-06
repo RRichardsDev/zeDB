@@ -304,6 +304,34 @@ impl Workspace {
                     .into(),
             );
             self.notice_warning = false;
+            // Pin the engine to the server we are actually connected
+            // to instead of the template's placeholder version.
+            if let Some(connected) = &self.connected {
+                let config = connected.client_config.clone();
+                let root = expanded.clone();
+                let handle = rt::tokio()
+                    .spawn(async move { zedb_ch::pin::discover_server_version(config).await });
+                cx.spawn(async move |this, cx| {
+                    let Ok(Ok(version)) = handle.await else {
+                        return;
+                    };
+                    this.update(cx, |this, cx| {
+                        if zedb_core::repo::RepoConfig::set_pinned_version(&root, &version).is_ok()
+                        {
+                            this.notice = Some(format!(
+                                "Initialized the checkout as a format-1 migration repo, \
+                                 pinned to ClickHouse {version} from the connected server; \
+                                 commit zedb.toml when ready"
+                            ));
+                            this.notice_warning = false;
+                            this.fleet_open_repo(cx);
+                        }
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach();
+            }
         }
         match MigrationRepo::open(&expanded) {
             Ok(repo) => {
@@ -343,6 +371,21 @@ impl Workspace {
         };
         let dest = base.join(zedb_core::git::clone_directory_name(&url));
         if dest.join(".git").exists() {
+            if !zedb_core::git::has_upstream(&dest) {
+                // Nothing upstream to pull (the remote is still empty);
+                // open the checkout without the pull noise.
+                let dest_text = dest.display().to_string();
+                self.fleet
+                    .repo_path
+                    .update(cx, |input, cx| input.set_text(dest_text, cx));
+                self.notice = Some(format!(
+                    "Opened the existing checkout at {} (no upstream commits to pull yet)",
+                    dest.display()
+                ));
+                self.notice_warning = false;
+                self.fleet_open_repo(cx);
+                return;
+            }
             // Already cloned from a previous paste: pull (fast-forward
             // only), then open the checkout either way.
             self.fleet.cloning = true;

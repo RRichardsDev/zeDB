@@ -169,6 +169,13 @@ pub fn push(root: &Path) -> Result<String, String> {
     run_git(root, &["push"])
 }
 
+/// Whether the checkout has an upstream ref to pull from. A clone of a
+/// still-empty remote does not, and pulling it would only produce a
+/// scary no-such-ref error for a perfectly normal state.
+pub fn has_upstream(root: &Path) -> bool {
+    run_git(root, &["rev-parse", "--verify", "--quiet", "@{u}"]).is_ok()
+}
+
 /// Pull the current branch, fast-forward only: zeDB never merges or
 /// resolves conflicts. Diverged history comes back as git's own
 /// message and the checkout is left exactly as it was.
