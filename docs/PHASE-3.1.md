@@ -94,6 +94,15 @@ reachable over MCP. An agent that wants to mutate uses the CLI with
 its explicit consent flags like any other process the user runs, which
 keeps the safety ladder meaningful.
 
+The same server carries per-connection ClickHouse query tools: run a
+query (read-only, enforced server-side with readonly=1 on every call
+regardless of the connection's posture), list databases and tables,
+describe an object. Built natively on zedb-ch's client rather than
+spawning the official Python/uv MCP server: no Python prerequisite,
+the connection credentials never leave zeDB's process, and the tools
+version in lockstep with the app. The agent can therefore answer data
+questions and iterate on SQL against the live connection by itself.
+
 The pane is also ambiently context-aware: when a message is sent, the
 app attaches a snapshot of what the user is looking at (which screen;
 the selected database and its row status; drift findings already
@@ -110,7 +119,7 @@ naming it, the same server works under a terminal-run Claude Code
 against the same repo, and nothing mutating is reachable over the
 protocol.
 
-### M4. The authoring bridge
+### M4. The authoring and editor bridges
 
 The agent fills the draft. Alongside the read-only fleet tools, pane
 sessions get a draft surface hosted by the app itself (the CLI cannot
@@ -122,6 +131,15 @@ CLUSTER, a String" in the thread lands as a ready draft in the
 editors, with placeholders like ${db} and ${cluster} used correctly
 because the fleet tools told the agent how this repo templates.
 
+The query editor gets the same treatment: a propose_query tool drops
+SQL into a query tab (new or current, visibly), and every SQL block in
+the thread carries an insert-into-editor affordance, so a query the
+agent wrote or already ran through its read-only tools is one click
+from being yours. Write statements the agent cannot run itself arrive
+exactly this way: drafted into the editor for the user to read and run
+under their own connection posture and consent, never executed by the
+agent.
+
 This deliberately does not breach the no-write rule: a draft is
 memory-only, and the existing gates (check against the pinned server,
 explicit save, the ladder for any deploy) still stand between the
@@ -132,7 +150,10 @@ get it.
 Done when: the sentence above produces a correct two-sided draft in
 the overlay in one round trip, an edited proposal can be re-proposed
 without clobbering user edits silently (the overlay warns before
-replacing a dirty draft), and saving still requires the human check.
+replacing a dirty draft), saving still requires the human check, a
+query from the thread lands in a query tab in one click, and a write
+statement the agent could not run arrives as an editor draft rather
+than an apology.
 
 ### M5. Permissions and daily-driver polish
 
