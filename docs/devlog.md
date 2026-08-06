@@ -561,3 +561,18 @@ Status: implementation complete, awaiting UI acceptance.
   behind the same check-then-save gate as new drafts. With no fleet
   status loaded, editing stays possible but carries an explicit
   warning to confirm the migration never ran anywhere.
+
+## Lifecycle check vs targeted allow lists (2026-08-06)
+
+- The in-app Chain checks run surfaced it: the lifecycle smoke test
+  applied targeted migrations through the same allow-list enforcement
+  as real applies, and the ephemeral lifecycle_db can never be on an
+  allow list, so any repo pinning a targeted migration to named
+  databases (demo-fleet's 00200 -> zedb_theta) could never pass check
+  lifecycle or check all. Policy gating a throwaway database verified
+  nothing.
+- The check now bypasses allow lists via a crate-only
+  apply_targeted_for_check; the public apply_targeted keeps its exact
+  signature and enforcement, so no real apply path can reach the
+  bypass. The step narration says the bypass happened. check all on
+  demo-fleet is green across sql, equivalence, and lifecycle.

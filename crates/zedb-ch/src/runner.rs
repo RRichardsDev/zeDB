@@ -916,6 +916,28 @@ impl<'a> Runner<'a> {
 
     /// Apply one targeted migration to specific databases.
     pub async fn apply_targeted(&self, targets: &Targets, number: u32) -> Result<(), RunnerError> {
+        self.apply_targeted_inner(targets, number, true).await
+    }
+
+    /// The lifecycle check's smoke test: the allow list is fleet
+    /// deployment policy about real databases, and the check's
+    /// ephemeral database can never be on it, so the check bypasses it
+    /// to keep coverage of restricted targeted migrations. Crate-only:
+    /// no real apply path can reach this.
+    pub(crate) async fn apply_targeted_for_check(
+        &self,
+        targets: &Targets,
+        number: u32,
+    ) -> Result<(), RunnerError> {
+        self.apply_targeted_inner(targets, number, false).await
+    }
+
+    async fn apply_targeted_inner(
+        &self,
+        targets: &Targets,
+        number: u32,
+        enforce_allow_list: bool,
+    ) -> Result<(), RunnerError> {
         self.require_write("apply")?;
         let migration = self
             .repo
@@ -928,7 +950,7 @@ impl<'a> Runner<'a> {
         };
         self.ensure_tracking().await?;
         for database in self.target_databases(targets).await? {
-            if !allow_list.is_empty() && !allow_list.contains(&database) {
+            if enforce_allow_list && !allow_list.is_empty() && !allow_list.contains(&database) {
                 return Err(RunnerError::Refused(format!(
                     "{database}: {number:05} restricts targets to {allow_list:?}"
                 )));
