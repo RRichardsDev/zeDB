@@ -488,11 +488,25 @@ impl Workspace {
                                 .compact()
                                 .outline()
                                 .dropdown_menu(move |menu: PopupMenu, _, _| {
-                                    let mut menu = menu.label("External Agents");
+                                    // A Zed-style section header: small
+                                    // and dim, unmistakably not an item.
+                                    let mut menu = menu.menu_element_with_disabled(
+                                        Box::new(StartAgentThread { index: usize::MAX }),
+                                        true,
+                                        |_, _| {
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(TEXT_DIM))
+                                                .child("External Agents")
+                                        },
+                                    );
                                     for (index, (name, icon, _, _)) in AGENTS.iter().enumerate() {
                                         menu = menu.menu_with_icon(
                                             *name,
-                                            gpui_component::Icon::default().path(*icon),
+                                            gpui_component::Icon::default()
+                                                .path(*icon)
+                                                .size(px(18.))
+                                                .mr_1(),
                                             Box::new(StartAgentThread { index }),
                                         );
                                     }
