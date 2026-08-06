@@ -93,6 +93,8 @@ impl FleetAction {
 pub struct FleetState {
     pub repo_path: Entity<TextInput>,
     pub repo: Option<Arc<MigrationRepo>>,
+    /// Git state of the open checkout; None when it is not a git repo.
+    pub git: Option<zedb_core::git::GitStatus>,
     pub repo_error: Option<String>,
     pub rows: Vec<FleetRow>,
     pub fetch_error: Option<String>,
@@ -141,6 +143,7 @@ impl FleetState {
         Self {
             repo_path,
             repo: None,
+            git: None,
             repo_error: None,
             rows: Vec::new(),
             fetch_error: None,
@@ -243,6 +246,7 @@ impl Workspace {
         };
         match MigrationRepo::open(&expanded) {
             Ok(repo) => {
+                self.fleet.git = zedb_core::git::read_git_status(&repo.root);
                 self.fleet.repo = Some(Arc::new(repo));
                 self.fleet.repo_error = None;
                 self.fleet.editing_repo_path = false;
@@ -256,6 +260,7 @@ impl Workspace {
             }
             Err(error) => {
                 self.fleet.repo = None;
+                self.fleet.git = None;
                 self.fleet.rows.clear();
                 self.fleet.repo_error = Some(error.to_string());
             }
@@ -280,6 +285,7 @@ impl Workspace {
         cx.notify();
 
         let handle = rt::tokio().spawn(async move {
+            let git = zedb_core::git::read_git_status(&repo.root);
             let runner = Runner::new(
                 &repo,
                 RunnerOptions {
@@ -332,7 +338,7 @@ impl Workspace {
                         .collect(),
                 })
                 .collect();
-            Ok::<_, String>((rows, clusters))
+            Ok::<_, String>((rows, clusters, git))
         });
 
         cx.spawn(async move |this, cx| {
@@ -343,9 +349,10 @@ impl Workspace {
                 }
                 this.fleet.loading = false;
                 match result {
-                    Ok(Ok((rows, clusters))) => {
+                    Ok(Ok((rows, clusters, git))) => {
                         this.fleet.rows = rows;
                         this.fleet.clusters = clusters;
+                        this.fleet.git = git;
                         this.fleet.fetched_at = Some(Instant::now());
                     }
                     Ok(Err(error)) => this.fleet.fetch_error = Some(error),
@@ -1022,6 +1029,22 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_2();
+        if let Some(git) = self.fleet.git.as_ref().filter(|git| git.stale()) {
+            let mut warning = div()
+                .p_2()
+                .rounded(px(3.))
+                .border_1()
+                .border_color(rgb(ACCENT_PENDING))
+                .text_color(rgb(ACCENT_PENDING))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child("Repo checkout may not match what was reviewed:");
+            for line in git.deploy_warnings() {
+                warning = warning.child(format!("  {line}"));
+            }
+            body = body.child(warning);
+        }
         for (label, sql) in dry_run {
             body = body.child(div().text_color(rgb(TEXT_DIM)).child(label.clone()));
             if !sql.is_empty() {
@@ -1581,15 +1604,34 @@ impl Workspace {
                     .text_xs()
                     .child(status_line)
                     .when_some(repo.as_ref(), |strip, repo| {
-                        strip.child(div().text_color(rgb(TEXT_DIM)).child(format!(
-                            "{}  |  {} migration(s)  |  ClickHouse {}",
-                            repo.root
-                                .file_name()
-                                .map(|name| name.to_string_lossy().to_string())
-                                .unwrap_or_else(|| repo.root.display().to_string()),
-                            repo.migrations.len(),
-                            repo.config.engine.version
-                        )))
+                        let git = self.fleet.git.as_ref();
+                        let stale = git.map(|git| git.stale()).unwrap_or(false);
+                        strip.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .when_some(git, |chip, git| {
+                                    chip.child(
+                                        div()
+                                            .text_color(rgb(if stale {
+                                                ACCENT_PENDING
+                                            } else {
+                                                TEXT_DIM
+                                            }))
+                                            .child(git.summary()),
+                                    )
+                                })
+                                .child(div().text_color(rgb(TEXT_DIM)).child(format!(
+                                    "{}  |  {} migration(s)  |  ClickHouse {}",
+                                    repo.root
+                                        .file_name()
+                                        .map(|name| name.to_string_lossy().to_string())
+                                        .unwrap_or_else(|| repo.root.display().to_string()),
+                                    repo.migrations.len(),
+                                    repo.config.engine.version
+                                ))),
+                        )
                     }),
             )
             .when(self.fleet.filter_open, |root| {
