@@ -1506,10 +1506,14 @@ impl Workspace {
                 div()
                     .id(("fleet-migration-header", index))
                     .w(px(64.))
+                    .h_full()
                     .flex_none()
-                    .text_center()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(3.))
                     .child(label)
-                    .hover(|cell| cell.text_color(rgb(TEXT)).cursor_pointer())
+                    .hover(|cell| cell.bg(rgb(0x303640)).cursor_pointer())
                     .tooltip(|window, cx| {
                         gpui_component::tooltip::Tooltip::new(
                             "View this migration; editable until it has been applied anywhere",
