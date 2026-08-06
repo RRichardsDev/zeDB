@@ -1584,7 +1584,7 @@ impl Workspace {
             .gap_2()
             .border_b_1()
             .border_color(rgb(BORDER))
-            .child(div().w(px(340.)).child(self.fleet.repo_path.clone()))
+            .child(div().flex_1().min_w_0().child(self.fleet.repo_path.clone()))
             .child(
                 div()
                     .id("fleet-open")
