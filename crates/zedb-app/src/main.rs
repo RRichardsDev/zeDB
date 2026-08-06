@@ -1,3 +1,4 @@
+mod agent_pane;
 mod author;
 mod codegen;
 mod commit;
@@ -155,6 +156,7 @@ impl AssetSource for Assets {
             "icons/pull.svg" => Some(include_bytes!("../assets/icons/pull.svg")),
             "icons/query-plus.svg" => Some(include_bytes!("../assets/icons/query-plus.svg")),
             "icons/refresh.svg" => Some(include_bytes!("../assets/icons/refresh.svg")),
+            "icons/sparkle.svg" => Some(include_bytes!("../assets/icons/sparkle.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             "about-logo.png" => Some(include_bytes!("../assets/about-logo.png")),
             _ => None,
@@ -315,6 +317,7 @@ enum QueryResizeTarget {
 
 struct Workspace {
     fleet: FleetState,
+    agent: agent_pane::AgentPaneState,
     author: Option<author::AuthorState>,
     regen: Option<codegen::RegenState>,
     checks: Option<codegen::ChecksState>,
@@ -474,6 +477,7 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
+                agent: agent_pane::AgentPaneState::new(),
                 author: None,
                 regen: None,
                 checks: None,
@@ -522,6 +526,7 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
+                agent: agent_pane::AgentPaneState::new(),
                 author: None,
                 regen: None,
                 checks: None,
@@ -3204,6 +3209,34 @@ impl Workspace {
                                 }
                             }),
                     )
+                    .child(
+                        div()
+                            .id("open-agent-pane")
+                            .group("btn-agent")
+                            .size(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .when(self.agent.open, |button| button.bg(rgb(0x2c3a4d)))
+                            .child(
+                                svg()
+                                    .path("icons/sparkle.svg")
+                                    .size(px(14.))
+                                    .text_color(rgb(if self.agent.open { TEXT } else { TEXT_DIM }))
+                                    .group_hover("btn-agent", |icon| icon.text_color(rgb(TEXT))),
+                            )
+                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .tooltip(|window, cx| {
+                                gpui_component::tooltip::Tooltip::new(
+                                    "Agent pane: AI threads with your installed agents",
+                                )
+                                .build(window, cx)
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.agent_toggle(cx))),
+                    )
                     .when(selected_connected, |toolbar| {
                         toolbar.child(
                             div()
@@ -4294,6 +4327,13 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, action: &DuplicateConnection, _, cx| {
                 this.duplicate_connection(action.index, cx)
             }))
+            .on_action(
+                cx.listener(|this, action: &agent_pane::StartAgentThread, window, cx| {
+                    if action.index != usize::MAX {
+                        this.agent_start_thread(action.index, window, cx);
+                    }
+                }),
+            )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.resizing_sidebar {
                     this.sidebar_width = f32::from(event.position.x).clamp(180.0, 480.0);
@@ -4304,6 +4344,12 @@ impl Render for Workspace {
                     let maximum = (viewport_height - 220.0).max(140.0);
                     this.connections_pane_height =
                         (f32::from(event.position.y) - 36.0).clamp(140.0, maximum);
+                    cx.notify();
+                }
+                if this.agent.resizing {
+                    let viewport_width = f32::from(window.viewport_size().width);
+                    this.agent.width = (viewport_width - f32::from(event.position.x))
+                        .clamp(300.0, (viewport_width - 500.0).max(300.0));
                     cx.notify();
                 }
                 if this.fleet.resizing_detail {
@@ -4335,6 +4381,7 @@ impl Render for Workspace {
                     this.resizing_sidebar = false;
                     this.resizing_sidebar_sections = false;
                     this.fleet.resizing_detail = false;
+                    this.agent.resizing = false;
                     this.query_resize = None;
                 }),
             )
@@ -4344,6 +4391,7 @@ impl Render for Workspace {
                     this.resizing_sidebar = false;
                     this.resizing_sidebar_sections = false;
                     this.fleet.resizing_detail = false;
+                    this.agent.resizing = false;
                     this.query_resize = None;
                 }),
             )
@@ -4405,7 +4453,10 @@ impl Render for Workspace {
                                         ),
                                 )
                             }),
-                    ),
+                    )
+                    .when(self.agent.open, |row| {
+                        row.child(self.agent_panel(window, cx))
+                    }),
             )
             .child(self.status_bar())
             .when(self.show_about, |root| root.child(self.about_panel(cx)))

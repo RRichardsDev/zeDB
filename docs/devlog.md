@@ -614,3 +614,27 @@ Status: implementation complete, awaiting UI acceptance.
   streamed pong, end_turn, with the adapter's newer update kinds
   (usage_update and friends) flowing through as Other exactly as the
   lenient decoding intended.
+
+## Phase 3.1 M1: the thread pane (2026-08-06)
+
+- The agent pane: a resizable right-hand column with a Zed-shaped
+  header (thread title, a + dropdown listing External Agents plus a
+  disabled Add More Agents until M2, close), transcript, and composer.
+  Threads spawn the built-in agents (Claude Code and Codex adapters
+  via npx) with sessions rooted in the open migration repo's checkout,
+  falling back to home. Streamed replies render as markdown through
+  gpui-component's TextView (inline code and fences for free), tool
+  calls show as compact status lines that update in place, permission
+  requests render as inline option cards wired to the responder, and
+  Stop cancels the turn.
+- Two launch lessons. AgentConnection spawns tokio tasks and a tokio
+  child process, which abort the whole app when called outside the
+  runtime (the lifecycle tests never saw it: tokio::test provides the
+  context); the pane now enters the shared runtime before spawning.
+  And codex-acp dumps entire ANSI-colored model configs as single
+  stderr lines, so the pre-session status line now strips escapes and
+  clamps to one truncated line. Verified live: a Claude Code thread
+  answers with correct markdown in the pane under the user's existing
+  auth; Codex boots but showers first-run keychain prompts for its own
+  credential items (its design, not ours; per-item Always Allow is
+  durable).

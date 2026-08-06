@@ -8351,6 +8351,7 @@ dependencies = [
 name = "zedb-app"
 version = "0.1.1"
 dependencies = [
+ "dirs 6.0.0",
  "gpui",
  "gpui-component",
  "log",
@@ -8360,6 +8361,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "unicode-segmentation",
+ "zedb-acp",
  "zedb-ch",
  "zedb-core",
 ]
