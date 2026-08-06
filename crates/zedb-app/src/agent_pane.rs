@@ -115,6 +115,29 @@ impl AgentPaneState {
     }
 }
 
+/// Append one line to the agent debug log
+/// (~/Library/Application Support/zedb/agent-log.jsonl). Best-effort:
+/// logging must never break the conversation.
+fn agent_log(kind: &str, data: serde_json::Value) {
+    let Some(dir) = dirs::data_local_dir().map(|dir| dir.join("zedb")) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or(0);
+    let line = serde_json::json!({ "ts": millis, "kind": kind, "data": data });
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("agent-log.jsonl"))
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{line}");
+    }
+}
+
 impl Workspace {
     pub(crate) fn agent_toggle(&mut self, cx: &mut Context<Self>) {
         self.agent.open = !self.agent.open;
@@ -219,6 +242,10 @@ impl Workspace {
         )
         .detach();
         let reused = fresh_events.is_none();
+        agent_log(
+            "thread_start",
+            serde_json::json!({ "agent": name, "reused_process": reused }),
+        );
         self.agent.thread = Some(ThreadState {
             agent_name: name.to_string(),
             agent_icon: icon.clone(),
@@ -268,10 +295,15 @@ impl Workspace {
                 };
                 match flattened {
                     Ok(session_id) => {
+                        agent_log(
+                            "session_started",
+                            serde_json::json!({ "session_id": session_id }),
+                        );
                         thread.session_id = Some(session_id);
                         thread.status = None;
                     }
                     Err(error) => {
+                        agent_log("session_failed", serde_json::json!({ "error": error }));
                         thread.status = Some(format!(
                             "could not start a session: {error}; if this is an auth \
                              problem, log in with the agent's own CLI first"
@@ -426,6 +458,31 @@ impl Workspace {
         event: AgentEvent,
         cx: &mut Context<Self>,
     ) -> bool {
+        match &event {
+            AgentEvent::MessageChunk { text } => {
+                agent_log("chunk", serde_json::json!({ "text": text }));
+            }
+            AgentEvent::ThoughtChunk { .. } => {}
+            AgentEvent::ToolCall { raw, .. } | AgentEvent::ToolCallUpdate { raw, .. } => {
+                agent_log("tool", raw.clone());
+            }
+            AgentEvent::Plan { raw } => agent_log("plan", raw.clone()),
+            AgentEvent::Other { kind, raw } => {
+                agent_log(
+                    "other_update",
+                    serde_json::json!({ "kind": kind, "raw": raw }),
+                );
+            }
+            AgentEvent::PermissionRequest { tool_call, .. } => {
+                agent_log("permission_request", tool_call.clone());
+            }
+            AgentEvent::Stderr { line } => {
+                agent_log("stderr", serde_json::json!({ "line": line }));
+            }
+            AgentEvent::Closed { reason } => {
+                agent_log("closed", serde_json::json!({ "reason": reason }));
+            }
+        }
         let Some(thread) = self.agent.thread.as_mut() else {
             return true;
         };
@@ -536,6 +593,10 @@ impl Workspace {
         } else {
             text
         };
+        agent_log(
+            "prompt",
+            serde_json::json!({ "session_id": session_id, "text": full_text }),
+        );
         let handle =
             rt::tokio().spawn(async move { connection.prompt(&session_id, &full_text).await });
         cx.spawn(async move |this, cx| {
@@ -554,6 +615,10 @@ impl Workspace {
                 };
                 match flattened {
                     Ok(result) => {
+                        agent_log(
+                            "turn_done",
+                            serde_json::json!({ "stop_reason": result.stop_reason }),
+                        );
                         if result.stop_reason != "end_turn" {
                             thread
                                 .entries
@@ -561,6 +626,7 @@ impl Workspace {
                         }
                     }
                     Err(error) => {
+                        agent_log("turn_error", serde_json::json!({ "error": error }));
                         thread.status = Some(error);
                     }
                 }
@@ -689,6 +755,10 @@ impl Workspace {
             },
             None => PermissionOutcome::Cancelled,
         };
+        agent_log(
+            "permission_answer",
+            serde_json::json!({ "option": option_id }),
+        );
         let _ = responder.send(outcome);
         for entry in thread.entries.iter_mut().rev() {
             if let ThreadEntry::Permission { answered, .. } = entry {
