@@ -2689,7 +2689,8 @@ impl Workspace {
                 .code_editor("sql")
                 .default_value(default_value);
             editor.lsp.completion_provider = Some(schema_provider.clone());
-            editor.lsp.hover_provider = Some(schema_provider);
+            editor.lsp.hover_provider = Some(schema_provider.clone());
+            editor.lsp.document_color_provider = Some(schema_provider);
             editor
         });
         cx.subscribe_in(

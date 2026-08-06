@@ -29,6 +29,20 @@ pub struct SchemaSuggestion {
     pub replace: Range<usize>,
 }
 
+/// A name the snapshot can vouch for, for positive highlighting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecognizedKind {
+    Database,
+    Object,
+    Column,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecognizedIdentifier {
+    pub range: Range<usize>,
+    pub kind: RecognizedKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoverInfo {
     pub range: Range<usize>,
@@ -91,7 +105,7 @@ pub fn analyze_sql(
     sql: &str,
 ) -> Vec<IdentifierIssue> {
     let tokens = tokenize(sql);
-    let (bindings, table_issues) = resolve_bindings(snapshot, default_database, &tokens);
+    let (bindings, table_issues, _) = resolve_bindings(snapshot, default_database, &tokens);
     let mut issues = table_issues;
 
     for window in tokens.windows(3) {
@@ -134,29 +148,58 @@ pub fn completions(
     let prefix = &sql[replace.clone()];
     let before = &sql[..replace.start];
     let tokens = tokenize(before);
-    let (bindings, _) = resolve_bindings(snapshot, default_database, &tokenize(sql));
+    let (bindings, _, _) = resolve_bindings(snapshot, default_database, &tokenize(sql));
     let mut suggestions = Vec::new();
 
     if tokens.last().is_some_and(|token| token.text == ".") {
         let qualifier = tokens
             .get(tokens.len().saturating_sub(2))
             .filter(|token| token.identifier)
-            .map(|token| token.text.to_ascii_lowercase());
-        if let Some((database, object)) = qualifier
-            .as_ref()
-            .and_then(|qualifier| bindings.aliases.get(qualifier))
-        {
-            if let Some(columns) = snapshot
-                .object(database, object)
-                .and_then(|object| object.columns.as_ref())
+            .map(|token| token.text);
+        if let Some(qualifier) = qualifier {
+            if let Some((database, object)) = bindings.aliases.get(&qualifier.to_ascii_lowercase())
             {
-                for column in columns.values() {
-                    if starts_with_case_insensitive(&column.name, prefix) {
-                        suggestions.push(column_suggestion(column, replace.clone()));
+                // Alias or table binding: its columns.
+                if let Some(columns) = snapshot
+                    .object(database, object)
+                    .and_then(|object| object.columns.as_ref())
+                {
+                    for column in columns.values() {
+                        if starts_with_case_insensitive(&column.name, prefix) {
+                            suggestions.push(column_suggestion(column, replace.clone()));
+                        }
+                    }
+                }
+            } else if let Some(database) = snapshot
+                .databases
+                .values()
+                .find(|database| database.name.eq_ignore_ascii_case(qualifier))
+            {
+                // Database qualifier: its tables and views.
+                for object in database.objects.values() {
+                    if starts_with_case_insensitive(&object.name, prefix) {
+                        suggestions.push(object_suggestion(object, replace.clone()));
+                    }
+                }
+            } else if let Some((_, object)) = default_database
+                .and_then(|database| {
+                    snapshot
+                        .object(database, qualifier)
+                        .map(|object| (database, object))
+                })
+                .or_else(|| unique_object(snapshot, qualifier))
+            {
+                // Bare table qualifier: its columns.
+                if let Some(columns) = object.columns.as_ref() {
+                    for column in columns.values() {
+                        if starts_with_case_insensitive(&column.name, prefix) {
+                            suggestions.push(column_suggestion(column, replace.clone()));
+                        }
                     }
                 }
             }
         }
+        suggestions.sort_by(|left, right| left.label.cmp(&right.label));
         return suggestions;
     }
 
@@ -207,7 +250,7 @@ pub fn hover(
     }
     let word = &sql[range.clone()];
     let tokens = tokenize(sql);
-    let (bindings, _) = resolve_bindings(snapshot, default_database, &tokens);
+    let (bindings, _, _) = resolve_bindings(snapshot, default_database, &tokens);
     let qualifier = sql[..range.start]
         .strip_suffix('.')
         .map(|before| &before[word_range(before, before.len())])
@@ -250,6 +293,45 @@ pub fn hover(
     Some(HoverInfo { range, markdown })
 }
 
+/// Every name in the SQL the snapshot can vouch for: databases, tables
+/// and views resolved through bindings, and columns whose object's
+/// metadata is complete. Feeds the editor's recognized highlighting.
+pub fn recognized_identifiers(
+    snapshot: &SchemaSnapshot,
+    default_database: Option<&str>,
+    sql: &str,
+) -> Vec<RecognizedIdentifier> {
+    let tokens = tokenize(sql);
+    let (bindings, _, mut recognized) = resolve_bindings(snapshot, default_database, &tokens);
+    for window in tokens.windows(3) {
+        if !window[0].identifier || window[1].text != "." || !window[2].identifier {
+            continue;
+        }
+        let Some((database, object)) = bindings.aliases.get(&window[0].text.to_ascii_lowercase())
+        else {
+            continue;
+        };
+        let Some(columns) = snapshot
+            .object(database, object)
+            .and_then(|object| object.columns.as_ref())
+        else {
+            continue;
+        };
+        if columns
+            .values()
+            .any(|column| column.name.eq_ignore_ascii_case(window[2].text))
+        {
+            recognized.push(RecognizedIdentifier {
+                range: window[2].range.clone(),
+                kind: RecognizedKind::Column,
+            });
+        }
+    }
+    recognized.sort_by_key(|identifier| identifier.range.start);
+    recognized.dedup_by(|left, right| left.range == right.range);
+    recognized
+}
+
 /// Databases whose column metadata the given SQL would use, resolved
 /// through the same bindings as analysis. Only databases the snapshot
 /// already knows are returned, so callers can warm them safely.
@@ -259,7 +341,7 @@ pub fn referenced_databases(
     sql: &str,
 ) -> Vec<String> {
     let tokens = tokenize(sql);
-    let (bindings, _) = resolve_bindings(snapshot, default_database, &tokens);
+    let (bindings, _, _) = resolve_bindings(snapshot, default_database, &tokens);
     let mut databases: Vec<String> = bindings
         .aliases
         .values()
@@ -274,9 +356,10 @@ fn resolve_bindings(
     snapshot: &SchemaSnapshot,
     default_database: Option<&str>,
     tokens: &[Token<'_>],
-) -> (Bindings, Vec<IdentifierIssue>) {
+) -> (Bindings, Vec<IdentifierIssue>, Vec<RecognizedIdentifier>) {
     let mut bindings = Bindings::default();
     let mut issues = Vec::new();
+    let mut recognized = Vec::new();
     for window in tokens.windows(4) {
         if window[0].text.eq_ignore_ascii_case("WITH")
             && window[1].identifier
@@ -304,30 +387,39 @@ fn resolve_bindings(
             index += 2;
             continue;
         }
-        let (database, object, end, object_range) =
-            if tokens.get(index + 2).is_some_and(|token| token.text == ".")
-                && tokens.get(index + 3).is_some_and(|token| token.identifier)
-            {
-                (
-                    Some(first.text.to_string()),
-                    tokens[index + 3].text.to_string(),
-                    index + 4,
-                    first.range.start..tokens[index + 3].range.end,
-                )
-            } else {
-                (
-                    default_database.map(str::to_string),
-                    first.text.to_string(),
-                    index + 2,
-                    first.range.clone(),
-                )
-            };
+        let qualified = tokens.get(index + 2).is_some_and(|token| token.text == ".")
+            && tokens.get(index + 3).is_some_and(|token| token.identifier);
+        let (database, object, end, object_range, database_token, object_token) = if qualified {
+            (
+                Some(first.text.to_string()),
+                tokens[index + 3].text.to_string(),
+                index + 4,
+                first.range.start..tokens[index + 3].range.end,
+                Some(first.range.clone()),
+                tokens[index + 3].range.clone(),
+            )
+        } else {
+            (
+                default_database.map(str::to_string),
+                first.text.to_string(),
+                index + 2,
+                first.range.clone(),
+                None,
+                first.range.clone(),
+            )
+        };
 
         let resolved_database =
             database.or_else(|| unique_object(snapshot, &object).map(|hit| hit.0.to_string()));
         if let Some(database) = &resolved_database {
             match snapshot.database(database) {
                 Some(cached_database) => {
+                    if let Some(database_token) = database_token {
+                        recognized.push(RecognizedIdentifier {
+                            range: database_token,
+                            kind: RecognizedKind::Database,
+                        });
+                    }
                     if cached_database
                         .objects
                         .values()
@@ -338,6 +430,10 @@ fn resolve_bindings(
                             message: format!("Unknown table or view `{database}.{object}`"),
                         });
                     } else {
+                        recognized.push(RecognizedIdentifier {
+                            range: object_token,
+                            kind: RecognizedKind::Object,
+                        });
                         let alias = table_alias(tokens, end).unwrap_or_else(|| object.clone());
                         bindings.aliases.insert(
                             alias.to_ascii_lowercase(),
@@ -354,7 +450,7 @@ fn resolve_bindings(
         }
         index = end;
     }
-    (bindings, issues)
+    (bindings, issues, recognized)
 }
 
 fn table_alias(tokens: &[Token<'_>], end: usize) -> Option<String> {
@@ -597,6 +693,34 @@ mod tests {
         .unwrap();
         assert!(info.markdown.contains("UInt64"));
         assert!(info.markdown.contains("Primary event id"));
+    }
+
+    #[test]
+    fn completes_after_database_and_table_qualifiers() {
+        let snapshot = snapshot(Some(columns()));
+        let sql = "SELECT * FROM analytics.";
+        let objects = completions(&snapshot, None, sql, sql.len());
+        assert_eq!(objects[0].label, "events");
+
+        let sql = "SELECT events. FROM events";
+        let cursor = sql.find(". FROM").unwrap() + 1;
+        let columns = completions(&snapshot, Some("analytics"), sql, cursor);
+        assert_eq!(columns[0].label, "event_id");
+    }
+
+    #[test]
+    fn recognizes_known_databases_tables_and_columns() {
+        let snapshot = snapshot(Some(columns()));
+        let sql = "SELECT e.event_id, e.missing FROM analytics.events e";
+        let recognized = recognized_identifiers(&snapshot, None, sql);
+        let kinds: Vec<(RecognizedKind, &str)> = recognized
+            .iter()
+            .map(|identifier| (identifier.kind, &sql[identifier.range.clone()]))
+            .collect();
+        assert!(kinds.contains(&(RecognizedKind::Database, "analytics")));
+        assert!(kinds.contains(&(RecognizedKind::Object, "events")));
+        assert!(kinds.contains(&(RecognizedKind::Column, "event_id")));
+        assert!(!kinds.iter().any(|(_, text)| *text == "missing"));
     }
 
     #[test]
