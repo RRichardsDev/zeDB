@@ -297,16 +297,13 @@ impl Workspace {
         // git bookkeeping and a README) becomes a format-1 repo on the
         // spot; anything with real content is left alone and errors as
         // before.
-        match zedb_core::repo::init_repo_if_empty(&expanded) {
-            Ok(true) => {
-                self.notice = Some(
-                    "Initialized an empty checkout as a format-1 migration repo; \
-                     commit zedb.toml when ready"
-                        .into(),
-                );
-                self.notice_warning = false;
-            }
-            Ok(false) | Err(_) => {}
+        if let Ok(true) = zedb_core::repo::init_repo_if_empty(&expanded) {
+            self.notice = Some(
+                "Initialized an empty checkout as a format-1 migration repo; \
+                 commit zedb.toml when ready"
+                    .into(),
+            );
+            self.notice_warning = false;
         }
         match MigrationRepo::open(&expanded) {
             Ok(repo) => {
