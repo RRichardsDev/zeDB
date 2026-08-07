@@ -11,6 +11,9 @@ GitHub release notes.
 
 - The update pill in the status bar wears the standard muted border,
   and the version number reads in plain white.
+- Schema sidebar databases collapse again while a filter is applied;
+  the chevron now always tells the truth. Editing the filter re-expands
+  everything matching.
 
 ## v0.1.4 - 2026-08-07
 

@@ -263,6 +263,10 @@ struct DeleteConnection {
 struct DatabaseNode {
     meta: DatabaseMeta,
     expanded: bool,
+    /// While a filter is active every matching database auto-expands;
+    /// this records an explicit collapse under that filter. Reset
+    /// whenever the filter text changes.
+    filter_collapsed: bool,
     loading: bool,
     objects: Option<Vec<SchemaObjectMeta>>,
     error: Option<String>,
@@ -278,6 +282,7 @@ fn database_nodes_from_cache(cache: &SchemaCache) -> Vec<DatabaseNode> {
                 name: database.name.clone(),
             },
             expanded: false,
+            filter_collapsed: false,
             loading: false,
             objects: None,
             error: None,
@@ -472,7 +477,13 @@ impl Workspace {
         })
         .detach();
         let schema_filter = Self::input("", "Filter schema", false, cx);
-        cx.observe(&schema_filter, |_, _, cx| cx.notify()).detach();
+        cx.observe(&schema_filter, |this: &mut Self, _, cx| {
+            for database in &mut this.schema_databases {
+                database.filter_collapsed = false;
+            }
+            cx.notify()
+        })
+        .detach();
         // Vim keys must be intercepted before action dispatch: the editor's
         // own key bindings (Enter, Backspace, arrows) run before any key-down
         // listener and would edit the buffer behind modalkit's back.
@@ -1282,7 +1293,11 @@ impl Workspace {
                 }
 
                 let database_name = database.meta.name.clone();
-                let show_objects = database.expanded || !filter.is_empty();
+                let show_objects = if filter.is_empty() {
+                    database.expanded
+                } else {
+                    !database.filter_collapsed
+                };
                 let object_rows = matching_objects
                     .into_iter()
                     .enumerate()
@@ -1363,7 +1378,7 @@ impl Workspace {
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.toggle_schema_database(database_index, window, cx)
                                 }))
-                                .child(if database.expanded { "▾" } else { "▸" })
+                                .child(if show_objects { "▾" } else { "▸" })
                                 .child(
                                     div()
                                         .flex_1()
@@ -2243,6 +2258,7 @@ impl Workspace {
                             .map(|meta| DatabaseNode {
                                 meta,
                                 expanded: false,
+                                filter_collapsed: false,
                                 loading: false,
                                 objects: None,
                                 error: None,
@@ -2333,11 +2349,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let filter_active = !self.schema_filter.read(cx).text().trim().is_empty();
         let Some(database) = self.schema_databases.get_mut(database_index) else {
             return;
         };
-        database.expanded = !database.expanded;
-        if database.expanded {
+        let shown = if filter_active {
+            database.filter_collapsed = !database.filter_collapsed;
+            !database.filter_collapsed
+        } else {
+            database.expanded = !database.expanded;
+            database.expanded
+        };
+        if shown {
             if let Some(cache) = &self.schema_cache {
                 cache.touch_database(&database.meta.name);
                 if let Some(cached) = cache.snapshot().database(&database.meta.name) {
@@ -2351,11 +2374,9 @@ impl Workspace {
                 }
             }
         }
-        let needs_object_load =
-            database.expanded && database.objects.is_none() && !database.loading;
-        let expanded = database.expanded;
+        let needs_object_load = shown && database.objects.is_none() && !database.loading;
         let database_name = database.meta.name.clone();
-        if expanded {
+        if shown {
             self.warm_schema_columns(database_name.clone(), window, cx);
         }
         if !needs_object_load {
