@@ -28,7 +28,8 @@ GitHub release notes.
   tiles show a hand cursor.
 - Read/size progress in the status bar resets per statement instead of
   carrying a previous statement's totals; the vim mode chip reads
-  "-- INSERT --" so it can't be mistaken for query output; NULL cells
+  "-- INSERT --" and lives in the bottom status bar (with the command
+  line and recording indicator) instead of next to query output; NULL cells
   render muted and italic.
 
 ## v0.1.4 - 2026-08-07

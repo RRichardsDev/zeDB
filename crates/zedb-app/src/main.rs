@@ -4546,10 +4546,6 @@ impl Workspace {
         let result_capped = active.result_capped;
         let editor_height = active.editor_height;
         let status_height = active.status_height;
-        let vim_mode = active.vim.mode();
-        let vim_mode_label = active.vim.mode_label();
-        let vim_command_line = active.vim_command_line.clone();
-        let vim_recording = active.vim_recording;
         let result_grid = active.result_grid.clone();
         let mut status = match &active.outcome {
             QueryOutcome::Idle => "Ready".to_string(),
@@ -4788,55 +4784,6 @@ impl Workspace {
                                     .flex()
                                     .items_center()
                                     .gap_3()
-                                    .when(self.preferences.vim_mode, |status_row| {
-                                        status_row
-                                            .child(
-                                                div()
-                                                    .flex_none()
-                                                    .text_color(rgb(
-                                                        if vim_mode
-                                                            == modalkit::env::vim::VimMode::Normal
-                                                        {
-                                                            0x9ab7a1
-                                                        } else {
-                                                            TEXT_DIM
-                                                        },
-                                                    ))
-                                                    .child(format!("-- {vim_mode_label} --")),
-                                            )
-                                            .when_some(
-                                                vim_command_line,
-                                                |status_row, command_line| {
-                                                    let mut text = command_line.text;
-                                                    let cursor = command_line
-                                                        .cursor
-                                                        .min(text.chars().count());
-                                                    let byte = text
-                                                        .char_indices()
-                                                        .nth(cursor)
-                                                        .map(|(index, _)| index)
-                                                        .unwrap_or(text.len());
-                                                    text.insert(byte, '▌');
-                                                    status_row.child(
-                                                        div()
-                                                            .flex_none()
-                                                            .text_color(rgb(TEXT))
-                                                            .child(format!(
-                                                                "{}{text}",
-                                                                command_line.prompt
-                                                            )),
-                                                    )
-                                                },
-                                            )
-                                            .when_some(vim_recording, |status_row, register| {
-                                                status_row.child(
-                                                    div()
-                                                        .flex_none()
-                                                        .text_color(rgb(0xd7a65f))
-                                                        .child(format!("recording @{register}")),
-                                                )
-                                            })
-                                    })
                                     .child(div().flex_1().min_w_0().child(status)),
                             )
                             .when(statement_failed, |row| {
@@ -4917,8 +4864,73 @@ impl Workspace {
             } else {
                 TEXT_DIM
             }))
-            .child(status)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .min_w_0()
+                    .child(div().overflow_hidden().whitespace_nowrap().child(status))
+                    .when_some(self.footer_vim_state(), |row, state| {
+                        let (normal, label, command_line, recording) = state;
+                        row.child(div().flex_none().child("|"))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(rgb(if normal { 0x9ab7a1 } else { TEXT_DIM }))
+                                    .child(format!("-- {label} --")),
+                            )
+                            .when_some(command_line, |row, command_line| {
+                                let mut text = command_line.text;
+                                let cursor = command_line.cursor.min(text.chars().count());
+                                let byte = text
+                                    .char_indices()
+                                    .nth(cursor)
+                                    .map(|(index, _)| index)
+                                    .unwrap_or(text.len());
+                                text.insert(byte, '\u{258c}');
+                                row.child(
+                                    div()
+                                        .flex_none()
+                                        .text_color(rgb(TEXT))
+                                        .child(format!("{}{text}", command_line.prompt)),
+                                )
+                            })
+                            .when_some(recording, |row, register| {
+                                row.child(
+                                    div()
+                                        .flex_none()
+                                        .text_color(rgb(0xd7a65f))
+                                        .child(format!("recording @{register}")),
+                                )
+                            })
+                    }),
+            )
             .child(concat!("zedb ", env!("CARGO_PKG_VERSION"), " | M8"))
+    }
+
+    /// Vim state for the bottom bar: mode, command line, and recording
+    /// register of the active query tab, when vim mode is on and the
+    /// query editor is the active view.
+    #[allow(clippy::type_complexity)]
+    fn footer_vim_state(
+        &self,
+    ) -> Option<(
+        bool,
+        &'static str,
+        Option<CommandLineSnapshot>,
+        Option<char>,
+    )> {
+        if !self.preferences.vim_mode || self.show_fleet || self.connected.is_none() {
+            return None;
+        }
+        let tab = self.query_tabs.get(self.active_query_tab)?;
+        Some((
+            tab.vim.mode() == modalkit::env::vim::VimMode::Normal,
+            tab.vim.mode_label(),
+            tab.vim_command_line.clone(),
+            tab.vim_recording,
+        ))
     }
 }
 
