@@ -281,6 +281,40 @@ pub fn hover(
         return Some(HoverInfo { range, markdown });
     }
 
+    // Database-qualified object: `zedb_kappa.events_daily` resolves even
+    // when the bare name is ambiguous across databases.
+    if let Some(database) = qualifier.as_ref().and_then(|qualifier| {
+        snapshot
+            .databases
+            .values()
+            .find(|database| database.name.eq_ignore_ascii_case(qualifier))
+    }) {
+        let object = database
+            .objects
+            .values()
+            .find(|object| object.name.eq_ignore_ascii_case(word))?;
+        return Some(HoverInfo {
+            range,
+            markdown: object_hover_markdown(&database.name, object),
+        });
+    }
+
+    // The word itself is a database name.
+    if let Some(database) = snapshot
+        .databases
+        .values()
+        .find(|database| database.name.eq_ignore_ascii_case(word))
+    {
+        return Some(HoverInfo {
+            range,
+            markdown: format!(
+                "**{}**\n\nDatabase with {} objects",
+                database.name,
+                database.objects.len()
+            ),
+        });
+    }
+
     let object = default_database
         .and_then(|database| {
             snapshot
@@ -288,17 +322,24 @@ pub fn hover(
                 .map(|object| (database, object))
         })
         .or_else(|| unique_object(snapshot, word))?;
+    Some(HoverInfo {
+        range,
+        markdown: object_hover_markdown(object.0, object.1),
+    })
+}
+
+fn object_hover_markdown(database: &str, object: &CachedObject) -> String {
     let mut markdown = format!(
         "**{}.{}**\n\nEngine: `{}`",
-        object.0, object.1.name, object.1.engine
+        database, object.name, object.engine
     );
-    if let Some(rows) = object.1.total_rows {
+    if let Some(rows) = object.total_rows {
         markdown.push_str(&format!("\n\nApproximate rows: {rows}"));
     }
-    if !object.1.comment.is_empty() {
-        markdown.push_str(&format!("\n\n{}", object.1.comment));
+    if !object.comment.is_empty() {
+        markdown.push_str(&format!("\n\n{}", object.comment));
     }
-    Some(HoverInfo { range, markdown })
+    markdown
 }
 
 /// Every name in the SQL the snapshot can vouch for: databases, tables
@@ -737,6 +778,17 @@ mod tests {
         let cursor = sql.find(". FROM").unwrap() + 1;
         let columns = completions(&snapshot, Some("analytics"), sql, cursor);
         assert_eq!(columns[0].label, "event_id");
+    }
+
+    #[test]
+    fn hover_resolves_database_qualified_objects_and_databases() {
+        let snapshot = snapshot(None);
+        let sql = "SELECT * FROM analytics.events";
+        let table = hover(&snapshot, None, sql, sql.find("events").unwrap()).unwrap();
+        assert!(table.markdown.contains("MergeTree"));
+
+        let database = hover(&snapshot, None, sql, sql.find("analytics").unwrap()).unwrap();
+        assert!(database.markdown.contains("Database with 1 objects"));
     }
 
     #[test]
