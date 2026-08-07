@@ -14,7 +14,11 @@ GitHub release notes.
 - Schema sidebar databases collapse again while a filter is applied;
   the chevron now always tells the truth. Editing the filter re-expands
   everything matching.
-- Result grid columns are drag-resizable from the header dividers.
+- Result grid columns are drag-resizable from the header dividers, and
+  widths are remembered per column set within the session.
+- Filter popovers: Enter applies, Escape or clicking away closes, a
+  "(null)" checkbox appears for nullable columns, and the text field
+  understands "is null" / "is not null".
 - Click a result column header to sort by it: the query's top-level
   ORDER BY is rewritten in the editor (on its own line) and just that
   statement re-runs on the server. Clicks cycle ascending, descending,

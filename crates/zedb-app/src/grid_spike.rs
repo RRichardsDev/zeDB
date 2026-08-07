@@ -11,6 +11,7 @@ use gpui::{
 use gpui_component::input::{Input, InputState};
 use gpui_component::menu::ContextMenuExt as _;
 use gpui_component::Sizable as _;
+use std::collections::HashMap;
 use zedb_core::{ColumnMeta, Value};
 
 use crate::theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, TEXT, TEXT_DIM};
@@ -59,8 +60,12 @@ struct FilterPanel {
 enum FilterMode {
     /// A distinct-values probe is in flight.
     Loading,
-    /// Distinct dictionary values with their checked state.
-    Checkboxes(Vec<(String, bool)>),
+    /// Distinct dictionary values with their checked state, plus an
+    /// optional NULL entry when the column can hold one.
+    Checkboxes {
+        values: Vec<(String, bool)>,
+        null: Option<bool>,
+    },
     Text(Entity<InputState>),
 }
 
@@ -95,6 +100,9 @@ pub struct GridSpike {
     pending: Option<(Vec<ColumnMeta>, Option<usize>)>,
     /// Column-attributable filters (column, conjunct) from the SQL.
     filters: Vec<(String, String)>,
+    /// Remembered widths per column-name set, so re-running the same
+    /// shape of query keeps your resizes.
+    width_memory: HashMap<String, Vec<f32>>,
     filter_panel: Option<FilterPanel>,
 }
 
@@ -115,6 +123,7 @@ impl GridSpike {
             sort: Vec::new(),
             pending: None,
             filters: Vec::new(),
+            width_memory: HashMap::new(),
             filter_panel: None,
         }
     }
@@ -130,10 +139,23 @@ impl GridSpike {
         cx.notify();
     }
 
+    fn width_key(columns: &[ColumnMeta]) -> String {
+        columns
+            .iter()
+            .map(|column| column.name.as_str())
+            .collect::<Vec<_>>()
+            .join("\u{1}")
+    }
+
     /// Swap the pending result in, discarding what was displayed.
     fn adopt_pending(&mut self) {
         if let Some((columns, requested_rows)) = self.pending.take() {
-            self.col_widths = vec![COL_WIDTH; columns.len()];
+            self.col_widths = self
+                .width_memory
+                .get(&Self::width_key(&columns))
+                .filter(|saved| saved.len() == columns.len())
+                .cloned()
+                .unwrap_or_else(|| vec![COL_WIDTH; columns.len()]);
             self.columns = columns;
             self.rows = Vec::new();
             self.requested_rows = requested_rows;
@@ -211,19 +233,23 @@ impl GridSpike {
             if !values.is_empty() && values.len() <= 10 {
                 let prechecked: Vec<String> =
                     prefill.as_deref().map(quoted_strings).unwrap_or_default();
+                let null = type_name
+                    .contains("Nullable")
+                    .then(|| prefill_checks_null(prefill.as_deref()));
                 self.filter_panel = Some(FilterPanel {
                     column,
                     numeric,
                     prefill,
-                    mode: FilterMode::Checkboxes(
-                        values
+                    mode: FilterMode::Checkboxes {
+                        values: values
                             .into_iter()
                             .map(|value| {
                                 let checked = prechecked.contains(&value);
                                 (value, checked)
                             })
                             .collect(),
-                    ),
+                        null,
+                    },
                 });
                 cx.notify();
                 return false;
@@ -244,7 +270,7 @@ impl GridSpike {
     pub fn finish_filter_panel(
         &mut self,
         column: &str,
-        values: Option<Vec<String>>,
+        values: Option<(Vec<String>, bool)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -256,18 +282,20 @@ impl GridSpike {
         }
         let prefill = panel.prefill.clone();
         let mode = match values {
-            Some(values) if !values.is_empty() && values.len() <= 10 => {
+            Some((values, has_null)) if !values.is_empty() && values.len() <= 10 => {
                 let prechecked: Vec<String> =
                     prefill.as_deref().map(quoted_strings).unwrap_or_default();
-                FilterMode::Checkboxes(
-                    values
+                let null = has_null.then(|| prefill_checks_null(prefill.as_deref()));
+                FilterMode::Checkboxes {
+                    values: values
                         .into_iter()
                         .map(|value| {
                             let checked = prechecked.contains(&value);
                             (value, checked)
                         })
                         .collect(),
-                )
+                    null,
+                }
             }
             _ => {
                 let initial = prefill
@@ -283,11 +311,22 @@ impl GridSpike {
                         text.trim_matches('%').to_string()
                     })
                     .unwrap_or_default();
-                FilterMode::Text(cx.new(|cx| {
+                let input = cx.new(|cx| {
                     InputState::new(window, cx)
-                        .placeholder("value, %pattern%, or > 10")
+                        .placeholder("value, %pattern%, > 10, is null")
                         .default_value(initial)
-                }))
+                });
+                cx.subscribe_in(
+                    &input,
+                    window,
+                    |this, _, event: &gpui_component::input::InputEvent, _, cx| {
+                        if matches!(event, gpui_component::input::InputEvent::PressEnter { .. }) {
+                            this.apply_filter_panel(cx);
+                        }
+                    },
+                )
+                .detach();
+                FilterMode::Text(input)
             }
         };
         panel.mode = mode;
@@ -311,13 +350,15 @@ impl GridSpike {
                 self.filter_panel = Some(panel);
                 return;
             }
-            FilterMode::Checkboxes(values) => {
+            FilterMode::Checkboxes { values, null } => {
                 let selected: Vec<&String> = values
                     .iter()
                     .filter(|(_, checked)| *checked)
                     .map(|(value, _)| value)
                     .collect();
-                if selected.is_empty() || selected.len() == values.len() {
+                let null_checked = null.unwrap_or(false);
+                let everything = selected.len() == values.len() && (null.is_none() || null_checked);
+                let value_part = if selected.is_empty() || selected.len() == values.len() {
                     None
                 } else if selected.len() == 1 {
                     Some(format!("{prefix} = {}", quote(selected[0], panel.numeric)))
@@ -328,12 +369,31 @@ impl GridSpike {
                         .collect::<Vec<_>>()
                         .join(", ");
                     Some(format!("{prefix} IN ({list})"))
+                };
+                if everything || (selected.is_empty() && !null_checked) {
+                    // No restriction, or nothing at all selected.
+                    None
+                } else {
+                    match (value_part, null_checked) {
+                        (Some(values_predicate), true) => {
+                            Some(format!("({values_predicate} OR {prefix} IS NULL)"))
+                        }
+                        (Some(values_predicate), false) => Some(values_predicate),
+                        (None, true) => Some(format!("{prefix} IS NULL")),
+                        // All values, null unchecked: exclude the nulls.
+                        (None, false) => Some(format!("{prefix} IS NOT NULL")),
+                    }
                 }
             }
             FilterMode::Text(input) => {
                 let text = input.read(cx).value().trim().to_string();
+                let lowered = text.to_lowercase();
                 if text.is_empty() {
                     None
+                } else if lowered == "is null" || lowered == "null" {
+                    Some(format!("{prefix} IS NULL"))
+                } else if lowered == "is not null" || lowered == "not null" {
+                    Some(format!("{prefix} IS NOT NULL"))
                 } else if ["<=", ">=", "!=", "<", ">", "="]
                     .iter()
                     .any(|operator| text.starts_with(operator))
@@ -679,6 +739,14 @@ impl GridSpike {
     }
 }
 
+/// Whether an existing filter conjunct includes checked NULLs.
+fn prefill_checks_null(prefill: Option<&str>) -> bool {
+    prefill.is_some_and(|conjunct| {
+        let upper = conjunct.to_ascii_uppercase();
+        upper.contains("IS NULL") && !upper.contains("IS NOT NULL")
+    })
+}
+
 /// The quoted variant names of an Enum type string.
 fn enum_variants(type_name: &str) -> Vec<String> {
     quoted_strings(type_name)
@@ -842,6 +910,15 @@ impl Render for GridSpike {
             let offset: f32 = (0..column_index).map(|col| self.width(col)).sum();
             let left = (offset + f32::from(scroll_x)).max(0.0);
             let mut body = div()
+                .id("filter-panel-body")
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.filter_panel = None;
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }))
                 .absolute()
                 .left(px(left))
                 .top(px(ROW_HEIGHT + 2.0))
@@ -884,12 +961,20 @@ impl Render for GridSpike {
                             .child("checking distinct values\u{2026}"),
                     );
                 }
-                FilterMode::Checkboxes(values) => {
-                    for (index, (value, checked)) in values.iter().enumerate() {
-                        let glyph = if *checked { "\u{2611}" } else { "\u{2610}" };
+                FilterMode::Checkboxes { values, null } => {
+                    let mut rows: Vec<(usize, String, bool, bool)> = values
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (value, checked))| (index, value.clone(), *checked, false))
+                        .collect();
+                    if let Some(null_checked) = null {
+                        rows.push((usize::MAX, "(null)".into(), *null_checked, true));
+                    }
+                    for (index, value, checked, is_null_row) in rows {
+                        let glyph = if checked { "\u{2611}" } else { "\u{2610}" };
                         body = body.child(
                             div()
-                                .id(("filter-check", index))
+                                .id(("filter-check", index.min(100_000)))
                                 .flex()
                                 .items_center()
                                 .gap_2()
@@ -904,12 +989,21 @@ impl Render for GridSpike {
                                         .min_w_0()
                                         .overflow_hidden()
                                         .whitespace_nowrap()
-                                        .child(value.clone()),
+                                        .when(is_null_row, |label| {
+                                            label.italic().text_color(rgb(TEXT_DIM))
+                                        })
+                                        .child(value),
                                 )
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(panel) = this.filter_panel.as_mut() {
-                                        if let FilterMode::Checkboxes(values) = &mut panel.mode {
-                                            if let Some(entry) = values.get_mut(index) {
+                                        if let FilterMode::Checkboxes { values, null } =
+                                            &mut panel.mode
+                                        {
+                                            if is_null_row {
+                                                if let Some(null_checked) = null {
+                                                    *null_checked = !*null_checked;
+                                                }
+                                            } else if let Some(entry) = values.get_mut(index) {
                                                 entry.1 = !entry.1;
                                             }
                                         }
@@ -998,6 +1092,9 @@ impl Render for GridSpike {
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _, cx| {
                     if this.resizing_column.take().is_some() {
+                        // Same column set, same widths next time.
+                        this.width_memory
+                            .insert(Self::width_key(&this.columns), this.col_widths.clone());
                         cx.notify();
                     }
                 }),
@@ -1006,8 +1103,22 @@ impl Render for GridSpike {
             .child(div().flex_1().w_full().min_h_0().child(list))
             .child(status)
             .when_some(filter_panel, |root, panel| {
-                // Deferred so the popover paints above the row list.
-                root.child(gpui::deferred(panel))
+                // Deferred so the popover paints above the row list; the
+                // backdrop dismisses on click-away within the grid.
+                root.child(gpui::deferred(
+                    div()
+                        .id("filter-backdrop")
+                        .absolute()
+                        .inset_0()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                this.filter_panel = None;
+                                cx.notify();
+                            }),
+                        )
+                        .child(panel),
+                ))
             })
     }
 }

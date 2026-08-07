@@ -3326,18 +3326,25 @@ impl Workspace {
         });
         cx.spawn_in(window, async move |this, cx| {
             let values = match task.await {
-                Ok(Ok(result)) => Some(
-                    result
+                Ok(Ok(result)) => {
+                    let has_null = result
                         .rows
-                        .into_iter()
-                        .filter_map(|row| {
-                            row.first().and_then(|value| match value {
-                                zedb_core::Value::Null => None,
-                                other => Some(other.to_string()),
+                        .iter()
+                        .any(|row| matches!(row.first(), Some(zedb_core::Value::Null)));
+                    Some((
+                        result
+                            .rows
+                            .into_iter()
+                            .filter_map(|row| {
+                                row.first().and_then(|value| match value {
+                                    zedb_core::Value::Null => None,
+                                    other => Some(other.to_string()),
+                                })
                             })
-                        })
-                        .collect::<Vec<_>>(),
-                ),
+                            .collect::<Vec<_>>(),
+                        has_null,
+                    ))
+                }
                 _ => None,
             };
             this.update_in(cx, |_, window, cx| {

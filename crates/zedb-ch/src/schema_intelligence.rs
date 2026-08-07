@@ -1356,7 +1356,35 @@ fn split_conjuncts(content: &str) -> Vec<String> {
 /// (possibly dotted) identifier followed by anything but a call. None
 /// for parenthesised or computed conjuncts.
 fn conjunct_column(conjunct: &str) -> Option<String> {
-    let trimmed = conjunct.trim_start();
+    let trimmed = conjunct.trim();
+    // A parenthesised group attributes to a column only when every
+    // OR'd part inside is about that same column (e.g. our
+    // `IN (...) OR IS NULL` unions). Mixed groups stay opaque.
+    if let Some(inner) = strip_matching_parens(trimmed) {
+        let tokens = tokenize(inner);
+        let mut depth = 0i32;
+        let mut parts = Vec::new();
+        let mut start = 0;
+        for token in &tokens {
+            match token.text {
+                "(" => depth += 1,
+                ")" => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 && token.text.eq_ignore_ascii_case("or") {
+                parts.push(&inner[start..token.range.start]);
+                start = token.range.end;
+            }
+        }
+        parts.push(&inner[start..]);
+        let first = conjunct_column(parts.first()?)?;
+        for part in &parts[1..] {
+            if conjunct_column(part)? != first {
+                return None;
+            }
+        }
+        return Some(first);
+    }
     if let Some(inner) = trimmed.strip_prefix('`') {
         let close = inner.find('`')?;
         return Some(inner[..close].to_string());
@@ -1448,6 +1476,26 @@ pub fn column_filter(sql: &str, column: &str) -> Option<String> {
         .find(|conjunct| conjunct_column(conjunct).as_deref() == Some(column))
 }
 
+/// The inside of a fully parenthesised expression, when the opening
+/// paren closes exactly at the end.
+fn strip_matching_parens(text: &str) -> Option<&str> {
+    let inner = text.strip_prefix('(')?;
+    let mut depth = 1i32;
+    for (index, character) in inner.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return (index == inner.len() - 1).then(|| &inner[..index]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Column-attributable top-level WHERE conjuncts, ours or
 /// hand-written, as (column, conjunct) pairs for the header UI.
 pub fn column_filters(sql: &str) -> Vec<(String, String)> {
@@ -1516,6 +1564,21 @@ mod filter_tests {
         let or_sql = "SELECT * FROM t WHERE a = 1 OR b = 2";
         let wrapped = set_column_filter(or_sql, "kind", Some("`kind` = 'a'"));
         assert!(wrapped.contains("WHERE (a = 1 OR b = 2) AND `kind` = 'a'"));
+    }
+
+    #[test]
+    fn null_union_groups_attribute_to_their_column() {
+        let sql = "SELECT * FROM t WHERE (`kind` IN ('a') OR `kind` IS NULL) AND day > 1";
+        assert_eq!(
+            filtered_columns(sql),
+            vec!["kind".to_string(), "day".to_string()]
+        );
+        let replaced = set_column_filter(sql, "kind", Some("`kind` = 'b'"));
+        assert!(replaced.contains("WHERE day > 1 AND `kind` = 'b'"));
+
+        // A mixed OR group stays opaque and survives.
+        let mixed = "SELECT * FROM t WHERE (a = 1 OR b = 2)";
+        assert!(filtered_columns(mixed).is_empty());
     }
 }
 
