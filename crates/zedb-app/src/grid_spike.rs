@@ -409,43 +409,9 @@ impl GridSpike {
             .unwrap_or_default()
     }
 
-    /// One line describing every active sort and filter, for hover.
-    fn shape_summary(&self) -> String {
-        let mut parts = Vec::new();
-        if !self.sort.is_empty() {
-            let sorts = self
-                .sort
-                .iter()
-                .map(|(column, ascending)| {
-                    format!(
-                        "{column} {}",
-                        if *ascending { '\u{25b4}' } else { '\u{25be}' }
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            parts.push(format!("sort: {sorts}"));
-        }
-        if !self.filters.is_empty() {
-            let filters = self
-                .filters
-                .iter()
-                .map(|(_, conjunct)| conjunct.clone())
-                .collect::<Vec<_>>()
-                .join(" AND ");
-            parts.push(format!("filters: {filters}"));
-        }
-        if parts.is_empty() {
-            "Click to sort, right-click to filter".into()
-        } else {
-            parts.join("   \u{00b7}   ")
-        }
-    }
-
     /// Header outside the list, following the list's horizontal offset.
     fn header_row(&self, scroll_x: gpui::Pixels, cx: &mut Context<Self>) -> impl IntoElement {
         let column_count = self.columns.len();
-        let summary = self.shape_summary();
         let cells: Vec<_> = (0..column_count)
             .map(|col| {
                 let name = self.header(col);
@@ -486,9 +452,56 @@ impl GridSpike {
                     .cursor_pointer()
                     .hover(|cell| cell.bg(rgb(0x2a2f37)))
                     .tooltip({
-                        let summary = summary.clone();
+                        let sort = self.sort.clone();
+                        let filters = self.filters.clone();
                         move |window, cx| {
-                            gpui_component::tooltip::Tooltip::new(summary.clone()).build(window, cx)
+                            if sort.is_empty() && filters.is_empty() {
+                                return gpui_component::tooltip::Tooltip::new(
+                                    "Click to sort, right-click to filter",
+                                )
+                                .build(window, cx);
+                            }
+                            let sort = sort.clone();
+                            let filters = filters.clone();
+                            gpui_component::tooltip::Tooltip::element(move |_, _| {
+                                let mut card =
+                                    div().flex().flex_col().gap_0p5().max_w(px(420.)).text_xs();
+                                if !sort.is_empty() {
+                                    card =
+                                        card.child(div().text_color(rgb(TEXT_DIM)).child("Sort"));
+                                    for (index, (column, ascending)) in sort.iter().enumerate() {
+                                        let arrow =
+                                            if *ascending { '\u{25b4}' } else { '\u{25be}' };
+                                        let line = if sort.len() > 1 {
+                                            format!("{}. {column} {arrow}", index + 1)
+                                        } else {
+                                            format!("{column} {arrow}")
+                                        };
+                                        card = card.child(
+                                            div()
+                                                .pl_2()
+                                                .text_color(rgb(SORT_INDICATOR))
+                                                .child(line),
+                                        );
+                                    }
+                                }
+                                if !filters.is_empty() {
+                                    card = card
+                                        .child(div().text_color(rgb(TEXT_DIM)).child("Filters"));
+                                    for (_, conjunct) in &filters {
+                                        card = card.child(
+                                            div()
+                                                .pl_2()
+                                                .max_w(px(400.))
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .child(conjunct.clone()),
+                                        );
+                                    }
+                                }
+                                card
+                            })
+                            .build(window, cx)
                         }
                     })
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
