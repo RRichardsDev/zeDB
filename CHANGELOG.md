@@ -28,7 +28,7 @@ GitHub release notes.
   checkbox list, everything else a text field (plain text means
   contains, %patterns% and operators like > 10 pass through). Filters
   become managed conjuncts in the query's top-level WHERE, hand-written
-  predicates survive, filtered headers show an orange marker, and the
+  predicates survive, filtered headers show an orange marker and a muted purple border, and the
   statement re-runs like header sorts do.
 - Re-running keeps the previous results on screen (with a "running"
   hint in the header) until replacement rows stream in, and header

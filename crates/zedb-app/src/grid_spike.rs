@@ -64,6 +64,8 @@ enum FilterMode {
 const ROW_HEIGHT: f32 = 24.0;
 /// Dull orange for the sort arrows and priorities in the header.
 const SORT_INDICATOR: u32 = 0xc08a52;
+/// Muted purple ring around a filtered column's header.
+const FILTER_BORDER: u32 = 0x6f5b99;
 const COL_WIDTH: f32 = 120.0;
 
 pub struct GridSpike {
@@ -392,7 +394,8 @@ impl GridSpike {
                         }
                     })
                     .unwrap_or_default();
-                if self.filtered.contains(&name) {
+                let is_filtered = self.filtered.contains(&name);
+                if is_filtered {
                     // Nabla stands in for a funnel.
                     indicator.push('\u{2207}');
                 }
@@ -409,6 +412,9 @@ impl GridSpike {
                     .gap_1()
                     .border_r_1()
                     .border_color(rgb(BORDER))
+                    .when(is_filtered, |cell| {
+                        cell.border_1().border_color(rgb(FILTER_BORDER))
+                    })
                     .text_color(rgb(TEXT_DIM))
                     .cursor_pointer()
                     .hover(|cell| cell.bg(rgb(0x2a2f37)))
