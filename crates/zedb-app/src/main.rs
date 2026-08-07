@@ -249,6 +249,13 @@ struct EditConnection {
 
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json, no_register)]
+struct ViewObjectDdl {
+    database: String,
+    object: String,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
 struct DeleteConnection {
     index: usize,
 }
@@ -1290,10 +1297,24 @@ impl Workspace {
                                 this.select_schema_object(
                                     row_database.clone(),
                                     row_object.clone(),
+                                    ObjectInspectorTab::Overview,
                                     window,
                                     cx,
                                 )
                             }))
+                            .context_menu({
+                                let database = database_name.clone();
+                                let object = object.name.clone();
+                                move |menu, _, _| {
+                                    menu.menu(
+                                        "View DDL",
+                                        Box::new(ViewObjectDdl {
+                                            database: database.clone(),
+                                            object: object.clone(),
+                                        }),
+                                    )
+                                }
+                            })
                             .child(
                                 div()
                                     .w(px(20.))
@@ -2381,6 +2402,7 @@ impl Workspace {
         &mut self,
         database_name: String,
         object: SchemaObjectMeta,
+        tab: ObjectInspectorTab,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2405,7 +2427,7 @@ impl Workspace {
             details: None,
             ddl_editor: ddl_editor.clone(),
             engine_editor: engine_editor.clone(),
-            tab: ObjectInspectorTab::Overview,
+            tab,
             error: None,
         });
         self.show_query_editor = false;
@@ -4827,6 +4849,26 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, action: &DeleteConnection, _, cx| {
                 this.selected = Some(action.index);
                 this.request_delete(cx)
+            }))
+            .on_action(cx.listener(|this, action: &ViewObjectDdl, window, cx| {
+                let object =
+                    this.schema_databases.iter().find_map(|database| {
+                        if database.meta.name != action.database {
+                            return None;
+                        }
+                        database.objects.as_ref()?.iter().find_map(|object| {
+                            (object.name == action.object).then(|| object.clone())
+                        })
+                    });
+                if let Some(object) = object {
+                    this.select_schema_object(
+                        action.database.clone(),
+                        object,
+                        ObjectInspectorTab::Ddl,
+                        window,
+                        cx,
+                    )
+                }
             }))
             .on_action(
                 cx.listener(|this, action: &agent_pane::StartAgentThread, window, cx| {
