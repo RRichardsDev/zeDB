@@ -3276,6 +3276,72 @@ impl Workspace {
         self.apply_rewritten_statement(statement, rewritten, window, cx);
     }
 
+    /// Open the filter popover for a column, probing the server for its
+    /// distinct values (capped, short-circuiting past ten) so even
+    /// non-dictionary columns get checkboxes when they are small.
+    fn open_column_filter(&mut self, column: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.query_tabs.get(self.active_query_tab) else {
+            return;
+        };
+        let statement = tab.displayed_statement.clone();
+        let prefill = statement
+            .as_deref()
+            .and_then(|statement| zedb_ch::schema_intelligence::column_filter(statement, &column));
+        let grid = tab.result_grid.clone();
+        let needs_probe = grid.update(cx, |grid, cx| {
+            grid.begin_filter_panel(column.clone(), prefill, cx)
+        });
+        if !needs_probe {
+            return;
+        }
+        let (Some(statement), Some(connected)) = (statement, self.connected.as_ref()) else {
+            grid.update(cx, |grid, cx| {
+                grid.finish_filter_panel(&column, None, window, cx)
+            });
+            return;
+        };
+        // Distinct within the query's other filters, unbounded by its
+        // LIMIT, ignoring this column's own filter and the sort.
+        let base = zedb_ch::schema_intelligence::set_column_filter(&statement, &column, None);
+        let base = zedb_ch::schema_intelligence::set_order_by(&base, &[]);
+        let base = zedb_ch::schema_intelligence::strip_top_level_limit(&base);
+        let base = base.trim_end().trim_end_matches(';').to_string();
+        let probe = format!(
+            "SELECT DISTINCT `{}` AS value FROM ({base}) LIMIT 11",
+            column.replace('`', "")
+        );
+        let config = connected.client_config.clone();
+        let task = rt::tokio().spawn(async move {
+            zedb_ch::ChClient::new(config)
+                .query_guarded(&probe, 5, 32, 10 * 1024 * 1024 * 1024)
+                .await
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let values = match task.await {
+                Ok(Ok(result)) => Some(
+                    result
+                        .rows
+                        .into_iter()
+                        .filter_map(|row| {
+                            row.first().and_then(|value| match value {
+                                zedb_core::Value::Null => None,
+                                other => Some(other.to_string()),
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            };
+            this.update_in(cx, |_, window, cx| {
+                grid.update(cx, |grid, cx| {
+                    grid.finish_filter_panel(&column, values, window, cx)
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// A grid header asked for a filter change on the displayed statement.
     fn grid_filter_requested(
         &mut self,
@@ -5022,15 +5088,7 @@ impl Render for Workspace {
             }))
             .on_action(
                 cx.listener(|this, action: &grid_spike::HeaderFilter, window, cx| {
-                    if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
-                        let prefill = tab.displayed_statement.as_deref().and_then(|statement| {
-                            zedb_ch::schema_intelligence::column_filter(statement, &action.column)
-                        });
-                        let grid = tab.result_grid.clone();
-                        grid.update(cx, |grid, cx| {
-                            grid.open_filter_panel(action.column.clone(), prefill, window, cx)
-                        });
-                    }
+                    this.open_column_filter(action.column.clone(), window, cx)
                 }),
             )
             .on_action(cx.listener(|this, action: &ViewObjectDdl, window, cx| {

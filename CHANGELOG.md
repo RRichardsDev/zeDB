@@ -23,9 +23,10 @@ GitHub release notes.
 - Right-click a result header for an "Order by" submenu (Descending,
   Ascending, Clear); with shift held it becomes "Add to order by" for
   multi-column sorts. Header clicks now cycle descending first.
-- Right-click a result header for "Filter...": dictionary columns
-  (LowCardinality/Enum) with ten or fewer distinct values get a
-  checkbox list, everything else a text field (plain text means
+- Right-click a result header for "Filter...": any column with ten or
+  fewer distinct values gets a checkbox list (a capped server probe
+  checks, short-circuiting past ten; Enum variants come straight from
+  the type), everything else a text field (plain text means
   contains, %patterns% and operators like > 10 pass through). Filters
   become managed conjuncts in the query's top-level WHERE, hand-written
   predicates survive, filtered headers show an orange marker and a muted purple border, and the

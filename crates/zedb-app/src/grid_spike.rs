@@ -52,10 +52,13 @@ pub struct HeaderFilter {
 struct FilterPanel {
     column: String,
     numeric: bool,
+    prefill: Option<String>,
     mode: FilterMode,
 }
 
 enum FilterMode {
+    /// A distinct-values probe is in flight.
+    Loading,
     /// Distinct dictionary values with their checked state.
     Checkboxes(Vec<(String, bool)>),
     Text(Entity<InputState>),
@@ -179,82 +182,111 @@ impl GridSpike {
     /// Open the filter popover for a column. Dictionary columns
     /// (LowCardinality/Enum) with ten or fewer distinct values get
     /// checkboxes; everything else gets a text field.
-    pub fn open_filter_panel(
+    /// Open the filter popover. Enum columns resolve immediately from
+    /// the type's variants; everything else opens in a loading state and
+    /// returns true so the owner runs a distinct-values probe.
+    pub fn begin_filter_panel(
         &mut self,
         column: String,
         prefill: Option<String>,
-        window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(index) = self.columns.iter().position(|meta| meta.name == column) else {
-            return;
+            return false;
         };
         let type_name = self.columns[index].type_name.clone();
         let numeric = ["Int", "UInt", "Float", "Decimal"]
             .iter()
             .any(|kind| type_name.contains(kind))
             && !type_name.contains("String");
-        let dictionary =
-            type_name.contains("LowCardinality") || type_name.trim_start().starts_with("Enum");
-
-        let values = if type_name.trim_start().starts_with("Enum")
-            || type_name.contains("Enum8")
+        let is_enum = type_name.contains("Enum8")
             || type_name.contains("Enum16")
-        {
-            enum_variants(&type_name)
-        } else if dictionary {
-            let mut distinct: Vec<String> = Vec::new();
-            for row in &self.rows {
-                if let Some(value) = row.get(index) {
-                    let text = value.to_string();
-                    if !distinct.contains(&text) {
-                        distinct.push(text);
-                        if distinct.len() > 10 {
-                            break;
-                        }
-                    }
-                }
+            || type_name.trim_start().starts_with("Enum");
+        if is_enum {
+            let values = enum_variants(&type_name);
+            if !values.is_empty() && values.len() <= 10 {
+                let prechecked: Vec<String> =
+                    prefill.as_deref().map(quoted_strings).unwrap_or_default();
+                self.filter_panel = Some(FilterPanel {
+                    column,
+                    numeric,
+                    prefill,
+                    mode: FilterMode::Checkboxes(
+                        values
+                            .into_iter()
+                            .map(|value| {
+                                let checked = prechecked.contains(&value);
+                                (value, checked)
+                            })
+                            .collect(),
+                    ),
+                });
+                cx.notify();
+                return false;
             }
-            distinct
-        } else {
-            Vec::new()
-        };
-
-        let prechecked: Vec<String> = prefill.as_deref().map(quoted_strings).unwrap_or_default();
-        let mode = if dictionary && !values.is_empty() && values.len() <= 10 {
-            FilterMode::Checkboxes(
-                values
-                    .into_iter()
-                    .map(|value| {
-                        let checked = prechecked.contains(&value);
-                        (value, checked)
-                    })
-                    .collect(),
-            )
-        } else {
-            let initial = prefill
-                .as_deref()
-                .map(|conjunct| {
-                    let text = quoted_strings(conjunct)
-                        .into_iter()
-                        .next()
-                        .unwrap_or_else(|| {
-                            conjunct.rsplit(' ').next().unwrap_or_default().to_string()
-                        });
-                    text.trim_matches('%').to_string()
-                })
-                .unwrap_or_default();
-            FilterMode::Text(cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("value, %pattern%, or > 10")
-                    .default_value(initial)
-            }))
-        };
+        }
         self.filter_panel = Some(FilterPanel {
             column,
             numeric,
-            mode,
+            prefill,
+            mode: FilterMode::Loading,
         });
+        cx.notify();
+        true
+    }
+
+    /// Resolve a loading popover with the probe's distinct values;
+    /// None or more than ten means the text field.
+    pub fn finish_filter_panel(
+        &mut self,
+        column: &str,
+        values: Option<Vec<String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(panel) = self.filter_panel.as_mut() else {
+            return;
+        };
+        if panel.column != column || !matches!(panel.mode, FilterMode::Loading) {
+            return;
+        }
+        let prefill = panel.prefill.clone();
+        let mode = match values {
+            Some(values) if !values.is_empty() && values.len() <= 10 => {
+                let prechecked: Vec<String> =
+                    prefill.as_deref().map(quoted_strings).unwrap_or_default();
+                FilterMode::Checkboxes(
+                    values
+                        .into_iter()
+                        .map(|value| {
+                            let checked = prechecked.contains(&value);
+                            (value, checked)
+                        })
+                        .collect(),
+                )
+            }
+            _ => {
+                let initial = prefill
+                    .as_deref()
+                    .map(|conjunct| {
+                        let text =
+                            quoted_strings(conjunct)
+                                .into_iter()
+                                .next()
+                                .unwrap_or_else(|| {
+                                    conjunct.rsplit(' ').next().unwrap_or_default().to_string()
+                                });
+                        text.trim_matches('%').to_string()
+                    })
+                    .unwrap_or_default();
+                FilterMode::Text(cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder("value, %pattern%, or > 10")
+                        .default_value(initial)
+                }))
+            }
+        };
+        panel.mode = mode;
         cx.notify();
     }
 
@@ -271,6 +303,10 @@ impl GridSpike {
         };
         let prefix = format!("`{}`", panel.column.replace('`', ""));
         let predicate = match &panel.mode {
+            FilterMode::Loading => {
+                self.filter_panel = Some(panel);
+                return;
+            }
             FilterMode::Checkboxes(values) => {
                 let selected: Vec<&String> = values
                     .iter()
@@ -736,6 +772,14 @@ impl Render for GridSpike {
                         ),
                 );
             match &panel.mode {
+                FilterMode::Loading => {
+                    body = body.child(
+                        div()
+                            .py_1()
+                            .text_color(rgb(TEXT_DIM))
+                            .child("checking distinct values\u{2026}"),
+                    );
+                }
                 FilterMode::Checkboxes(values) => {
                     for (index, (value, checked)) in values.iter().enumerate() {
                         let glyph = if *checked { "\u{2611}" } else { "\u{2610}" };
