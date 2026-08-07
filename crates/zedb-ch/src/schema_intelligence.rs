@@ -1352,8 +1352,41 @@ fn split_conjuncts(content: &str) -> Vec<String> {
     parts
 }
 
-fn managed_prefix(column: &str) -> String {
-    format!("`{}`", column.replace('`', ""))
+/// The column a conjunct is about: a backticked name (ours) or a bare
+/// (possibly dotted) identifier followed by anything but a call. None
+/// for parenthesised or computed conjuncts.
+fn conjunct_column(conjunct: &str) -> Option<String> {
+    let trimmed = conjunct.trim_start();
+    if let Some(inner) = trimmed.strip_prefix('`') {
+        let close = inner.find('`')?;
+        return Some(inner[..close].to_string());
+    }
+    let tokens = tokenize(trimmed);
+    let mut index = 0;
+    let mut last: Option<String> = None;
+    while let Some(token) = tokens.get(index) {
+        if !token.identifier {
+            break;
+        }
+        last = Some(token.text.to_string());
+        if tokens.get(index + 1).map(|next| next.text) == Some(".") {
+            index += 2;
+        } else {
+            index += 1;
+            break;
+        }
+    }
+    let last = last?;
+    if tokens.get(index).map(|next| next.text) == Some("(") {
+        return None;
+    }
+    if matches!(
+        last.to_ascii_uppercase().as_str(),
+        "NOT" | "EXISTS" | "TRUE" | "FALSE" | "CASE" | "INTERVAL"
+    ) {
+        return None;
+    }
+    Some(last)
 }
 
 /// Replace, add, or remove this column's managed filter conjunct in the
@@ -1361,12 +1394,11 @@ fn managed_prefix(column: &str) -> String {
 /// column first); hand-written conjuncts survive untouched.
 pub fn set_column_filter(sql: &str, column: &str, predicate: Option<&str>) -> String {
     let (clause, insert_at) = top_level_where_span(sql);
-    let prefix = managed_prefix(column);
     let mut conjuncts = match clause {
         Some((_, content_start, end)) => split_conjuncts(&sql[content_start..end]),
         None => Vec::new(),
     };
-    conjuncts.retain(|conjunct| !conjunct.trim_start().starts_with(&prefix));
+    conjuncts.retain(|conjunct| conjunct_column(conjunct).as_deref() != Some(column));
     if let Some(predicate) = predicate {
         conjuncts.push(predicate.to_string());
     }
@@ -1407,29 +1439,24 @@ pub fn set_column_filter(sql: &str, column: &str, predicate: Option<&str>) -> St
     }
 }
 
-/// This column's managed filter conjunct, if the statement has one.
+/// This column's filter conjunct (ours or hand-written), if any.
 pub fn column_filter(sql: &str, column: &str) -> Option<String> {
     let (clause, _) = top_level_where_span(sql);
     let (_, content_start, end) = clause?;
-    let prefix = managed_prefix(column);
     split_conjuncts(&sql[content_start..end])
         .into_iter()
-        .find(|conjunct| conjunct.trim_start().starts_with(&prefix))
+        .find(|conjunct| conjunct_column(conjunct).as_deref() == Some(column))
 }
 
-/// Columns with managed filter conjuncts, for the header indicators.
+/// Columns the top-level WHERE filters on, ours or hand-written, for
+/// the header indicators.
 pub fn filtered_columns(sql: &str) -> Vec<String> {
     let Some((_, content_start, end)) = top_level_where_span(sql).0 else {
         return Vec::new();
     };
     split_conjuncts(&sql[content_start..end])
         .into_iter()
-        .filter_map(|conjunct| {
-            let trimmed = conjunct.trim_start();
-            let inner = trimmed.strip_prefix('`')?;
-            let close = inner.find('`')?;
-            Some(inner[..close].to_string())
-        })
+        .filter_map(|conjunct| conjunct_column(&conjunct))
         .collect()
 }
 
@@ -1466,8 +1493,17 @@ mod filter_tests {
     #[test]
     fn preserves_hand_written_conjuncts_and_or_bodies() {
         let sql = "SELECT * FROM t WHERE day > '2026-01-01' AND kind != 'x'";
+        assert_eq!(
+            filtered_columns(sql),
+            vec!["day".to_string(), "kind".to_string()]
+        );
+        assert_eq!(column_filter(sql, "kind").as_deref(), Some("kind != 'x'"));
+
+        // A hand-written conjunct about the same column is replaced;
+        // conjuncts about other columns survive.
         let filtered = set_column_filter(sql, "kind", Some("`kind` = 'a'"));
-        assert!(filtered.contains("day > '2026-01-01' AND kind != 'x' AND `kind` = 'a'"));
+        assert!(filtered.contains("day > '2026-01-01' AND `kind` = 'a'"));
+        assert!(!filtered.contains("kind != 'x'"));
 
         let or_sql = "SELECT * FROM t WHERE a = 1 OR b = 2";
         let wrapped = set_column_filter(or_sql, "kind", Some("`kind` = 'a'"));

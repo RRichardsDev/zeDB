@@ -413,6 +413,9 @@ struct Workspace {
     next_query_tab_id: usize,
     show_query_editor: bool,
     query_abort: Option<AbortHandle>,
+    /// The latest header-driven rewrite awaiting its debounced re-run.
+    rerun_pending: Option<String>,
+    rerun_generation: u64,
     query_error_decision: Option<tokio::sync::oneshot::Sender<bool>>,
     query_run_id: u64,
     query_resize: Option<(QueryResizeTarget, f32)>,
@@ -559,6 +562,8 @@ impl Workspace {
                 commit: None,
                 health_poll_generation: 0,
                 query_abort: None,
+                rerun_pending: None,
+                rerun_generation: 0,
                 query_error_decision: None,
                 query_run_id: 0,
                 query_resize: None,
@@ -613,6 +618,8 @@ impl Workspace {
                 commit: None,
                 health_poll_generation: 0,
                 query_abort: None,
+                rerun_pending: None,
+                rerun_generation: 0,
                 query_error_decision: None,
                 query_run_id: 0,
                 query_resize: None,
@@ -3263,9 +3270,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.query_abort.is_some() {
-            return;
-        }
         let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
             return;
         };
@@ -3351,9 +3355,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.query_abort.is_some() {
-            return;
-        }
         let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
             return;
         };
@@ -3379,9 +3380,12 @@ impl Workspace {
         if rewritten == statement {
             return;
         }
-        let Some(tab) = self.query_tabs.get(self.active_query_tab) else {
+        let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) else {
             return;
         };
+        // Later header interactions compose on this rewrite even before
+        // it has run.
+        tab.displayed_statement = Some(rewritten.clone());
         let editor = tab.editor.clone();
         let value = editor.read(cx).value().to_string();
         if value.contains(&statement) {
@@ -3393,7 +3397,28 @@ impl Workspace {
                 cx,
             );
         }
-        self.start_statements(vec![rewritten], cx);
+        // Coalesce rapid interactions into one run: debounce a beat and
+        // cancel-and-restart anything in flight.
+        self.rerun_generation += 1;
+        let generation = self.rerun_generation;
+        self.rerun_pending = Some(rewritten);
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(150)).await;
+            this.update(cx, |this, cx| {
+                if this.rerun_generation != generation {
+                    return;
+                }
+                let Some(statement) = this.rerun_pending.take() else {
+                    return;
+                };
+                if this.query_abort.is_some() {
+                    this.cancel_query(cx);
+                }
+                this.start_statements(vec![statement], cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn start_statements(&mut self, mut statements: Vec<String>, cx: &mut Context<Self>) {

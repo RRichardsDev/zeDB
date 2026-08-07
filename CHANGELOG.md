@@ -29,11 +29,15 @@ GitHub release notes.
   the type), everything else a text field (plain text means
   contains, %patterns% and operators like > 10 pass through). Filters
   become managed conjuncts in the query's top-level WHERE, hand-written
-  predicates survive, filtered headers show an orange marker and a muted purple border, and the
+  predicates survive (and simple ones light up the indicators and
+  pre-fill the panel just like UI-made filters), filtered headers show an orange marker and a muted purple border, and the
   statement re-runs like header sorts do.
 - Re-running keeps the previous results on screen (with a "running"
   hint in the header) until replacement rows stream in, and header
-  tiles show a hand cursor.
+  tiles show a hand cursor. Rapid sort and filter changes coalesce
+  into one run: the SQL and indicators update instantly, the query
+  fires after a beat, and an in-flight run is cancelled and restarted
+  rather than blocking the next change.
 - Read/size progress in the status bar resets per statement instead of
   carrying a previous statement's totals; the vim mode chip reads
   "-- INSERT --" and lives in the bottom status bar (with the command
