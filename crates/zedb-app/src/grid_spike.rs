@@ -69,6 +69,8 @@ const ROW_HEIGHT: f32 = 24.0;
 const SORT_INDICATOR: u32 = 0xc08a52;
 /// Muted purple ring around a filtered column's header.
 const FILTER_BORDER: u32 = 0x6f5b99;
+/// Brighter cousin of the border for filter text in hover cards.
+const FILTER_TINT: u32 = 0x9d84cc;
 /// Muted red for the date part of temporal values.
 const DATE_TINT: u32 = 0xb56b6b;
 const COL_WIDTH: f32 = 120.0;
@@ -519,8 +521,13 @@ impl GridSpike {
                                     for (_, conjunct) in &filters {
                                         card = card.child(
                                             // Wrap: the whole filter must
-                                            // always be readable.
-                                            div().pl_2().max_w(px(400.)).child(conjunct.clone()),
+                                            // always be readable. Purple
+                                            // matches the header border.
+                                            div()
+                                                .pl_2()
+                                                .max_w(px(400.))
+                                                .text_color(rgb(FILTER_TINT))
+                                                .child(conjunct.clone()),
                                         );
                                     }
                                 }
