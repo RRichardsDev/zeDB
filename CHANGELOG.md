@@ -14,6 +14,7 @@ GitHub release notes.
 - Schema sidebar databases collapse again while a filter is applied;
   the chevron now always tells the truth. Editing the filter re-expands
   everything matching.
+- Result grid columns are drag-resizable from the header dividers.
 
 ## v0.1.4 - 2026-08-07
 

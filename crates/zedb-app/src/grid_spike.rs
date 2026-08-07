@@ -4,7 +4,8 @@
 
 use gpui::{
     actions, div, prelude::*, px, rgb, uniform_list, App, ClipboardItem, Context, FocusHandle,
-    Focusable, KeyBinding, ListHorizontalSizingBehavior, UniformListScrollHandle, Window,
+    Focusable, KeyBinding, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, UniformListScrollHandle, Window,
 };
 use zedb_core::{ColumnMeta, Value};
 
@@ -24,6 +25,10 @@ pub struct GridSpike {
     focus_handle: FocusHandle,
     scroll: UniformListScrollHandle,
     selected: Option<(usize, usize)>,
+    /// Per-column widths, drag-resizable from the header dividers.
+    col_widths: Vec<f32>,
+    /// An active header-divider drag: (column, start width, start mouse x).
+    resizing_column: Option<(usize, f32, f32)>,
 }
 
 impl GridSpike {
@@ -38,6 +43,8 @@ impl GridSpike {
             focus_handle: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             selected: None,
+            col_widths: Vec::new(),
+            resizing_column: None,
         }
     }
 
@@ -47,6 +54,7 @@ impl GridSpike {
         requested_rows: Option<usize>,
         cx: &mut Context<Self>,
     ) {
+        self.col_widths = vec![COL_WIDTH; columns.len()];
         self.columns = columns;
         self.rows = Vec::new();
         self.requested_rows = requested_rows;
@@ -75,6 +83,14 @@ impl GridSpike {
         }
     }
 
+    fn width(&self, column: usize) -> f32 {
+        self.col_widths.get(column).copied().unwrap_or(COL_WIDTH)
+    }
+
+    fn total_width(&self) -> f32 {
+        self.col_widths.iter().sum()
+    }
+
     fn header(&self, column: usize) -> String {
         self.columns
             .get(column)
@@ -91,13 +107,14 @@ impl GridSpike {
     }
 
     /// Header outside the list, following the list's horizontal offset.
-    fn header_row(&self, scroll_x: gpui::Pixels) -> impl IntoElement {
+    fn header_row(&self, scroll_x: gpui::Pixels, cx: &mut Context<Self>) -> impl IntoElement {
         let column_count = self.columns.len();
         let cells: Vec<_> = (0..column_count)
             .map(|col| {
                 div()
-                    .w(px(COL_WIDTH))
+                    .w(px(self.width(col)))
                     .flex_none()
+                    .relative()
                     .px_2()
                     .py_1()
                     .overflow_hidden()
@@ -106,6 +123,24 @@ impl GridSpike {
                     .border_color(rgb(BORDER))
                     .text_color(rgb(TEXT_DIM))
                     .child(self.header(col))
+                    .child(
+                        div()
+                            .id(("col-resize", col))
+                            .absolute()
+                            .right_0()
+                            .top_0()
+                            .h_full()
+                            .w(px(7.))
+                            .cursor_col_resize()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                    this.resizing_column =
+                                        Some((col, this.width(col), f32::from(event.position.x)));
+                                    cx.notify();
+                                }),
+                            ),
+                    )
             })
             .collect();
         div()
@@ -121,7 +156,7 @@ impl GridSpike {
                     .flex()
                     .h_full()
                     .ml(scroll_x)
-                    .w(px(COL_WIDTH * column_count as f32))
+                    .w(px(self.total_width()))
                     .children(cells),
             )
     }
@@ -150,7 +185,7 @@ impl Render for GridSpike {
                                 let is_selected = selected == Some((row, col));
                                 div()
                                     .id(("cell", row * cols + col))
-                                    .w(px(COL_WIDTH))
+                                    .w(px(this.width(col)))
                                     .flex_none()
                                     .px_2()
                                     .overflow_hidden()
@@ -169,7 +204,7 @@ impl Render for GridSpike {
                             .flex()
                             .h(px(ROW_HEIGHT))
                             .items_center()
-                            .w(px(COL_WIDTH * cols as f32))
+                            .w(px(this.total_width()))
                             .when(row % 2 == 1, |d| d.bg(rgb(0x21252b)))
                             .when(row + 1 == rows, |d| {
                                 d.border_b_1().border_color(rgb(BORDER))
@@ -240,7 +275,25 @@ impl Render for GridSpike {
             // The list consumes wheel events; repaint so the header can
             // mirror its horizontal offset.
             .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
-            .child(self.header_row(scroll_x))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if let Some((col, start_width, start_x)) = this.resizing_column {
+                    let width =
+                        (start_width + f32::from(event.position.x) - start_x).clamp(48.0, 1200.0);
+                    if let Some(slot) = this.col_widths.get_mut(col) {
+                        *slot = width;
+                    }
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                    if this.resizing_column.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
+            .child(self.header_row(scroll_x, cx))
             .child(div().flex_1().w_full().min_h_0().child(list))
             .child(status)
     }
