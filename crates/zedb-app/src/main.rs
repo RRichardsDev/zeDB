@@ -3483,9 +3483,14 @@ impl Workspace {
                     Ok(Err(error)) => QueryOutcome::Error(error),
                     Err(error) => QueryOutcome::Error(error.to_string()),
                 };
+                // Re-sync the sort indicator with reality: the executed
+                // SQL on success, or the still-displayed old result's SQL
+                // when the run failed after an optimistic indicator.
                 if let Some(statement) = successful_statements.last() {
                     tab.displayed_statement = Some(statement.clone());
-                    let sort = zedb_ch::schema_intelligence::top_level_order_by(statement);
+                }
+                if let Some(statement) = tab.displayed_statement.clone() {
+                    let sort = zedb_ch::schema_intelligence::top_level_order_by(&statement);
                     tab.result_grid
                         .update(cx, |grid, cx| grid.set_sort(sort, cx));
                 }

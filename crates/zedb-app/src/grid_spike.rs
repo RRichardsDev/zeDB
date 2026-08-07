@@ -126,7 +126,11 @@ impl GridSpike {
             }
         }
         if sort != self.sort {
+            // Optimistic: show the new sort immediately; completion
+            // re-syncs the indicator from the SQL that actually ran.
+            self.sort = sort.clone();
             cx.emit(GridEvent::SortRequested { sort });
+            cx.notify();
         }
     }
 
@@ -237,7 +241,9 @@ impl GridSpike {
                                 _ => vec![(column, true)],
                             };
                         }
+                        this.sort = sort.clone();
                         cx.emit(GridEvent::SortRequested { sort });
+                        cx.notify();
                     }))
                     .context_menu({
                         let column = name.clone();
