@@ -539,6 +539,16 @@ impl InputState {
         cx.notify();
     }
 
+    /// zeDB patch: whether the completion popup is currently showing, so
+    /// host-app key interception (vim mode) can hand navigation keys back
+    /// to the menu.
+    pub fn completion_menu_open(&self, cx: &App) -> bool {
+        match &self.context_menu {
+            Some(ContextMenu::Completion(menu)) => menu.read(cx).is_open(),
+            _ => false,
+        }
+    }
+
     #[inline]
     pub fn diagnostics(&self) -> Option<&DiagnosticSet> {
         self.mode.diagnostics()

@@ -8,7 +8,8 @@ use gpui::{
 };
 use lsp_types::{CompletionItem, CompletionTextEdit};
 
-const MAX_MENU_WIDTH: Pixels = px(320.);
+// zeDB patch: wide enough that the longest suggestion plus detail fits.
+const MAX_MENU_WIDTH: Pixels = px(560.);
 const MAX_MENU_HEIGHT: Pixels = px(240.);
 const POPOVER_GAP: Pixels = px(4.);
 

@@ -2717,6 +2717,24 @@ impl Workspace {
             window,
             move |this, state, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
+                    // Text changed outside modalkit (completion accepted,
+                    // programmatic insert): resync vim's shadow buffer or
+                    // the next vim keystroke would revert the edit. Costs
+                    // vim undo history for that buffer, which beats losing
+                    // the text itself.
+                    if this.preferences.vim_mode {
+                        let value = state.read(cx).value().to_string();
+                        let cursor = state.read(cx).cursor_position();
+                        if let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == id) {
+                            if tab.vim.text() != value {
+                                tab.vim.reset(
+                                    &value,
+                                    cursor.line as usize,
+                                    cursor.character as usize,
+                                );
+                            }
+                        }
+                    }
                     this.schedule_schema_analysis(id, state.clone(), window, cx);
                 }
             },
@@ -2961,6 +2979,15 @@ impl Workspace {
             return;
         };
         if !tab.editor.focus_handle(cx).is_focused(window) {
+            return;
+        }
+        // While the completion popup is open, arrows, enter, and escape
+        // belong to it: skip modalkit so the editor's own bindings route
+        // these keys into the menu (navigate, confirm, dismiss).
+        if !keystroke.modifiers.modified()
+            && matches!(keystroke.key.as_str(), "up" | "down" | "enter" | "escape")
+            && tab.editor.read(cx).completion_menu_open(cx)
+        {
             return;
         }
         // In visual mode the editor cursor tracks the selection end, not the

@@ -356,6 +356,16 @@ impl VimController {
         Ok(())
     }
 
+    /// The buffer text as the editor would render it, for detecting
+    /// edits made outside modalkit (e.g. completion inserts).
+    pub fn text(&self) -> String {
+        let mut text = self.buffer.get_text();
+        if !self.preserve_trailing_newline && text.ends_with('\n') {
+            text.pop();
+        }
+        text
+    }
+
     pub fn snapshot(&mut self) -> VimSnapshot {
         let cursor = self.buffer.get_leader(self.cursor_group);
         let selection = self.visual_selection();
