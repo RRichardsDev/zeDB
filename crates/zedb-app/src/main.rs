@@ -348,6 +348,9 @@ struct QueryTab {
     vim_command_line: Option<CommandLineSnapshot>,
     vim_recording: Option<char>,
     schema_analysis_generation: u64,
+    /// The last successfully executed statement, i.e. the one whose
+    /// result the grid is showing; header sorts rewrite and re-run it.
+    displayed_statement: Option<String>,
 }
 
 enum QueryOutcome {
@@ -2814,10 +2817,20 @@ impl Workspace {
             },
         )
         .detach();
+        let result_grid = cx.new(GridSpike::new);
+        cx.subscribe_in(
+            &result_grid,
+            window,
+            move |this, _, event: &grid_spike::GridEvent, window, cx| {
+                let grid_spike::GridEvent::SortRequested { column, ascending } = event;
+                this.grid_sort_requested(id, column.clone(), *ascending, window, cx);
+            },
+        )
+        .detach();
         QueryTab {
             id,
             editor,
-            result_grid: cx.new(GridSpike::new),
+            result_grid: result_grid.clone(),
             result_columns: 0,
             result_rows: 0,
             has_result: false,
@@ -2836,6 +2849,7 @@ impl Workspace {
             vim_command_line: None,
             vim_recording: None,
             schema_analysis_generation: 0,
+            displayed_statement: None,
         }
     }
 
@@ -3253,6 +3267,43 @@ impl Workspace {
         self.start_statements(statements, cx);
     }
 
+    /// A grid header was clicked: rewrite the displayed statement's
+    /// top-level ORDER BY, mirror it into the editor, and re-run it.
+    fn grid_sort_requested(
+        &mut self,
+        tab_id: usize,
+        column: String,
+        ascending: Option<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.query_abort.is_some() {
+            return;
+        }
+        let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+        let Some(statement) = tab.displayed_statement.clone() else {
+            return;
+        };
+        let rewritten = zedb_ch::schema_intelligence::set_order_by(&statement, &column, ascending);
+        if rewritten == statement {
+            return;
+        }
+        let editor = tab.editor.clone();
+        let value = editor.read(cx).value().to_string();
+        if value.contains(&statement) {
+            let updated = value.replacen(&statement, &rewritten, 1);
+            editor.update(cx, |editor, cx| editor.set_value(updated, window, cx));
+        } else {
+            self.flash_warning(
+                "Query changed since it ran; sorting the last executed statement",
+                cx,
+            );
+        }
+        self.start_statements(vec![rewritten], cx);
+    }
+
     fn start_statements(&mut self, mut statements: Vec<String>, cx: &mut Context<Self>) {
         if self.query_abort.is_some() {
             return;
@@ -3424,6 +3475,12 @@ impl Workspace {
                     Ok(Err(error)) => QueryOutcome::Error(error),
                     Err(error) => QueryOutcome::Error(error.to_string()),
                 };
+                if let Some(statement) = successful_statements.last() {
+                    tab.displayed_statement = Some(statement.clone());
+                    let sort = zedb_ch::schema_intelligence::top_level_order_by(statement);
+                    tab.result_grid
+                        .update(cx, |grid, cx| grid.set_sort(sort, cx));
+                }
                 this.refresh_schema_after_statements(&successful_statements);
                 cx.notify();
             })

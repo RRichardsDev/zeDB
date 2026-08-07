@@ -3,8 +3,8 @@
 //! the M2 spike; findings are in docs/devlog.md.
 
 use gpui::{
-    actions, div, prelude::*, px, rgb, uniform_list, App, ClipboardItem, Context, FocusHandle,
-    Focusable, KeyBinding, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent,
+    actions, div, prelude::*, px, rgb, uniform_list, App, ClipboardItem, Context, EventEmitter,
+    FocusHandle, Focusable, KeyBinding, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, UniformListScrollHandle, Window,
 };
 use zedb_core::{ColumnMeta, Value};
@@ -12,6 +12,15 @@ use zedb_core::{ColumnMeta, Value};
 use crate::theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, TEXT, TEXT_DIM};
 
 actions!(grid_spike, [Copy]);
+
+/// A header click asking the owning tab to re-sort the query.
+pub enum GridEvent {
+    SortRequested {
+        column: String,
+        /// Some(true) ascending, Some(false) descending, None to clear.
+        ascending: Option<bool>,
+    },
+}
 
 const ROW_HEIGHT: f32 = 24.0;
 const COL_WIDTH: f32 = 120.0;
@@ -29,6 +38,8 @@ pub struct GridSpike {
     col_widths: Vec<f32>,
     /// An active header-divider drag: (column, start width, start mouse x).
     resizing_column: Option<(usize, f32, f32)>,
+    /// The sort the displayed result actually ran with, by column name.
+    sort: Option<(String, bool)>,
 }
 
 impl GridSpike {
@@ -45,6 +56,7 @@ impl GridSpike {
             selected: None,
             col_widths: Vec::new(),
             resizing_column: None,
+            sort: None,
         }
     }
 
@@ -67,6 +79,12 @@ impl GridSpike {
 
     pub fn append_rows(&mut self, batch: Vec<Vec<Value>>, cx: &mut Context<Self>) {
         self.rows.extend(batch);
+        cx.notify();
+    }
+
+    /// Set the sort indicator to what the executed SQL actually says.
+    pub fn set_sort(&mut self, sort: Option<(String, bool)>, cx: &mut Context<Self>) {
+        self.sort = sort;
         cx.notify();
     }
 
@@ -111,7 +129,24 @@ impl GridSpike {
         let column_count = self.columns.len();
         let cells: Vec<_> = (0..column_count)
             .map(|col| {
+                let name = self.header(col);
+                let sorted = self
+                    .sort
+                    .as_ref()
+                    .filter(|(column, _)| *column == name)
+                    .map(|(_, ascending)| *ascending);
+                let label = match sorted {
+                    Some(true) => format!("{name} \u{25b4}"),
+                    Some(false) => format!("{name} \u{25be}"),
+                    None => name.clone(),
+                };
+                let next = match sorted {
+                    None => Some(true),
+                    Some(true) => Some(false),
+                    Some(false) => None,
+                };
                 div()
+                    .id(("col-head", col))
                     .w(px(self.width(col)))
                     .flex_none()
                     .relative()
@@ -122,7 +157,15 @@ impl GridSpike {
                     .border_r_1()
                     .border_color(rgb(BORDER))
                     .text_color(rgb(TEXT_DIM))
-                    .child(self.header(col))
+                    .hover(|cell| cell.text_color(rgb(TEXT)).cursor_pointer())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let column = this.header(col);
+                        cx.emit(GridEvent::SortRequested {
+                            column,
+                            ascending: next,
+                        });
+                    }))
+                    .child(label)
                     .child(
                         div()
                             .id(("col-resize", col))
@@ -161,6 +204,8 @@ impl GridSpike {
             )
     }
 }
+
+impl EventEmitter<GridEvent> for GridSpike {}
 
 impl Focusable for GridSpike {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {

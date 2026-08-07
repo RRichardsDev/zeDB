@@ -15,6 +15,10 @@ GitHub release notes.
   the chevron now always tells the truth. Editing the filter re-expands
   everything matching.
 - Result grid columns are drag-resizable from the header dividers.
+- Click a result column header to sort by it: the query's top-level
+  ORDER BY is rewritten in the editor and just that statement re-runs
+  on the server. Clicks cycle ascending, descending, and no sort; the
+  header arrow always reflects the SQL that actually ran.
 
 ## v0.1.4 - 2026-08-07
 

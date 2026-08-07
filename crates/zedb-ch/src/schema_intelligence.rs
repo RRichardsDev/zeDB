@@ -976,3 +976,181 @@ mod tests {
         assert!(touched_databases("SELECT * FROM analytics.events", Some("analytics")).is_empty());
     }
 }
+
+/// Replace, insert, or remove the top-level ORDER BY of one statement.
+/// Nested clauses (subqueries, window OVER (...)) are untouched. With
+/// `Some(ascending)` the clause becomes exactly one column; with `None`
+/// the clause is removed.
+pub fn set_order_by(sql: &str, column: &str, ascending: Option<bool>) -> String {
+    let (clause, insert_at) = top_level_order_by_span(sql);
+    let clean = column.replace('`', "");
+    let direction = |ascending: bool| if ascending { "ASC" } else { "DESC" };
+    let new_clause =
+        ascending.map(|ascending| format!("ORDER BY `{clean}` {}", direction(ascending)));
+
+    let join = |head: &str, middle: Option<&str>, rest: &str| {
+        let mut out = head.trim_end().to_string();
+        if let Some(middle) = middle {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(middle);
+        }
+        let rest = rest.trim_start();
+        if !rest.is_empty() {
+            if !rest.starts_with(';') {
+                out.push(' ');
+            }
+            out.push_str(rest);
+        }
+        out
+    };
+
+    match clause {
+        Some((start, end)) => join(&sql[..start], new_clause.as_deref(), &sql[end..]),
+        None => match new_clause {
+            Some(new_clause) => match insert_at {
+                Some(position) => join(&sql[..position], Some(&new_clause), &sql[position..]),
+                None => join(sql, Some(&new_clause), ""),
+            },
+            None => sql.to_string(),
+        },
+    }
+}
+
+/// The first column of a statement's top-level ORDER BY, with its
+/// direction, for showing an honest sort indicator.
+pub fn top_level_order_by(sql: &str) -> Option<(String, bool)> {
+    let (clause, _) = top_level_order_by_span(sql);
+    let (start, end) = clause?;
+    let content = sql[start..end]
+        .trim_start_matches(|character: char| !character.is_whitespace())
+        .trim_start();
+    let content = content
+        .strip_prefix("BY")
+        .or_else(|| content.strip_prefix("by"))
+        .or_else(|| content.strip_prefix("By"))
+        .or_else(|| content.strip_prefix("bY"))?
+        .trim_start();
+    let (column, rest) = if let Some(quoted) = content.strip_prefix('`') {
+        let close = quoted.find('`')?;
+        (quoted[..close].to_string(), &quoted[close + 1..])
+    } else {
+        let end = content
+            .find(|character: char| !(character.is_alphanumeric() || character == '_'))
+            .unwrap_or(content.len());
+        if end == 0 {
+            return None;
+        }
+        (content[..end].to_string(), &content[end..])
+    };
+    let ascending = !rest.trim_start().to_ascii_uppercase().starts_with("DESC");
+    Some((column, ascending))
+}
+
+/// The byte span of the top-level ORDER BY clause (through the end of
+/// its column list), plus the byte position a new clause should be
+/// inserted at when none exists (before LIMIT/SETTINGS/FORMAT/...).
+fn top_level_order_by_span(sql: &str) -> (Option<(usize, usize)>, Option<usize>) {
+    let tokens = tokenize(sql);
+    let mut depth = 0i32;
+    let mut clause = None;
+    let mut insert_at = None;
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = &tokens[index];
+        match token.text {
+            "(" => depth += 1,
+            ")" => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 {
+            let upper = token.text.to_ascii_uppercase();
+            if clause.is_none()
+                && upper == "ORDER"
+                && tokens
+                    .get(index + 1)
+                    .is_some_and(|next| next.text.eq_ignore_ascii_case("BY"))
+            {
+                let start = token.range.start;
+                let mut inner_depth = 0i32;
+                let mut end = sql.len();
+                let mut cursor = index + 2;
+                while let Some(next) = tokens.get(cursor) {
+                    match next.text {
+                        "(" => inner_depth += 1,
+                        ")" => inner_depth -= 1,
+                        _ => {}
+                    }
+                    if inner_depth == 0 {
+                        let next_upper = next.text.to_ascii_uppercase();
+                        if next.text == ";"
+                            || matches!(
+                                next_upper.as_str(),
+                                "LIMIT" | "OFFSET" | "SETTINGS" | "FORMAT" | "INTO" | "UNION"
+                            )
+                        {
+                            end = next.range.start;
+                            break;
+                        }
+                    }
+                    cursor += 1;
+                }
+                clause = Some((start, end));
+            }
+            if insert_at.is_none()
+                && (token.text == ";"
+                    || matches!(
+                        upper.as_str(),
+                        "LIMIT" | "OFFSET" | "SETTINGS" | "FORMAT" | "INTO"
+                    ))
+            {
+                insert_at = Some(token.range.start);
+            }
+        }
+        index += 1;
+    }
+    (clause, insert_at)
+}
+
+#[cfg(test)]
+mod order_by_tests {
+    use super::*;
+
+    #[test]
+    fn inserts_replaces_and_removes_top_level_order_by() {
+        let sql = "SELECT * FROM t LIMIT 10";
+        let sorted = set_order_by(sql, "kind", Some(true));
+        assert_eq!(sorted, "SELECT * FROM t ORDER BY `kind` ASC LIMIT 10");
+
+        let flipped = set_order_by(&sorted, "kind", Some(false));
+        assert_eq!(flipped, "SELECT * FROM t ORDER BY `kind` DESC LIMIT 10");
+
+        assert_eq!(
+            set_order_by(&flipped, "kind", None),
+            "SELECT * FROM t LIMIT 10"
+        );
+    }
+
+    #[test]
+    fn leaves_nested_order_by_alone() {
+        let sql = "SELECT count() OVER (ORDER BY id) FROM (SELECT id FROM t ORDER BY id) x;";
+        let sorted = set_order_by(sql, "id", Some(false));
+        assert!(sorted.contains("OVER (ORDER BY id)"));
+        assert!(sorted.contains("FROM t ORDER BY id)"));
+        assert!(sorted.ends_with("x ORDER BY `id` DESC;"));
+    }
+
+    #[test]
+    fn reports_the_active_sort() {
+        assert_eq!(
+            top_level_order_by("SELECT * FROM t ORDER BY `kind` DESC LIMIT 5"),
+            Some(("kind".into(), false))
+        );
+        assert_eq!(
+            top_level_order_by("SELECT * FROM t ORDER BY day, kind"),
+            Some(("day".into(), true))
+        );
+        assert_eq!(top_level_order_by("SELECT * FROM t"), None);
+    }
+}
