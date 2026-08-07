@@ -977,6 +977,29 @@ mod tests {
     }
 }
 
+/// Whether trailing statement text begins with a top-level clause
+/// keyword that reads best on its own line.
+fn starts_with_clause(rest: &str) -> bool {
+    let word: String = rest
+        .chars()
+        .take_while(|character| character.is_ascii_alphabetic())
+        .collect();
+    matches!(
+        word.to_ascii_uppercase().as_str(),
+        "WHERE"
+            | "GROUP"
+            | "HAVING"
+            | "WINDOW"
+            | "ORDER"
+            | "LIMIT"
+            | "OFFSET"
+            | "SETTINGS"
+            | "FORMAT"
+            | "UNION"
+            | "INTO"
+    )
+}
+
 /// Replace, insert, or remove the top-level ORDER BY of one statement.
 /// Nested clauses (subqueries, window OVER (...)) are untouched. An
 /// empty column list removes the clause; a written clause starts on its
@@ -1009,7 +1032,10 @@ pub fn set_order_by(sql: &str, columns: &[(String, bool)]) -> String {
         }
         let rest = rest.trim_start();
         if !rest.is_empty() {
-            if !rest.starts_with(';') {
+            if rest.starts_with(';') {
+            } else if starts_with_clause(rest) {
+                out.push('\n');
+            } else {
                 out.push(' ');
             }
             out.push_str(rest);
@@ -1180,15 +1206,15 @@ mod order_by_tests {
     fn inserts_replaces_and_removes_top_level_order_by() {
         let sql = "SELECT * FROM t LIMIT 10";
         let sorted = set_order_by(sql, &sort(&[("kind", true)]));
-        assert_eq!(sorted, "SELECT * FROM t\nORDER BY `kind` ASC LIMIT 10");
+        assert_eq!(sorted, "SELECT * FROM t\nORDER BY `kind` ASC\nLIMIT 10");
 
         let multi = set_order_by(&sorted, &sort(&[("kind", false), ("day", true)]));
         assert_eq!(
             multi,
-            "SELECT * FROM t\nORDER BY `kind` DESC, `day` ASC LIMIT 10"
+            "SELECT * FROM t\nORDER BY `kind` DESC, `day` ASC\nLIMIT 10"
         );
 
-        assert_eq!(set_order_by(&multi, &[]), "SELECT * FROM t LIMIT 10");
+        assert_eq!(set_order_by(&multi, &[]), "SELECT * FROM t\nLIMIT 10");
     }
 
     #[test]
@@ -1356,7 +1382,10 @@ pub fn set_column_filter(sql: &str, column: &str, predicate: Option<&str>) -> St
         }
         let rest = rest.trim_start();
         if !rest.is_empty() {
-            if !rest.starts_with(';') {
+            if rest.starts_with(';') {
+            } else if starts_with_clause(rest) {
+                out.push('\n');
+            } else {
                 out.push(' ');
             }
             out.push_str(rest);
@@ -1414,13 +1443,13 @@ mod filter_tests {
         let filtered = set_column_filter(sql, "kind", Some("`kind` IN ('a', 'b')"));
         assert_eq!(
             filtered,
-            "SELECT * FROM t\nWHERE `kind` IN ('a', 'b') ORDER BY id LIMIT 5"
+            "SELECT * FROM t\nWHERE `kind` IN ('a', 'b')\nORDER BY id LIMIT 5"
         );
 
         let replaced = set_column_filter(&filtered, "kind", Some("`kind` = 'c'"));
         assert_eq!(
             replaced,
-            "SELECT * FROM t\nWHERE `kind` = 'c' ORDER BY id LIMIT 5"
+            "SELECT * FROM t\nWHERE `kind` = 'c'\nORDER BY id LIMIT 5"
         );
         assert_eq!(
             column_filter(&replaced, "kind").as_deref(),
@@ -1430,7 +1459,7 @@ mod filter_tests {
 
         assert_eq!(
             set_column_filter(&replaced, "kind", None),
-            "SELECT * FROM t ORDER BY id LIMIT 5"
+            "SELECT * FROM t\nORDER BY id LIMIT 5"
         );
     }
 
