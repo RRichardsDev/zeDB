@@ -33,6 +33,8 @@ pub struct HeaderSort {
 }
 
 const ROW_HEIGHT: f32 = 24.0;
+/// Dull orange for the sort arrows and priorities in the header.
+const SORT_INDICATOR: u32 = 0xc08a52;
 const COL_WIDTH: f32 = 120.0;
 
 pub struct GridSpike {
@@ -185,17 +187,18 @@ impl GridSpike {
             .map(|col| {
                 let name = self.header(col);
                 let position = self.sort.iter().position(|(column, _)| *column == name);
-                let label = match position.map(|index| (index, self.sort[index].1)) {
-                    Some((index, ascending)) => {
-                        let arrow = if ascending { '\u{25b4}' } else { '\u{25be}' };
-                        if self.sort.len() > 1 {
-                            format!("{name} {arrow}{}", index + 1)
-                        } else {
-                            format!("{name} {arrow}")
-                        }
+                let indicator = position.map(|index| {
+                    let arrow = if self.sort[index].1 {
+                        '\u{25b4}'
+                    } else {
+                        '\u{25be}'
+                    };
+                    if self.sort.len() > 1 {
+                        format!("{arrow}{}", index + 1)
+                    } else {
+                        arrow.to_string()
                     }
-                    None => name.clone(),
-                };
+                });
                 div()
                     .id(("col-head", col))
                     .w(px(self.width(col)))
@@ -203,8 +206,9 @@ impl GridSpike {
                     .relative()
                     .px_2()
                     .py_1()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .border_r_1()
                     .border_color(rgb(BORDER))
                     .text_color(rgb(TEXT_DIM))
@@ -270,7 +274,24 @@ impl GridSpike {
                             })
                         }
                     })
-                    .child(label)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .child(name.clone()),
+                    )
+                    .when_some(indicator, |cell, indicator| {
+                        cell.child(
+                            div()
+                                .flex_none()
+                                // Clear the resize handle on the right edge.
+                                .pr(px(6.))
+                                .text_color(rgb(SORT_INDICATOR))
+                                .child(indicator),
+                        )
+                    })
                     .child(
                         div()
                             .id(("col-resize", col))
