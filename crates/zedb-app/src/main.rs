@@ -652,10 +652,14 @@ impl Workspace {
             .child(div().flex_1())
             .when_some(self.update_available.clone(), |bar, update| {
                 let phase = self.update_phase;
-                let label = match phase {
-                    UpdatePhase::Available => format!("Update available: v{}", update.version),
-                    UpdatePhase::Installing => format!("Downloading v{}...", update.version),
-                    UpdatePhase::Ready => "Restart to update".to_string(),
+                let (prefix, version) = match phase {
+                    UpdatePhase::Available => {
+                        ("Update available:", Some(format!("v{}", update.version)))
+                    }
+                    UpdatePhase::Installing => {
+                        ("Downloading", Some(format!("v{}...", update.version)))
+                    }
+                    UpdatePhase::Ready => ("Restart to update", None),
                 };
                 bar.child(
                     div()
@@ -663,8 +667,13 @@ impl Workspace {
                         .px_2()
                         .py_0p5()
                         .rounded(px(3.))
+                        .border_1()
+                        .border_color(rgb(TEXT_DIM))
                         .text_xs()
                         .text_color(rgb(TEXT_DIM))
+                        .flex()
+                        .items_center()
+                        .gap_1()
                         .when(phase != UpdatePhase::Installing, |pill| {
                             pill.hover(|pill| {
                                 pill.bg(rgb(BG)).text_color(rgb(TEXT)).cursor_pointer()
@@ -677,7 +686,10 @@ impl Workspace {
                                 },
                             ))
                         })
-                        .child(label),
+                        .child(prefix)
+                        .when_some(version, |pill, version| {
+                            pill.child(div().text_color(rgb(TEXT)).child(version))
+                        }),
                 )
             })
     }
