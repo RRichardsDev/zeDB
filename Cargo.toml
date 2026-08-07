@@ -26,10 +26,9 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 [patch.crates-io]
-# Vendored 0.5.1 with two zeDB patches to the code editor: document
-# colors render as text color (semantic highlighting) instead of swatch
-# boxes, and retrigger_completion() lets the app reopen the completion
-# popup when schema metadata arrives late.
+# Vendored 0.5.1 with one zeDB patch to the code editor:
+# retrigger_completion() lets the app reopen the completion popup when
+# schema metadata arrives after the trigger character was typed.
 gpui-component = { path = "vendor/gpui-component" }
 
 [profile.dev]

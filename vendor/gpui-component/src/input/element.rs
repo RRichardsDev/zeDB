@@ -422,7 +422,6 @@ impl TextElement {
         Self::layout_match_range(symbol_range, last_layout, bounds)
     }
 
-    #[allow(unused)]
     fn layout_document_colors(
         &self,
         document_colors: &[(Range<usize>, Hsla)],
@@ -787,57 +786,6 @@ impl TextElement {
         // Combine marker styles
         styles = gpui::combine_highlights(diagnostic_styles, styles).collect();
 
-        // zeDB patch: document colors tint the text itself (semantic
-        // highlighting) instead of painting swatch boxes behind it.
-        let document_color_styles: Vec<(Range<usize>, HighlightStyle)> = state
-            .lsp
-            .document_colors_for_range(text, visible_range)
-            .into_iter()
-            .map(|(range, color)| {
-                (
-                    range,
-                    HighlightStyle {
-                        color: Some(color),
-                        ..Default::default()
-                    },
-                )
-            })
-            .collect();
-        if !document_color_styles.is_empty() {
-            // Deterministic merge: the document color always wins the
-            // text color; every other attribute (underline etc.) of the
-            // underlying style is preserved.
-            let mut boundaries: Vec<usize> = Vec::new();
-            for (range, _) in styles.iter().chain(document_color_styles.iter()) {
-                boundaries.push(range.start);
-                boundaries.push(range.end);
-            }
-            boundaries.sort_unstable();
-            boundaries.dedup();
-            let mut merged: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
-            for window in boundaries.windows(2) {
-                let segment = window[0]..window[1];
-                let base = styles
-                    .iter()
-                    .find(|(range, _)| range.start < segment.end && segment.start < range.end)
-                    .map(|(_, style)| *style);
-                let over = document_color_styles
-                    .iter()
-                    .find(|(range, _)| range.start < segment.end && segment.start < range.end)
-                    .map(|(_, style)| *style);
-                match (base, over) {
-                    (Some(mut style), Some(over)) => {
-                        style.color = over.color;
-                        merged.push((segment, style));
-                    }
-                    (Some(style), None) => merged.push((segment, style)),
-                    (None, Some(over)) => merged.push((segment, over)),
-                    (None, None) => {}
-                }
-            }
-            styles = merged;
-        }
-
         Some(styles)
     }
 }
@@ -1068,7 +1016,7 @@ impl Element for TextElement {
                 let mut runs = vec![];
 
                 runs.extend(highlight_styles.iter().map(|(range, style)| {
-                    let mut run = text_run_for_highlight(&text_style, *style, range.len());
+                    let mut run = text_style.clone().highlight(*style).to_run(range.len());
                     if let Some(ime_marked_range) = &state.ime_marked_range {
                         if range.start >= ime_marked_range.start
                             && range.end <= ime_marked_range.end
@@ -1217,10 +1165,8 @@ impl Element for TextElement {
         let search_match_paths = self.layout_search_matches(&last_layout, &mut bounds, cx);
         let selection_path = self.layout_selections(&last_layout, &mut bounds, cx);
         let hover_highlight_path = self.layout_hover_highlight(&last_layout, &mut bounds, cx);
-        // zeDB patch: document colors are applied as text color in
-        // highlight_lines; never paint the swatch boxes.
-        let _ = &document_colors;
-        let document_color_paths = Vec::new();
+        let document_color_paths =
+            self.layout_document_colors(&document_colors, &last_layout, &bounds);
 
         let state = self.state.read(cx);
         let line_numbers = if state.mode.line_number() {
@@ -1545,23 +1491,6 @@ impl Element for TextElement {
     }
 }
 
-/// Build a shaped-text run from a highlight style.
-///
-/// `TextStyle::highlight` blends foreground colors. That is useful for translucent
-/// overlays, but semantic highlighting supplies the final foreground color and must
-/// reach the shaped glyph run unchanged.
-fn text_run_for_highlight(
-    text_style: &TextStyle,
-    highlight: HighlightStyle,
-    len: usize,
-) -> TextRun {
-    let mut run = text_style.clone().highlight(highlight).to_run(len);
-    if let Some(color) = highlight.color {
-        run.color = color;
-    }
-    run
-}
-
 /// Get the runs for the given range.
 ///
 /// The range is the byte range of the wrapped line.
@@ -1723,27 +1652,6 @@ mod tests {
         assert_runs(runs_for_range(&runs, 3, &(0..3)), &[1, 2]);
         assert_runs(runs_for_range(&runs, 3, &(2..10)), &[4, 1, 3]);
         assert_runs(runs_for_range(&runs, 9, &(0..8)), &[1, 7]);
-    }
-
-    #[test]
-    fn highlight_foreground_reaches_the_shaped_text_run_unchanged() {
-        let foreground = gpui::rgba(0x73d4a6ff).into();
-        let text_style = TextStyle {
-            color: gpui::rgba(0xe6edf3ff).into(),
-            ..Default::default()
-        };
-
-        let run = text_run_for_highlight(
-            &text_style,
-            HighlightStyle {
-                color: Some(foreground),
-                ..Default::default()
-            },
-            5,
-        );
-
-        assert_eq!(run.len, 5);
-        assert_eq!(run.color, foreground);
     }
 
     #[test]

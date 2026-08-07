@@ -2034,9 +2034,6 @@ impl Workspace {
                 }
                 this.schema_provider
                     .set_context(this.schema_cache.clone(), connection.database.clone());
-                for tab in &this.query_tabs {
-                    tab.editor.update(cx, |editor, cx| editor.refresh_lsp(cx));
-                }
                 this.start_health_poll(cx);
                 this.notice = Some(format!(
                     "Connected to {name} via {} ({reachable}/{total} nodes reachable)",
@@ -2277,7 +2274,6 @@ impl Workspace {
                         .map(|tab| (tab.id, tab.editor.clone()))
                         .collect();
                     for (id, editor) in editors {
-                        editor.update(cx, |editor, cx| editor.refresh_lsp(cx));
                         this.schedule_schema_analysis(id, editor, window, cx);
                     }
                     // If the user already typed the trigger (say `e.`)
@@ -2713,8 +2709,7 @@ impl Workspace {
                 .code_editor("sql")
                 .default_value(default_value);
             editor.lsp.completion_provider = Some(schema_provider.clone());
-            editor.lsp.hover_provider = Some(schema_provider.clone());
-            editor.lsp.document_color_provider = Some(schema_provider);
+            editor.lsp.hover_provider = Some(schema_provider);
             editor
         });
         cx.subscribe_in(

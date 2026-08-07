@@ -3,13 +3,12 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use anyhow::Result;
 use gpui::{App, Context, Task, Window};
 use gpui_component::{
-    input::{CompletionProvider, DocumentColorProvider, HoverProvider, InputState},
+    input::{CompletionProvider, HoverProvider, InputState},
     Rope,
 };
 use lsp_types::{
-    Color, ColorInformation, CompletionContext, CompletionItem, CompletionItemKind,
-    CompletionResponse, CompletionTextEdit, Hover, HoverContents, MarkupContent, MarkupKind,
-    Position, Range, TextEdit,
+    CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
+    Hover, HoverContents, MarkupContent, MarkupKind, Position, Range, TextEdit,
 };
 use zedb_ch::{
     schema_cache::{SchemaCache, SchemaSnapshot},
@@ -113,42 +112,6 @@ impl HoverProvider for SchemaProvider {
                 },
             );
         Task::ready(Ok(hover))
-    }
-}
-
-impl DocumentColorProvider for SchemaProvider {
-    fn document_colors(
-        &self,
-        text: &Rope,
-        _: &mut Window,
-        _: &mut App,
-    ) -> Task<Result<Vec<ColorInformation>>> {
-        let Some((snapshot, default_database)) = self.snapshot() else {
-            return Task::ready(Ok(Vec::new()));
-        };
-        let sql = text.to_string();
-        let colors = schema_intelligence::recognized_identifiers(
-            &snapshot,
-            default_database.as_deref(),
-            &sql,
-        )
-        .into_iter()
-        .map(|identifier| {
-            // A single muted light blue keeps recognized schema names
-            // legible without competing with SQL syntax highlighting.
-            let color = Color {
-                red: 0.56,
-                green: 0.78,
-                blue: 0.97,
-                alpha: 1.0,
-            };
-            ColorInformation {
-                range: byte_range_to_lsp(&sql, identifier.range),
-                color,
-            }
-        })
-        .collect();
-        Task::ready(Ok(colors))
     }
 }
 
