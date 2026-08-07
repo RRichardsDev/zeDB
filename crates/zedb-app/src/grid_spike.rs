@@ -858,8 +858,11 @@ impl Render for GridSpike {
                 }),
             )
             .child(self.header_row(scroll_x, cx))
-            .when_some(filter_panel, |root, panel| root.child(panel))
             .child(div().flex_1().w_full().min_h_0().child(list))
             .child(status)
+            .when_some(filter_panel, |root, panel| {
+                // Deferred so the popover paints above the row list.
+                root.child(gpui::deferred(panel))
+            })
     }
 }
