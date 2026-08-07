@@ -2075,6 +2075,10 @@ impl Workspace {
                 }
                 this.schema_provider
                     .set_context(this.schema_cache.clone(), connection.database.clone());
+                // Land in the query view; the connection screen's job
+                // is done.
+                this.show_fleet = false;
+                this.show_query_editor = true;
                 this.start_health_poll(cx);
                 this.notice = Some(format!(
                     "Connected to {name} via {} ({reachable}/{total} nodes reachable)",
