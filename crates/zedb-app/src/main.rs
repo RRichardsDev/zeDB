@@ -2821,9 +2821,13 @@ impl Workspace {
         cx.subscribe_in(
             &result_grid,
             window,
-            move |this, _, event: &grid_spike::GridEvent, window, cx| {
-                let grid_spike::GridEvent::SortRequested { sort } = event;
-                this.grid_sort_requested(id, sort.clone(), window, cx);
+            move |this, _, event: &grid_spike::GridEvent, window, cx| match event {
+                grid_spike::GridEvent::SortRequested { sort } => {
+                    this.grid_sort_requested(id, sort.clone(), window, cx);
+                }
+                grid_spike::GridEvent::FilterRequested { column, predicate } => {
+                    this.grid_filter_requested(id, column.clone(), predicate.clone(), window, cx);
+                }
             },
         )
         .detach();
@@ -3286,9 +3290,49 @@ impl Workspace {
             return;
         };
         let rewritten = zedb_ch::schema_intelligence::set_order_by(&statement, &sort);
+        self.apply_rewritten_statement(statement, rewritten, window, cx);
+    }
+
+    /// A grid header asked for a filter change on the displayed statement.
+    fn grid_filter_requested(
+        &mut self,
+        tab_id: usize,
+        column: String,
+        predicate: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.query_abort.is_some() {
+            return;
+        }
+        let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+        let Some(statement) = tab.displayed_statement.clone() else {
+            return;
+        };
+        let rewritten = zedb_ch::schema_intelligence::set_column_filter(
+            &statement,
+            &column,
+            predicate.as_deref(),
+        );
+        self.apply_rewritten_statement(statement, rewritten, window, cx);
+    }
+
+    /// Mirror a rewritten statement into the editor and re-run it.
+    fn apply_rewritten_statement(
+        &mut self,
+        statement: String,
+        rewritten: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if rewritten == statement {
             return;
         }
+        let Some(tab) = self.query_tabs.get(self.active_query_tab) else {
+            return;
+        };
         let editor = tab.editor.clone();
         let value = editor.read(cx).value().to_string();
         if value.contains(&statement) {
@@ -3296,7 +3340,7 @@ impl Workspace {
             editor.update(cx, |editor, cx| editor.set_value(updated, window, cx));
         } else {
             self.flash_warning(
-                "Query changed since it ran; sorting the last executed statement",
+                "Query changed since it ran; rewriting the last executed statement",
                 cx,
             );
         }
@@ -3491,8 +3535,11 @@ impl Workspace {
                 }
                 if let Some(statement) = tab.displayed_statement.clone() {
                     let sort = zedb_ch::schema_intelligence::top_level_order_by(&statement);
-                    tab.result_grid
-                        .update(cx, |grid, cx| grid.set_sort(sort, cx));
+                    let filtered = zedb_ch::schema_intelligence::filtered_columns(&statement);
+                    tab.result_grid.update(cx, |grid, cx| {
+                        grid.set_sort(sort, cx);
+                        grid.set_filtered(filtered, cx);
+                    });
                 }
                 this.refresh_schema_after_statements(&successful_statements);
                 cx.notify();
@@ -4990,6 +5037,19 @@ impl Render for Workspace {
                     grid.update(cx, |grid, cx| grid.header_sort_action(action, cx));
                 }
             }))
+            .on_action(
+                cx.listener(|this, action: &grid_spike::HeaderFilter, window, cx| {
+                    if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                        let prefill = tab.displayed_statement.as_deref().and_then(|statement| {
+                            zedb_ch::schema_intelligence::column_filter(statement, &action.column)
+                        });
+                        let grid = tab.result_grid.clone();
+                        grid.update(cx, |grid, cx| {
+                            grid.open_filter_panel(action.column.clone(), prefill, window, cx)
+                        });
+                    }
+                }),
+            )
             .on_action(cx.listener(|this, action: &ViewObjectDdl, window, cx| {
                 let object = this
                     .schema_databases

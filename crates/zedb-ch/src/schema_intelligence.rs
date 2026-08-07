@@ -1213,3 +1213,235 @@ mod order_by_tests {
         assert!(top_level_order_by("SELECT * FROM t").is_empty());
     }
 }
+
+/// The byte span of the top-level WHERE clause content (after the
+/// keyword, through the end of its predicate), plus where a new clause
+/// would be inserted when none exists.
+fn top_level_where_span(sql: &str) -> (Option<(usize, usize, usize)>, Option<usize>) {
+    let tokens = tokenize(sql);
+    let mut depth = 0i32;
+    let mut clause = None;
+    let mut insert_at = None;
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = &tokens[index];
+        match token.text {
+            "(" => depth += 1,
+            ")" => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 {
+            let upper = token.text.to_ascii_uppercase();
+            if clause.is_none() && upper == "WHERE" {
+                let keyword_start = token.range.start;
+                let content_start = token.range.end;
+                let mut inner_depth = 0i32;
+                let mut end = sql.len();
+                let mut cursor = index + 1;
+                while let Some(next) = tokens.get(cursor) {
+                    match next.text {
+                        "(" => inner_depth += 1,
+                        ")" => inner_depth -= 1,
+                        _ => {}
+                    }
+                    if inner_depth == 0 {
+                        let next_upper = next.text.to_ascii_uppercase();
+                        if next.text == ";"
+                            || matches!(
+                                next_upper.as_str(),
+                                "GROUP"
+                                    | "HAVING"
+                                    | "WINDOW"
+                                    | "ORDER"
+                                    | "LIMIT"
+                                    | "OFFSET"
+                                    | "SETTINGS"
+                                    | "FORMAT"
+                                    | "INTO"
+                                    | "UNION"
+                            )
+                        {
+                            end = next.range.start;
+                            break;
+                        }
+                    }
+                    cursor += 1;
+                }
+                clause = Some((keyword_start, content_start, end));
+            }
+            if insert_at.is_none()
+                && (token.text == ";"
+                    || matches!(
+                        upper.as_str(),
+                        "GROUP"
+                            | "HAVING"
+                            | "WINDOW"
+                            | "ORDER"
+                            | "LIMIT"
+                            | "OFFSET"
+                            | "SETTINGS"
+                            | "FORMAT"
+                            | "INTO"
+                    ))
+            {
+                insert_at = Some(token.range.start);
+            }
+        }
+        index += 1;
+    }
+    (clause, insert_at)
+}
+
+/// Split a WHERE body into top-level AND conjuncts. A top-level OR
+/// makes the whole body one opaque conjunct (parenthesised on rebuild).
+fn split_conjuncts(content: &str) -> Vec<String> {
+    let tokens = tokenize(content);
+    let mut depth = 0i32;
+    let mut boundaries = Vec::new();
+    for token in &tokens {
+        match token.text {
+            "(" => depth += 1,
+            ")" => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 && token.text.eq_ignore_ascii_case("or") {
+            let trimmed = content.trim();
+            if trimmed.is_empty() {
+                return Vec::new();
+            }
+            return vec![format!("({trimmed})")];
+        }
+        if depth == 0 && token.text.eq_ignore_ascii_case("and") {
+            boundaries.push((token.range.start, token.range.end));
+        }
+    }
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (boundary_start, boundary_end) in boundaries {
+        parts.push(content[start..boundary_start].trim().to_string());
+        start = boundary_end;
+    }
+    parts.push(content[start..].trim().to_string());
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
+fn managed_prefix(column: &str) -> String {
+    format!("`{}`", column.replace('`', ""))
+}
+
+/// Replace, add, or remove this column's managed filter conjunct in the
+/// top-level WHERE. `predicate` is the full conjunct (backtick-quoted
+/// column first); hand-written conjuncts survive untouched.
+pub fn set_column_filter(sql: &str, column: &str, predicate: Option<&str>) -> String {
+    let (clause, insert_at) = top_level_where_span(sql);
+    let prefix = managed_prefix(column);
+    let mut conjuncts = match clause {
+        Some((_, content_start, end)) => split_conjuncts(&sql[content_start..end]),
+        None => Vec::new(),
+    };
+    conjuncts.retain(|conjunct| !conjunct.trim_start().starts_with(&prefix));
+    if let Some(predicate) = predicate {
+        conjuncts.push(predicate.to_string());
+    }
+    let new_clause = (!conjuncts.is_empty()).then(|| format!("WHERE {}", conjuncts.join(" AND ")));
+
+    let join = |head: &str, middle: Option<&str>, rest: &str| {
+        let mut out = head.trim_end().to_string();
+        if let Some(middle) = middle {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(middle);
+        }
+        let rest = rest.trim_start();
+        if !rest.is_empty() {
+            if !rest.starts_with(';') {
+                out.push(' ');
+            }
+            out.push_str(rest);
+        }
+        out
+    };
+
+    match clause {
+        Some((keyword_start, _, end)) => {
+            join(&sql[..keyword_start], new_clause.as_deref(), &sql[end..])
+        }
+        None => match new_clause {
+            Some(new_clause) => match insert_at {
+                Some(position) => join(&sql[..position], Some(&new_clause), &sql[position..]),
+                None => join(sql, Some(&new_clause), ""),
+            },
+            None => sql.to_string(),
+        },
+    }
+}
+
+/// This column's managed filter conjunct, if the statement has one.
+pub fn column_filter(sql: &str, column: &str) -> Option<String> {
+    let (clause, _) = top_level_where_span(sql);
+    let (_, content_start, end) = clause?;
+    let prefix = managed_prefix(column);
+    split_conjuncts(&sql[content_start..end])
+        .into_iter()
+        .find(|conjunct| conjunct.trim_start().starts_with(&prefix))
+}
+
+/// Columns with managed filter conjuncts, for the header indicators.
+pub fn filtered_columns(sql: &str) -> Vec<String> {
+    let Some((_, content_start, end)) = top_level_where_span(sql).0 else {
+        return Vec::new();
+    };
+    split_conjuncts(&sql[content_start..end])
+        .into_iter()
+        .filter_map(|conjunct| {
+            let trimmed = conjunct.trim_start();
+            let inner = trimmed.strip_prefix('`')?;
+            let close = inner.find('`')?;
+            Some(inner[..close].to_string())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    #[test]
+    fn adds_replaces_and_removes_managed_filters() {
+        let sql = "SELECT * FROM t ORDER BY id LIMIT 5";
+        let filtered = set_column_filter(sql, "kind", Some("`kind` IN ('a', 'b')"));
+        assert_eq!(
+            filtered,
+            "SELECT * FROM t\nWHERE `kind` IN ('a', 'b') ORDER BY id LIMIT 5"
+        );
+
+        let replaced = set_column_filter(&filtered, "kind", Some("`kind` = 'c'"));
+        assert_eq!(
+            replaced,
+            "SELECT * FROM t\nWHERE `kind` = 'c' ORDER BY id LIMIT 5"
+        );
+        assert_eq!(
+            column_filter(&replaced, "kind").as_deref(),
+            Some("`kind` = 'c'")
+        );
+        assert_eq!(filtered_columns(&replaced), vec!["kind".to_string()]);
+
+        assert_eq!(
+            set_column_filter(&replaced, "kind", None),
+            "SELECT * FROM t ORDER BY id LIMIT 5"
+        );
+    }
+
+    #[test]
+    fn preserves_hand_written_conjuncts_and_or_bodies() {
+        let sql = "SELECT * FROM t WHERE day > '2026-01-01' AND kind != 'x'";
+        let filtered = set_column_filter(sql, "kind", Some("`kind` = 'a'"));
+        assert!(filtered.contains("day > '2026-01-01' AND kind != 'x' AND `kind` = 'a'"));
+
+        let or_sql = "SELECT * FROM t WHERE a = 1 OR b = 2";
+        let wrapped = set_column_filter(or_sql, "kind", Some("`kind` = 'a'"));
+        assert!(wrapped.contains("WHERE (a = 1 OR b = 2) AND `kind` = 'a'"));
+    }
+}

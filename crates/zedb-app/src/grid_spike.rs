@@ -2,22 +2,30 @@
 //! multi-million-row results scroll smoothly with flat memory. Started as
 //! the M2 spike; findings are in docs/devlog.md.
 
+use gpui::Entity;
 use gpui::{
     actions, div, prelude::*, px, rgb, uniform_list, Action, App, ClipboardItem, Context,
     EventEmitter, FocusHandle, Focusable, KeyBinding, ListHorizontalSizingBehavior, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, UniformListScrollHandle, Window,
 };
+use gpui_component::input::{Input, InputState};
 use gpui_component::menu::ContextMenuExt as _;
+use gpui_component::Sizable as _;
 use zedb_core::{ColumnMeta, Value};
 
 use crate::theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, TEXT, TEXT_DIM};
 
 actions!(grid_spike, [Copy]);
 
-/// A header click asking the owning tab to re-sort the query.
+/// A header interaction asking the owning tab to rewrite the query.
 pub enum GridEvent {
     /// The complete desired sort, in priority order; empty clears it.
     SortRequested { sort: Vec<(String, bool)> },
+    /// A full managed WHERE conjunct for the column, or None to clear.
+    FilterRequested {
+        column: String,
+        predicate: Option<String>,
+    },
 }
 
 /// Header context-menu choice; routed back via the workspace so it
@@ -30,6 +38,27 @@ pub struct HeaderSort {
     pub direction: u8,
     /// Merge into the existing sort instead of replacing it.
     pub multi: bool,
+}
+
+/// Header context-menu request to open the filter panel; routed via
+/// the workspace, which owns the statement the prefill comes from.
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+pub struct HeaderFilter {
+    pub column: String,
+}
+
+/// The open filter popover under one header.
+struct FilterPanel {
+    column: String,
+    numeric: bool,
+    mode: FilterMode,
+}
+
+enum FilterMode {
+    /// Distinct dictionary values with their checked state.
+    Checkboxes(Vec<(String, bool)>),
+    Text(Entity<InputState>),
 }
 
 const ROW_HEIGHT: f32 = 24.0;
@@ -55,6 +84,9 @@ pub struct GridSpike {
     /// A result whose header arrived but whose rows have not: the old
     /// rows stay visible until the replacement starts streaming.
     pending: Option<(Vec<ColumnMeta>, Option<usize>)>,
+    /// Columns with managed filters, from the executed SQL.
+    filtered: Vec<String>,
+    filter_panel: Option<FilterPanel>,
 }
 
 impl GridSpike {
@@ -73,6 +105,8 @@ impl GridSpike {
             resizing_column: None,
             sort: Vec::new(),
             pending: None,
+            filtered: Vec::new(),
+            filter_panel: None,
         }
     }
 
@@ -134,6 +168,159 @@ impl GridSpike {
         }
     }
 
+    /// Set the filter indicators to what the executed SQL actually says.
+    pub fn set_filtered(&mut self, filtered: Vec<String>, cx: &mut Context<Self>) {
+        self.filtered = filtered;
+        cx.notify();
+    }
+
+    /// Open the filter popover for a column. Dictionary columns
+    /// (LowCardinality/Enum) with ten or fewer distinct values get
+    /// checkboxes; everything else gets a text field.
+    pub fn open_filter_panel(
+        &mut self,
+        column: String,
+        prefill: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.columns.iter().position(|meta| meta.name == column) else {
+            return;
+        };
+        let type_name = self.columns[index].type_name.clone();
+        let numeric = ["Int", "UInt", "Float", "Decimal"]
+            .iter()
+            .any(|kind| type_name.contains(kind))
+            && !type_name.contains("String");
+        let dictionary =
+            type_name.contains("LowCardinality") || type_name.trim_start().starts_with("Enum");
+
+        let values = if type_name.trim_start().starts_with("Enum")
+            || type_name.contains("Enum8")
+            || type_name.contains("Enum16")
+        {
+            enum_variants(&type_name)
+        } else if dictionary {
+            let mut distinct: Vec<String> = Vec::new();
+            for row in &self.rows {
+                if let Some(value) = row.get(index) {
+                    let text = value.to_string();
+                    if !distinct.contains(&text) {
+                        distinct.push(text);
+                        if distinct.len() > 10 {
+                            break;
+                        }
+                    }
+                }
+            }
+            distinct
+        } else {
+            Vec::new()
+        };
+
+        let prechecked: Vec<String> = prefill.as_deref().map(quoted_strings).unwrap_or_default();
+        let mode = if dictionary && !values.is_empty() && values.len() <= 10 {
+            FilterMode::Checkboxes(
+                values
+                    .into_iter()
+                    .map(|value| {
+                        let checked = prechecked.contains(&value);
+                        (value, checked)
+                    })
+                    .collect(),
+            )
+        } else {
+            let initial = prefill
+                .as_deref()
+                .map(|conjunct| {
+                    let text = quoted_strings(conjunct)
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| {
+                            conjunct.rsplit(' ').next().unwrap_or_default().to_string()
+                        });
+                    text.trim_matches('%').to_string()
+                })
+                .unwrap_or_default();
+            FilterMode::Text(cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("value, %pattern%, or > 10")
+                    .default_value(initial)
+            }))
+        };
+        self.filter_panel = Some(FilterPanel {
+            column,
+            numeric,
+            mode,
+        });
+        cx.notify();
+    }
+
+    fn apply_filter_panel(&mut self, cx: &mut Context<Self>) {
+        let Some(panel) = self.filter_panel.take() else {
+            return;
+        };
+        let quote = |value: &str, numeric: bool| {
+            if numeric {
+                value.to_string()
+            } else {
+                format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+            }
+        };
+        let prefix = format!("`{}`", panel.column.replace('`', ""));
+        let predicate = match &panel.mode {
+            FilterMode::Checkboxes(values) => {
+                let selected: Vec<&String> = values
+                    .iter()
+                    .filter(|(_, checked)| *checked)
+                    .map(|(value, _)| value)
+                    .collect();
+                if selected.is_empty() || selected.len() == values.len() {
+                    None
+                } else if selected.len() == 1 {
+                    Some(format!("{prefix} = {}", quote(selected[0], panel.numeric)))
+                } else {
+                    let list = selected
+                        .iter()
+                        .map(|value| quote(value, panel.numeric))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    Some(format!("{prefix} IN ({list})"))
+                }
+            }
+            FilterMode::Text(input) => {
+                let text = input.read(cx).value().trim().to_string();
+                if text.is_empty() {
+                    None
+                } else if ["<=", ">=", "!=", "<", ">", "="]
+                    .iter()
+                    .any(|operator| text.starts_with(operator))
+                {
+                    Some(format!("{prefix} {text}"))
+                } else if panel.numeric && text.parse::<f64>().is_ok() {
+                    Some(format!("{prefix} = {text}"))
+                } else if text.contains('%') {
+                    Some(format!("{prefix} LIKE {}", quote(&text, false)))
+                } else {
+                    Some(format!(
+                        "{prefix} LIKE {}",
+                        quote(&format!("%{text}%"), false)
+                    ))
+                }
+            }
+        };
+        // Optimistic indicator; completion re-syncs from the SQL.
+        self.filtered.retain(|name| *name != panel.column);
+        if predicate.is_some() {
+            self.filtered.push(panel.column.clone());
+        }
+        cx.emit(GridEvent::FilterRequested {
+            column: panel.column,
+            predicate,
+        });
+        cx.notify();
+    }
+
     /// Set the sort indicator to what the executed SQL actually says.
     pub fn set_sort(&mut self, sort: Vec<(String, bool)>, cx: &mut Context<Self>) {
         self.sort = sort;
@@ -191,18 +378,25 @@ impl GridSpike {
             .map(|col| {
                 let name = self.header(col);
                 let position = self.sort.iter().position(|(column, _)| *column == name);
-                let indicator = position.map(|index| {
-                    let arrow = if self.sort[index].1 {
-                        '\u{25b4}'
-                    } else {
-                        '\u{25be}'
-                    };
-                    if self.sort.len() > 1 {
-                        format!("{arrow}{}", index + 1)
-                    } else {
-                        arrow.to_string()
-                    }
-                });
+                let mut indicator = position
+                    .map(|index| {
+                        let arrow = if self.sort[index].1 {
+                            '\u{25b4}'
+                        } else {
+                            '\u{25be}'
+                        };
+                        if self.sort.len() > 1 {
+                            format!("{arrow}{}", index + 1)
+                        } else {
+                            arrow.to_string()
+                        }
+                    })
+                    .unwrap_or_default();
+                if self.filtered.contains(&name) {
+                    // Nabla stands in for a funnel.
+                    indicator.push('\u{2207}');
+                }
+                let indicator = (!indicator.is_empty()).then_some(indicator);
                 div()
                     .id(("col-head", col))
                     .w(px(self.width(col)))
@@ -222,23 +416,24 @@ impl GridSpike {
                         let column = this.header(col);
                         let mut sort = this.sort.clone();
                         if event.modifiers().shift {
-                            // Shift-click: add or cycle within the list.
+                            // Shift-click: add or cycle within the list,
+                            // descending first.
                             match sort.iter().position(|(name, _)| *name == column) {
-                                Some(index) if sort[index].1 => sort[index].1 = false,
+                                Some(index) if !sort[index].1 => sort[index].1 = true,
                                 Some(index) => {
                                     sort.remove(index);
                                 }
-                                None => sort.push((column, true)),
+                                None => sort.push((column, false)),
                             }
                         } else {
                             // Plain click: this column only, cycling
-                            // ascending, descending, none.
+                            // descending, ascending, none.
                             sort = match sort.as_slice() {
-                                [(name, true)] if *name == column => {
-                                    vec![(column, false)]
+                                [(name, false)] if *name == column => {
+                                    vec![(column, true)]
                                 }
-                                [(name, false)] if *name == column => Vec::new(),
-                                _ => vec![(column, true)],
+                                [(name, true)] if *name == column => Vec::new(),
+                                _ => vec![(column, false)],
                             };
                         }
                         this.sort = sort.clone();
@@ -251,20 +446,21 @@ impl GridSpike {
                             let multi = window.modifiers().shift;
                             let label = if multi { "Add to order by" } else { "Order by" };
                             let column = column.clone();
+                            let filter_column = column.clone();
                             menu.submenu(label, window, cx, move |menu, _, _| {
                                 menu.menu(
-                                    "Ascending",
-                                    Box::new(HeaderSort {
-                                        column: column.clone(),
-                                        direction: 1,
-                                        multi,
-                                    }),
-                                )
-                                .menu(
                                     "Descending",
                                     Box::new(HeaderSort {
                                         column: column.clone(),
                                         direction: 2,
+                                        multi,
+                                    }),
+                                )
+                                .menu(
+                                    "Ascending",
+                                    Box::new(HeaderSort {
+                                        column: column.clone(),
+                                        direction: 1,
                                         multi,
                                     }),
                                 )
@@ -278,6 +474,12 @@ impl GridSpike {
                                     }),
                                 )
                             })
+                            .menu(
+                                "Filter\u{2026}",
+                                Box::new(HeaderFilter {
+                                    column: filter_column,
+                                }),
+                            )
                         }
                     })
                     .child(
@@ -351,6 +553,36 @@ impl GridSpike {
                 )
             })
     }
+}
+
+/// The quoted variant names of an Enum type string.
+fn enum_variants(type_name: &str) -> Vec<String> {
+    quoted_strings(type_name)
+}
+
+/// Every '...'-quoted string in the text, unescaped.
+fn quoted_strings(text: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '\'' {
+            continue;
+        }
+        let mut value = String::new();
+        while let Some(character) = chars.next() {
+            match character {
+                '\\' => {
+                    if let Some(escaped) = chars.next() {
+                        value.push(escaped);
+                    }
+                }
+                '\'' => break,
+                other => value.push(other),
+            }
+        }
+        values.push(value);
+    }
+    values
 }
 
 impl EventEmitter<GridEvent> for GridSpike {}
@@ -458,10 +690,141 @@ impl Render for GridSpike {
             }
         };
 
+        let filter_panel = self.filter_panel.as_ref().map(|panel| {
+            let column_index = self
+                .columns
+                .iter()
+                .position(|meta| meta.name == panel.column)
+                .unwrap_or(0);
+            let offset: f32 = (0..column_index).map(|col| self.width(col)).sum();
+            let left = (offset + f32::from(scroll_x)).max(0.0);
+            let mut body = div()
+                .absolute()
+                .left(px(left))
+                .top(px(ROW_HEIGHT + 2.0))
+                .w(px(230.))
+                .p_2()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .rounded(px(4.))
+                .bg(rgb(BG_SIDEBAR))
+                .border_1()
+                .border_color(rgb(BORDER))
+                .text_xs()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .text_color(rgb(TEXT_DIM))
+                        .child(format!("Filter {}", panel.column))
+                        .child(
+                            div()
+                                .id("filter-close")
+                                .px_1()
+                                .rounded(px(3.))
+                                .hover(|close| close.bg(rgb(0x303640)).cursor_pointer())
+                                .child("\u{00d7}")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.filter_panel = None;
+                                    cx.notify();
+                                })),
+                        ),
+                );
+            match &panel.mode {
+                FilterMode::Checkboxes(values) => {
+                    for (index, (value, checked)) in values.iter().enumerate() {
+                        let glyph = if *checked { "\u{2611}" } else { "\u{2610}" };
+                        body = body.child(
+                            div()
+                                .id(("filter-check", index))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .px_1()
+                                .rounded(px(3.))
+                                .cursor_pointer()
+                                .hover(|row| row.bg(rgb(0x2a2f37)))
+                                .child(div().flex_none().child(glyph))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .child(value.clone()),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(panel) = this.filter_panel.as_mut() {
+                                        if let FilterMode::Checkboxes(values) = &mut panel.mode {
+                                            if let Some(entry) = values.get_mut(index) {
+                                                entry.1 = !entry.1;
+                                            }
+                                        }
+                                    }
+                                    cx.notify();
+                                })),
+                        );
+                    }
+                }
+                FilterMode::Text(input) => {
+                    body = body.child(Input::new(input).small());
+                }
+            }
+            body.child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap_1()
+                    .pt_1()
+                    .child(
+                        div()
+                            .id("filter-clear")
+                            .px_2()
+                            .py_0p5()
+                            .rounded(px(3.))
+                            .text_color(rgb(TEXT_DIM))
+                            .hover(|button| {
+                                button
+                                    .bg(rgb(0x303640))
+                                    .text_color(rgb(TEXT))
+                                    .cursor_pointer()
+                            })
+                            .child("Clear")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(panel) = this.filter_panel.take() {
+                                    this.filtered.retain(|name| *name != panel.column);
+                                    cx.emit(GridEvent::FilterRequested {
+                                        column: panel.column,
+                                        predicate: None,
+                                    });
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("filter-apply")
+                            .px_2()
+                            .py_0p5()
+                            .rounded(px(3.))
+                            .bg(rgb(0x2c3a4d))
+                            .text_color(rgb(TEXT))
+                            .hover(|button| button.bg(rgb(0x37485f)).cursor_pointer())
+                            .child("Apply")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.apply_filter_panel(cx);
+                            })),
+                    ),
+            )
+        });
+
         div()
             .size_full()
             .flex()
             .flex_col()
+            .relative()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
             .text_sm()
@@ -489,6 +852,7 @@ impl Render for GridSpike {
                 }),
             )
             .child(self.header_row(scroll_x, cx))
+            .when_some(filter_panel, |root, panel| root.child(panel))
             .child(div().flex_1().w_full().min_h_0().child(list))
             .child(status)
     }

@@ -20,9 +20,16 @@ GitHub release notes.
   statement re-runs on the server. Clicks cycle ascending, descending,
   and no sort; shift-click builds multi-column sorts with numbered
   arrows; the indicators always reflect the SQL that actually ran.
-- Right-click a result header for an "Order by" submenu (Ascending,
-  Descending, Clear); with shift held it becomes "Add to order by" for
-  multi-column sorts.
+- Right-click a result header for an "Order by" submenu (Descending,
+  Ascending, Clear); with shift held it becomes "Add to order by" for
+  multi-column sorts. Header clicks now cycle descending first.
+- Right-click a result header for "Filter...": dictionary columns
+  (LowCardinality/Enum) with ten or fewer distinct values get a
+  checkbox list, everything else a text field (plain text means
+  contains, %patterns% and operators like > 10 pass through). Filters
+  become managed conjuncts in the query's top-level WHERE, hand-written
+  predicates survive, filtered headers show an orange marker, and the
+  statement re-runs like header sorts do.
 - Re-running keeps the previous results on screen (with a "running"
   hint in the header) until replacement rows stream in, and header
   tiles show a hand cursor.
