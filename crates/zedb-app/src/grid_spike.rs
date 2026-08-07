@@ -69,6 +69,8 @@ const ROW_HEIGHT: f32 = 24.0;
 const SORT_INDICATOR: u32 = 0xc08a52;
 /// Muted purple ring around a filtered column's header.
 const FILTER_BORDER: u32 = 0x6f5b99;
+/// Muted red for the date part of temporal values.
+const DATE_TINT: u32 = 0xb56b6b;
 const COL_WIDTH: f32 = 120.0;
 
 pub struct GridSpike {
@@ -394,6 +396,18 @@ impl GridSpike {
             .unwrap_or_default()
     }
 
+    /// How a temporal cell splits for tinting: (date, rest-of-value).
+    fn cell_temporal_parts(&self, row: usize, column: usize) -> Option<(String, String)> {
+        match self.rows.get(row).and_then(|row| row.get(column))? {
+            Value::Date(date) => Some((date.to_string(), String::new())),
+            Value::DateTime(time) => Some((
+                time.format("%Y-%m-%d").to_string(),
+                time.format(" %H:%M:%S%.f").to_string(),
+            )),
+            _ => None,
+        }
+    }
+
     fn cell_is_null(&self, row: usize, column: usize) -> bool {
         matches!(
             self.rows.get(row).and_then(|row| row.get(column)),
@@ -716,7 +730,26 @@ impl Render for GridSpike {
                                         this.selected = Some((row, col));
                                         cx.notify();
                                     }))
-                                    .child(this.cell(row, col))
+                                    .map(|d| match this.cell_temporal_parts(row, col) {
+                                        Some((date, time)) => d
+                                            .flex()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .flex_none()
+                                                    .text_color(rgb(DATE_TINT))
+                                                    .child(date),
+                                            )
+                                            .when(!time.is_empty(), |d| {
+                                                d.child(
+                                                    div()
+                                                        .flex_none()
+                                                        .text_color(rgb(TEXT_DIM))
+                                                        .child(time),
+                                                )
+                                            }),
+                                        None => d.child(this.cell(row, col)),
+                                    })
                             })
                             .collect();
                         div()
