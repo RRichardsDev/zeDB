@@ -16,9 +16,17 @@ GitHub release notes.
   everything matching.
 - Result grid columns are drag-resizable from the header dividers.
 - Click a result column header to sort by it: the query's top-level
-  ORDER BY is rewritten in the editor and just that statement re-runs
-  on the server. Clicks cycle ascending, descending, and no sort; the
-  header arrow always reflects the SQL that actually ran.
+  ORDER BY is rewritten in the editor (on its own line) and just that
+  statement re-runs on the server. Clicks cycle ascending, descending,
+  and no sort; shift-click builds multi-column sorts with numbered
+  arrows; the indicators always reflect the SQL that actually ran.
+- Re-running keeps the previous results on screen (with a "running"
+  hint in the header) until replacement rows stream in, and header
+  tiles show a hand cursor.
+- Read/size progress in the status bar resets per statement instead of
+  carrying a previous statement's totals; the vim mode chip reads
+  "-- INSERT --" so it can't be mistaken for query output; NULL cells
+  render muted and italic.
 
 ## v0.1.4 - 2026-08-07
 

@@ -15,11 +15,8 @@ actions!(grid_spike, [Copy]);
 
 /// A header click asking the owning tab to re-sort the query.
 pub enum GridEvent {
-    SortRequested {
-        column: String,
-        /// Some(true) ascending, Some(false) descending, None to clear.
-        ascending: Option<bool>,
-    },
+    /// The complete desired sort, in priority order; empty clears it.
+    SortRequested { sort: Vec<(String, bool)> },
 }
 
 const ROW_HEIGHT: f32 = 24.0;
@@ -39,7 +36,10 @@ pub struct GridSpike {
     /// An active header-divider drag: (column, start width, start mouse x).
     resizing_column: Option<(usize, f32, f32)>,
     /// The sort the displayed result actually ran with, by column name.
-    sort: Option<(String, bool)>,
+    sort: Vec<(String, bool)>,
+    /// A result whose header arrived but whose rows have not: the old
+    /// rows stay visible until the replacement starts streaming.
+    pending: Option<(Vec<ColumnMeta>, Option<usize>)>,
 }
 
 impl GridSpike {
@@ -56,7 +56,8 @@ impl GridSpike {
             selected: None,
             col_widths: Vec::new(),
             resizing_column: None,
-            sort: None,
+            sort: Vec::new(),
+            pending: None,
         }
     }
 
@@ -66,29 +67,39 @@ impl GridSpike {
         requested_rows: Option<usize>,
         cx: &mut Context<Self>,
     ) {
-        self.col_widths = vec![COL_WIDTH; columns.len()];
-        self.columns = columns;
-        self.rows = Vec::new();
-        self.requested_rows = requested_rows;
-        self.result_complete = false;
-        self.result_capped = false;
-        self.selected = None;
-        self.scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        // Keep the old result on screen until the replacement streams in.
+        self.pending = Some((columns, requested_rows));
         cx.notify();
     }
 
+    /// Swap the pending result in, discarding what was displayed.
+    fn adopt_pending(&mut self) {
+        if let Some((columns, requested_rows)) = self.pending.take() {
+            self.col_widths = vec![COL_WIDTH; columns.len()];
+            self.columns = columns;
+            self.rows = Vec::new();
+            self.requested_rows = requested_rows;
+            self.result_complete = false;
+            self.result_capped = false;
+            self.selected = None;
+            self.scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        }
+    }
+
     pub fn append_rows(&mut self, batch: Vec<Vec<Value>>, cx: &mut Context<Self>) {
+        self.adopt_pending();
         self.rows.extend(batch);
         cx.notify();
     }
 
     /// Set the sort indicator to what the executed SQL actually says.
-    pub fn set_sort(&mut self, sort: Option<(String, bool)>, cx: &mut Context<Self>) {
+    pub fn set_sort(&mut self, sort: Vec<(String, bool)>, cx: &mut Context<Self>) {
         self.sort = sort;
         cx.notify();
     }
 
     pub fn finish_result(&mut self, capped: bool, cx: &mut Context<Self>) {
+        self.adopt_pending();
         self.result_complete = true;
         self.result_capped = capped;
         cx.notify();
@@ -116,6 +127,13 @@ impl GridSpike {
             .unwrap_or_default()
     }
 
+    fn cell_is_null(&self, row: usize, column: usize) -> bool {
+        matches!(
+            self.rows.get(row).and_then(|row| row.get(column)),
+            Some(Value::Null)
+        )
+    }
+
     fn cell(&self, row: usize, column: usize) -> String {
         self.rows
             .get(row)
@@ -130,20 +148,17 @@ impl GridSpike {
         let cells: Vec<_> = (0..column_count)
             .map(|col| {
                 let name = self.header(col);
-                let sorted = self
-                    .sort
-                    .as_ref()
-                    .filter(|(column, _)| *column == name)
-                    .map(|(_, ascending)| *ascending);
-                let label = match sorted {
-                    Some(true) => format!("{name} \u{25b4}"),
-                    Some(false) => format!("{name} \u{25be}"),
+                let position = self.sort.iter().position(|(column, _)| *column == name);
+                let label = match position.map(|index| (index, self.sort[index].1)) {
+                    Some((index, ascending)) => {
+                        let arrow = if ascending { '\u{25b4}' } else { '\u{25be}' };
+                        if self.sort.len() > 1 {
+                            format!("{name} {arrow}{}", index + 1)
+                        } else {
+                            format!("{name} {arrow}")
+                        }
+                    }
                     None => name.clone(),
-                };
-                let next = match sorted {
-                    None => Some(true),
-                    Some(true) => Some(false),
-                    Some(false) => None,
                 };
                 div()
                     .id(("col-head", col))
@@ -157,13 +172,32 @@ impl GridSpike {
                     .border_r_1()
                     .border_color(rgb(BORDER))
                     .text_color(rgb(TEXT_DIM))
-                    .hover(|cell| cell.text_color(rgb(TEXT)).cursor_pointer())
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .cursor_pointer()
+                    .hover(|cell| cell.bg(rgb(0x2a2f37)))
+                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                         let column = this.header(col);
-                        cx.emit(GridEvent::SortRequested {
-                            column,
-                            ascending: next,
-                        });
+                        let mut sort = this.sort.clone();
+                        if event.modifiers().shift {
+                            // Shift-click: add or cycle within the list.
+                            match sort.iter().position(|(name, _)| *name == column) {
+                                Some(index) if sort[index].1 => sort[index].1 = false,
+                                Some(index) => {
+                                    sort.remove(index);
+                                }
+                                None => sort.push((column, true)),
+                            }
+                        } else {
+                            // Plain click: this column only, cycling
+                            // ascending, descending, none.
+                            sort = match sort.as_slice() {
+                                [(name, true)] if *name == column => {
+                                    vec![(column, false)]
+                                }
+                                [(name, false)] if *name == column => Vec::new(),
+                                _ => vec![(column, true)],
+                            };
+                        }
+                        cx.emit(GridEvent::SortRequested { sort });
                     }))
                     .child(label)
                     .child(
@@ -190,6 +224,7 @@ impl GridSpike {
             .flex_none()
             .w_full()
             .h(px(ROW_HEIGHT))
+            .relative()
             .overflow_hidden()
             .bg(rgb(BG_SIDEBAR))
             .border_b_1()
@@ -202,6 +237,21 @@ impl GridSpike {
                     .w(px(self.total_width()))
                     .children(cells),
             )
+            .when(self.pending.is_some(), |header| {
+                header.child(
+                    div()
+                        .absolute()
+                        .right_2()
+                        .top_0()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .px_2()
+                        .bg(rgb(BG_SIDEBAR))
+                        .text_color(rgb(TEXT_DIM))
+                        .child("running\u{2026}"),
+                )
+            })
     }
 }
 
@@ -228,6 +278,7 @@ impl Render for GridSpike {
                         let cells: Vec<_> = (0..cols)
                             .map(|col| {
                                 let is_selected = selected == Some((row, col));
+                                let is_null = this.cell_is_null(row, col);
                                 div()
                                     .id(("cell", row * cols + col))
                                     .w(px(this.width(col)))
@@ -237,6 +288,7 @@ impl Render for GridSpike {
                                     .whitespace_nowrap()
                                     .border_r_1()
                                     .border_color(rgb(BORDER))
+                                    .when(is_null, |d| d.text_color(rgb(TEXT_DIM)).italic())
                                     .when(is_selected, |d| d.bg(rgb(0x2f5f8f)))
                                     .on_click(cx.listener(move |this: &mut GridSpike, _, _, cx| {
                                         this.selected = Some((row, col));

@@ -2822,8 +2822,8 @@ impl Workspace {
             &result_grid,
             window,
             move |this, _, event: &grid_spike::GridEvent, window, cx| {
-                let grid_spike::GridEvent::SortRequested { column, ascending } = event;
-                this.grid_sort_requested(id, column.clone(), *ascending, window, cx);
+                let grid_spike::GridEvent::SortRequested { sort } = event;
+                this.grid_sort_requested(id, sort.clone(), window, cx);
             },
         )
         .detach();
@@ -3272,8 +3272,7 @@ impl Workspace {
     fn grid_sort_requested(
         &mut self,
         tab_id: usize,
-        column: String,
-        ascending: Option<bool>,
+        sort: Vec<(String, bool)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -3286,7 +3285,7 @@ impl Workspace {
         let Some(statement) = tab.displayed_statement.clone() else {
             return;
         };
-        let rewritten = zedb_ch::schema_intelligence::set_order_by(&statement, &column, ascending);
+        let rewritten = zedb_ch::schema_intelligence::set_order_by(&statement, &sort);
         if rewritten == statement {
             return;
         }
@@ -3416,6 +3415,13 @@ impl Workspace {
                                 tab.result_columns = columns.len();
                                 tab.result_rows = 0;
                                 tab.has_result = true;
+                                // Each statement reports its own progress;
+                                // never let one statement's totals stand
+                                // for the next.
+                                tab.read_rows = None;
+                                tab.read_bytes = None;
+                                tab.total_rows = None;
+                                tab.received_bytes = 0;
                                 tab.result_grid.update(cx, |grid, cx| {
                                     grid.begin_result(columns, row_limit, cx)
                                 });
@@ -4789,7 +4795,7 @@ impl Workspace {
                                                             TEXT_DIM
                                                         },
                                                     ))
-                                                    .child(vim_mode_label),
+                                                    .child(format!("-- {vim_mode_label} --")),
                                             )
                                             .when_some(
                                                 vim_command_line,

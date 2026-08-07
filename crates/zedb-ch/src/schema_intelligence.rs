@@ -978,21 +978,32 @@ mod tests {
 }
 
 /// Replace, insert, or remove the top-level ORDER BY of one statement.
-/// Nested clauses (subqueries, window OVER (...)) are untouched. With
-/// `Some(ascending)` the clause becomes exactly one column; with `None`
-/// the clause is removed.
-pub fn set_order_by(sql: &str, column: &str, ascending: Option<bool>) -> String {
+/// Nested clauses (subqueries, window OVER (...)) are untouched. An
+/// empty column list removes the clause; a written clause starts on its
+/// own line.
+pub fn set_order_by(sql: &str, columns: &[(String, bool)]) -> String {
     let (clause, insert_at) = top_level_order_by_span(sql);
-    let clean = column.replace('`', "");
-    let direction = |ascending: bool| if ascending { "ASC" } else { "DESC" };
-    let new_clause =
-        ascending.map(|ascending| format!("ORDER BY `{clean}` {}", direction(ascending)));
+    let new_clause = (!columns.is_empty()).then(|| {
+        let list = columns
+            .iter()
+            .map(|(column, ascending)| {
+                format!(
+                    "`{}` {}",
+                    column.replace('`', ""),
+                    if *ascending { "ASC" } else { "DESC" }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("ORDER BY {list}")
+    });
 
     let join = |head: &str, middle: Option<&str>, rest: &str| {
         let mut out = head.trim_end().to_string();
         if let Some(middle) = middle {
             if !out.is_empty() {
-                out.push(' ');
+                // The clause reads best on its own line.
+                out.push('\n');
             }
             out.push_str(middle);
         }
@@ -1018,34 +1029,75 @@ pub fn set_order_by(sql: &str, column: &str, ascending: Option<bool>) -> String 
     }
 }
 
-/// The first column of a statement's top-level ORDER BY, with its
-/// direction, for showing an honest sort indicator.
-pub fn top_level_order_by(sql: &str) -> Option<(String, bool)> {
+/// Every column of a statement's top-level ORDER BY, in order, with
+/// directions, for showing an honest sort indicator.
+pub fn top_level_order_by(sql: &str) -> Vec<(String, bool)> {
     let (clause, _) = top_level_order_by_span(sql);
-    let (start, end) = clause?;
+    let Some((start, end)) = clause else {
+        return Vec::new();
+    };
     let content = sql[start..end]
         .trim_start_matches(|character: char| !character.is_whitespace())
         .trim_start();
-    let content = content
-        .strip_prefix("BY")
-        .or_else(|| content.strip_prefix("by"))
-        .or_else(|| content.strip_prefix("By"))
-        .or_else(|| content.strip_prefix("bY"))?
-        .trim_start();
-    let (column, rest) = if let Some(quoted) = content.strip_prefix('`') {
-        let close = quoted.find('`')?;
-        (quoted[..close].to_string(), &quoted[close + 1..])
-    } else {
-        let end = content
-            .find(|character: char| !(character.is_alphanumeric() || character == '_'))
-            .unwrap_or(content.len());
-        if end == 0 {
-            return None;
-        }
-        (content[..end].to_string(), &content[end..])
+    let Some(content) = content
+        .get(..2)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("by"))
+        .map(|_| content[2..].trim_start())
+    else {
+        return Vec::new();
     };
-    let ascending = !rest.trim_start().to_ascii_uppercase().starts_with("DESC");
-    Some((column, ascending))
+
+    // Split entries on commas outside parens, backticks, and quotes.
+    let mut entries = Vec::new();
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    let mut entry_start = 0;
+    for (index, character) in content.char_indices() {
+        match quote {
+            Some(open) => {
+                if character == open {
+                    quote = None;
+                }
+            }
+            None => match character {
+                '`' | '\'' | '"' => quote = Some(character),
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    entries.push(&content[entry_start..index]);
+                    entry_start = index + 1;
+                }
+                _ => {}
+            },
+        }
+    }
+    entries.push(&content[entry_start..]);
+
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                return None;
+            }
+            let upper = entry.to_ascii_uppercase();
+            let (name, ascending) = if let Some(prefix) = upper
+                .strip_suffix("DESCENDING")
+                .or_else(|| upper.strip_suffix("DESC"))
+            {
+                (&entry[..prefix.len()], false)
+            } else if let Some(prefix) = upper
+                .strip_suffix("ASCENDING")
+                .or_else(|| upper.strip_suffix("ASC"))
+            {
+                (&entry[..prefix.len()], true)
+            } else {
+                (entry, true)
+            };
+            let name = name.trim().trim_matches('`');
+            (!name.is_empty()).then(|| (name.to_string(), ascending))
+        })
+        .collect()
 }
 
 /// The byte span of the top-level ORDER BY clause (through the end of
@@ -1117,40 +1169,47 @@ fn top_level_order_by_span(sql: &str) -> (Option<(usize, usize)>, Option<usize>)
 mod order_by_tests {
     use super::*;
 
+    fn sort(columns: &[(&str, bool)]) -> Vec<(String, bool)> {
+        columns
+            .iter()
+            .map(|(name, ascending)| (name.to_string(), *ascending))
+            .collect()
+    }
+
     #[test]
     fn inserts_replaces_and_removes_top_level_order_by() {
         let sql = "SELECT * FROM t LIMIT 10";
-        let sorted = set_order_by(sql, "kind", Some(true));
-        assert_eq!(sorted, "SELECT * FROM t ORDER BY `kind` ASC LIMIT 10");
+        let sorted = set_order_by(sql, &sort(&[("kind", true)]));
+        assert_eq!(sorted, "SELECT * FROM t\nORDER BY `kind` ASC LIMIT 10");
 
-        let flipped = set_order_by(&sorted, "kind", Some(false));
-        assert_eq!(flipped, "SELECT * FROM t ORDER BY `kind` DESC LIMIT 10");
-
+        let multi = set_order_by(&sorted, &sort(&[("kind", false), ("day", true)]));
         assert_eq!(
-            set_order_by(&flipped, "kind", None),
-            "SELECT * FROM t LIMIT 10"
+            multi,
+            "SELECT * FROM t\nORDER BY `kind` DESC, `day` ASC LIMIT 10"
         );
+
+        assert_eq!(set_order_by(&multi, &[]), "SELECT * FROM t LIMIT 10");
     }
 
     #[test]
     fn leaves_nested_order_by_alone() {
         let sql = "SELECT count() OVER (ORDER BY id) FROM (SELECT id FROM t ORDER BY id) x;";
-        let sorted = set_order_by(sql, "id", Some(false));
+        let sorted = set_order_by(sql, &sort(&[("id", false)]));
         assert!(sorted.contains("OVER (ORDER BY id)"));
         assert!(sorted.contains("FROM t ORDER BY id)"));
-        assert!(sorted.ends_with("x ORDER BY `id` DESC;"));
+        assert!(sorted.ends_with("x\nORDER BY `id` DESC;"));
     }
 
     #[test]
-    fn reports_the_active_sort() {
+    fn reports_the_active_sort_in_order() {
         assert_eq!(
             top_level_order_by("SELECT * FROM t ORDER BY `kind` DESC LIMIT 5"),
-            Some(("kind".into(), false))
+            sort(&[("kind", false)])
         );
         assert_eq!(
-            top_level_order_by("SELECT * FROM t ORDER BY day, kind"),
-            Some(("day".into(), true))
+            top_level_order_by("SELECT * FROM t ORDER BY day, kind DESC, f(a, b)"),
+            sort(&[("day", true), ("kind", false), ("f(a, b)", true)])
         );
-        assert_eq!(top_level_order_by("SELECT * FROM t"), None);
+        assert!(top_level_order_by("SELECT * FROM t").is_empty());
     }
 }
