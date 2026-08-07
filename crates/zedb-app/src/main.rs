@@ -4967,6 +4967,12 @@ impl Render for Workspace {
                 this.selected = Some(action.index);
                 this.request_delete(cx)
             }))
+            .on_action(cx.listener(|this, action: &grid_spike::HeaderSort, _, cx| {
+                if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                    let grid = tab.result_grid.clone();
+                    grid.update(cx, |grid, cx| grid.header_sort_action(action, cx));
+                }
+            }))
             .on_action(cx.listener(|this, action: &ViewObjectDdl, window, cx| {
                 let object = this
                     .schema_databases

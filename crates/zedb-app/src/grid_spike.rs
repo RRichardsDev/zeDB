@@ -3,10 +3,11 @@
 //! the M2 spike; findings are in docs/devlog.md.
 
 use gpui::{
-    actions, div, prelude::*, px, rgb, uniform_list, App, ClipboardItem, Context, EventEmitter,
-    FocusHandle, Focusable, KeyBinding, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, UniformListScrollHandle, Window,
+    actions, div, prelude::*, px, rgb, uniform_list, Action, App, ClipboardItem, Context,
+    EventEmitter, FocusHandle, Focusable, KeyBinding, ListHorizontalSizingBehavior, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, UniformListScrollHandle, Window,
 };
+use gpui_component::menu::ContextMenuExt as _;
 use zedb_core::{ColumnMeta, Value};
 
 use crate::theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, TEXT, TEXT_DIM};
@@ -17,6 +18,18 @@ actions!(grid_spike, [Copy]);
 pub enum GridEvent {
     /// The complete desired sort, in priority order; empty clears it.
     SortRequested { sort: Vec<(String, bool)> },
+}
+
+/// Header context-menu choice; routed back via the workspace so it
+/// lands on the visible grid regardless of focus.
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+pub struct HeaderSort {
+    pub column: String,
+    /// 0 clears this column's sort, 1 ascending, 2 descending.
+    pub direction: u8,
+    /// Merge into the existing sort instead of replacing it.
+    pub multi: bool,
 }
 
 const ROW_HEIGHT: f32 = 24.0;
@@ -90,6 +103,29 @@ impl GridSpike {
         self.adopt_pending();
         self.rows.extend(batch);
         cx.notify();
+    }
+
+    /// Apply a header context-menu choice to the current sort.
+    pub fn header_sort_action(&mut self, action: &HeaderSort, cx: &mut Context<Self>) {
+        let mut sort = self.sort.clone();
+        let column = action.column.clone();
+        match action.direction {
+            0 => sort.retain(|(name, _)| *name != column),
+            direction => {
+                let ascending = direction == 1;
+                if action.multi {
+                    match sort.iter_mut().find(|(name, _)| *name == column) {
+                        Some(entry) => entry.1 = ascending,
+                        None => sort.push((column, ascending)),
+                    }
+                } else {
+                    sort = vec![(column, ascending)];
+                }
+            }
+        }
+        if sort != self.sort {
+            cx.emit(GridEvent::SortRequested { sort });
+        }
     }
 
     /// Set the sort indicator to what the executed SQL actually says.
@@ -199,6 +235,41 @@ impl GridSpike {
                         }
                         cx.emit(GridEvent::SortRequested { sort });
                     }))
+                    .context_menu({
+                        let column = name.clone();
+                        move |menu, window, cx| {
+                            let multi = window.modifiers().shift;
+                            let label = if multi { "Add to order by" } else { "Order by" };
+                            let column = column.clone();
+                            menu.submenu(label, window, cx, move |menu, _, _| {
+                                menu.menu(
+                                    "Ascending",
+                                    Box::new(HeaderSort {
+                                        column: column.clone(),
+                                        direction: 1,
+                                        multi,
+                                    }),
+                                )
+                                .menu(
+                                    "Descending",
+                                    Box::new(HeaderSort {
+                                        column: column.clone(),
+                                        direction: 2,
+                                        multi,
+                                    }),
+                                )
+                                .separator()
+                                .menu(
+                                    "Clear",
+                                    Box::new(HeaderSort {
+                                        column: column.clone(),
+                                        direction: 0,
+                                        multi,
+                                    }),
+                                )
+                            })
+                        }
+                    })
                     .child(label)
                     .child(
                         div()

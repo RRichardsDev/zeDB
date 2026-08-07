@@ -20,6 +20,9 @@ GitHub release notes.
   statement re-runs on the server. Clicks cycle ascending, descending,
   and no sort; shift-click builds multi-column sorts with numbered
   arrows; the indicators always reflect the SQL that actually ran.
+- Right-click a result header for an "Order by" submenu (Ascending,
+  Descending, Clear); with shift held it becomes "Add to order by" for
+  multi-column sorts.
 - Re-running keeps the previous results on screen (with a "running"
   hint in the header) until replacement rows stream in, and header
   tiles show a hand cursor.
