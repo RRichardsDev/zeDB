@@ -380,7 +380,7 @@ impl GridSpike {
             .map(|col| {
                 let name = self.header(col);
                 let position = self.sort.iter().position(|(column, _)| *column == name);
-                let mut indicator = position
+                let indicator = position
                     .map(|index| {
                         let arrow = if self.sort[index].1 {
                             '\u{25b4}'
@@ -394,11 +394,8 @@ impl GridSpike {
                         }
                     })
                     .unwrap_or_default();
+                // The purple header border is the filter signal.
                 let is_filtered = self.filtered.contains(&name);
-                if is_filtered {
-                    // Nabla stands in for a funnel.
-                    indicator.push('\u{2207}');
-                }
                 let indicator = (!indicator.is_empty()).then_some(indicator);
                 div()
                     .id(("col-head", col))
