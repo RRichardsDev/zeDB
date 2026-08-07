@@ -3325,7 +3325,9 @@ impl Workspace {
         tab.outcome = QueryOutcome::Running;
         tab.result_columns = 0;
         tab.result_rows = 0;
-        tab.has_result = false;
+        // has_result stays as it was: an already-displayed result keeps
+        // its pane (and its rows, via the grid's deferred swap) until
+        // the replacement streams in.
         tab.result_capped = false;
         tab.read_rows = None;
         tab.read_bytes = None;
