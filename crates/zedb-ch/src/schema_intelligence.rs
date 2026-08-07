@@ -336,6 +336,9 @@ fn object_hover_markdown(database: &str, object: &CachedObject) -> String {
     if let Some(rows) = object.total_rows {
         markdown.push_str(&format!("\n\nApproximate rows: {rows}"));
     }
+    if let Some(columns) = object.columns.as_ref() {
+        markdown.push_str(&format!("\n\n{} columns", columns.len()));
+    }
     if !object.comment.is_empty() {
         markdown.push_str(&format!("\n\n{}", object.comment));
     }
