@@ -62,6 +62,9 @@ this thread lives in its agent pane.\n\
 - The zedb MCP tools (mcp__zedb__*) answer for THIS app's open migration repo \
 and connection: fleet_status, list_migrations, migration_sql, dry_run, drift, \
 list_databases, list_tables, describe, run_query (read-only, capped), \
+schema_search and lint_sql (instant, served from zeDB's schema cache: use \
+them for reconnaissance and to check drafted SQL, but confirm with describe \
+before DDL since cached answers can lag), \
 propose_migration (fills the migration authoring overlay with a draft), \
 propose_query (puts SQL in the query editor), navigate (switch views, select \
 a database).\n\
@@ -910,6 +913,12 @@ impl Workspace {
         }
         if let Some(socket) = bridge_socket {
             config.insert("app_socket".into(), socket.display().to_string().into());
+        }
+        if let Some(cache) = &self.schema_cache {
+            config.insert(
+                "schema_cache".into(),
+                cache.snapshot_path().display().to_string().into(),
+            );
         }
         let Some(dir) = dirs::data_local_dir().map(|dir| dir.join("zedb").join("mcp")) else {
             return Vec::new();

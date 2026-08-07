@@ -152,6 +152,10 @@ enum Command {
         user: String,
         #[arg(long, default_value = "")]
         password: String,
+        /// Serve schema_search and lint_sql from the zeDB app's schema
+        /// cache for this connection name (as shown in the app sidebar).
+        #[arg(long)]
+        cache_connection: Option<String>,
     },
     /// Apply one targeted migration to specific databases.
     Apply {
@@ -659,6 +663,7 @@ fn run(cli: Cli) -> Result<(), String> {
             server,
             user,
             password,
+            cache_connection,
         } => {
             // The repo is optional here: query tools alone are useful.
             let repo = MigrationRepo::open(&cli.repo).ok();
@@ -669,7 +674,15 @@ fn run(cli: Cli) -> Result<(), String> {
                 database: None,
                 read_only: true,
             });
-            let mcp = zedb_ch::mcp::McpServer::new(repo, config, Default::default());
+            let mut mcp = zedb_ch::mcp::McpServer::new(repo, config, Default::default());
+            if let Some(name) = cache_connection {
+                if let Some(root) = dirs::cache_dir() {
+                    mcp = mcp.with_schema_cache(zedb_ch::schema_cache::connection_snapshot_path(
+                        &root.join("zedb").join("schema"),
+                        &name,
+                    ));
+                }
+            }
             let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
             runtime
                 .block_on(zedb_ch::mcp::serve_stdio(mcp))

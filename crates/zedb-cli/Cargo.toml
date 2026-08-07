@@ -10,6 +10,7 @@ name = "zedb"
 path = "src/main.rs"
 
 [dependencies]
+dirs = "6"
 zedb-core.workspace = true
 zedb-ch.workspace = true
 tokio.workspace = true

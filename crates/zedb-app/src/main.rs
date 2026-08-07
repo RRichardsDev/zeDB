@@ -5356,6 +5356,9 @@ fn run_mcp_serve(config_path: &str) -> ! {
         if let Some(socket) = config.get("app_socket").and_then(|value| value.as_str()) {
             server = server.with_app_bridge(std::path::PathBuf::from(socket));
         }
+        if let Some(cache) = config.get("schema_cache").and_then(|value| value.as_str()) {
+            server = server.with_schema_cache(std::path::PathBuf::from(cache));
+        }
         let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
         runtime
             .block_on(zedb_ch::mcp::serve_stdio(server))

@@ -188,6 +188,12 @@ impl SchemaCache {
         self.current.load_full()
     }
 
+    /// Where this cache persists its snapshot, for read-only consumers
+    /// (e.g. the MCP server serving schema_search and lint_sql).
+    pub fn snapshot_path(&self) -> &Path {
+        &self.snapshot_path
+    }
+
     pub fn needs_columns(&self, database: &str) -> bool {
         self.snapshot().database(database).is_some_and(|database| {
             database

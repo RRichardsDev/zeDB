@@ -754,3 +754,22 @@ Status: implementation complete, awaiting UI acceptance.
 - Verification: cargo check --workspace and cargo test --workspace pass,
   including 99 unit, integration, live ClickHouse, replay, import, runner,
   drift, and repository-format tests.
+
+## Phase 3.3: schema intelligence for agents (2026-08-07)
+
+- The zedb MCP server grew two cache-backed tools: schema_search
+  (instant fleet-wide substring search over database, table, and
+  column names) and lint_sql (the editor's conservative identifier
+  analyzer over drafted SQL, with line numbers). Both re-read the
+  app's on-disk schema snapshot per call, so long agent sessions
+  track background refreshes with no IPC, and both stamp answers
+  "cached as of <time>" so agents know to confirm with describe
+  before DDL. Offered only when a cache file is configured and
+  readable; every live tool stays untouched as the source of truth.
+- Wiring: the pane's embedded server config carries the snapshot
+  path automatically; terminal agents opt in with
+  `zedb mcp --cache-connection <name>`. The primer mentions both
+  tools and when to trust them.
+- Proven from a terminal with no ClickHouse configured at all:
+  schema_search "sneaky" returned zedb_kappa's two drifted columns,
+  and lint_sql flagged a fake column while accepting a real one.
