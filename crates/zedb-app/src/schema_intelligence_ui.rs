@@ -13,7 +13,7 @@ use lsp_types::{
 };
 use zedb_ch::{
     schema_cache::{SchemaCache, SchemaSnapshot},
-    schema_intelligence::{self, RecognizedKind, SuggestionKind},
+    schema_intelligence::{self, SuggestionKind},
 };
 
 #[derive(Default)]
@@ -134,28 +134,13 @@ impl DocumentColorProvider for SchemaProvider {
         )
         .into_iter()
         .map(|identifier| {
-            // Rendered as text color by the vendored editor patch: light
-            // blue for recognized databases, soft green for tables and
-            // views, a paler blue for columns.
-            let color = match identifier.kind {
-                RecognizedKind::Database => Color {
-                    red: 0.42,
-                    green: 0.68,
-                    blue: 0.96,
-                    alpha: 1.0,
-                },
-                RecognizedKind::Object => Color {
-                    red: 0.45,
-                    green: 0.83,
-                    blue: 0.65,
-                    alpha: 1.0,
-                },
-                RecognizedKind::Column => Color {
-                    red: 0.63,
-                    green: 0.78,
-                    blue: 0.95,
-                    alpha: 1.0,
-                },
+            // A single muted light blue keeps recognized schema names
+            // legible without competing with SQL syntax highlighting.
+            let color = Color {
+                red: 0.56,
+                green: 0.78,
+                blue: 0.97,
+                alpha: 1.0,
             };
             ColorInformation {
                 range: byte_range_to_lsp(&sql, identifier.range),

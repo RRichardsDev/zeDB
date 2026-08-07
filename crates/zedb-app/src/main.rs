@@ -2994,6 +2994,7 @@ impl Workspace {
         tab.vim_recording = snapshot.recording;
         let editor = tab.editor.clone();
         editor.update(cx, |state, cx| {
+            let text_changed = state.value().as_ref() != snapshot.text;
             let old_utf16_len = state.value().encode_utf16().count();
             EntityInputHandler::replace_text_in_range(
                 state,
@@ -3007,6 +3008,12 @@ impl Workspace {
                 window,
                 cx,
             );
+            // set_cursor_position deliberately closes editor popovers. In
+            // Vim Insert mode that happens after every modalkit edit, so
+            // request completion again from the final cursor position.
+            if text_changed && tab.vim.mode() == modalkit::env::vim::VimMode::Insert {
+                state.retrigger_completion(window, cx);
+            }
             if let Some(selection) = &snapshot.selection {
                 let start = Self::utf16_offset(&snapshot.text, selection.start);
                 let end = Self::utf16_offset(&snapshot.text, selection.end);
