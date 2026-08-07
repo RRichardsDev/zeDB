@@ -111,9 +111,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The tag's CHANGELOG section becomes the release notes.
+          changelog=$(awk -v tag="$GITHUB_REF_NAME" '
+            /^## /{p = ($2 == tag)} p && !/^## /{print}
+          ' CHANGELOG.md)
           notes="macOS app bundle (DMG or zip)."
           if [[ -z "${ZEDB_CODESIGN_IDENTITY:-}" ]]; then
             notes="$notes Ad-hoc signed: Gatekeeper will block it on other machines until Developer ID signing secrets are configured."
+          fi
+          if [[ -n "$changelog" ]]; then
+            notes="$changelog
+
+---
+$notes"
           fi
           gh release create "$GITHUB_REF_NAME" \
             --title "zeDB $GITHUB_REF_NAME" \

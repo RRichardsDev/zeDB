@@ -47,3 +47,12 @@ This project is indexed by GitNexus as **zeDB** (2359 symbols, 6875 relationship
 
 - Before changing the user interface, read and follow `docs/UI-DESIGN.md`.
 - Reuse or extend existing UI primitives before introducing one-off controls.
+
+## Changelog
+
+- Every user-facing change adds a line under `## Unreleased` in
+  `CHANGELOG.md` as part of making it. User-facing means a user of the
+  app or CLI would notice; internals go in `docs/devlog.md` instead.
+- Cutting a release renames Unreleased to `## vX.Y.Z - date` (leave a
+  fresh empty Unreleased is not needed; the next change recreates it).
+  The release workflow publishes that section as the release notes.
