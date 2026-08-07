@@ -89,8 +89,8 @@ pub struct GridSpike {
     /// A result whose header arrived but whose rows have not: the old
     /// rows stay visible until the replacement starts streaming.
     pending: Option<(Vec<ColumnMeta>, Option<usize>)>,
-    /// Columns with managed filters, from the executed SQL.
-    filtered: Vec<String>,
+    /// Column-attributable filters (column, conjunct) from the SQL.
+    filters: Vec<(String, String)>,
     filter_panel: Option<FilterPanel>,
 }
 
@@ -110,7 +110,7 @@ impl GridSpike {
             resizing_column: None,
             sort: Vec::new(),
             pending: None,
-            filtered: Vec::new(),
+            filters: Vec::new(),
             filter_panel: None,
         }
     }
@@ -174,8 +174,8 @@ impl GridSpike {
     }
 
     /// Set the filter indicators to what the executed SQL actually says.
-    pub fn set_filtered(&mut self, filtered: Vec<String>, cx: &mut Context<Self>) {
-        self.filtered = filtered;
+    pub fn set_filters(&mut self, filters: Vec<(String, String)>, cx: &mut Context<Self>) {
+        self.filters = filters;
         cx.notify();
     }
 
@@ -348,9 +348,9 @@ impl GridSpike {
             }
         };
         // Optimistic indicator; completion re-syncs from the SQL.
-        self.filtered.retain(|name| *name != panel.column);
-        if predicate.is_some() {
-            self.filtered.push(panel.column.clone());
+        self.filters.retain(|(name, _)| *name != panel.column);
+        if let Some(predicate) = &predicate {
+            self.filters.push((panel.column.clone(), predicate.clone()));
         }
         cx.emit(GridEvent::FilterRequested {
             column: panel.column,
@@ -409,9 +409,43 @@ impl GridSpike {
             .unwrap_or_default()
     }
 
+    /// One line describing every active sort and filter, for hover.
+    fn shape_summary(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.sort.is_empty() {
+            let sorts = self
+                .sort
+                .iter()
+                .map(|(column, ascending)| {
+                    format!(
+                        "{column} {}",
+                        if *ascending { '\u{25b4}' } else { '\u{25be}' }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!("sort: {sorts}"));
+        }
+        if !self.filters.is_empty() {
+            let filters = self
+                .filters
+                .iter()
+                .map(|(_, conjunct)| conjunct.clone())
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            parts.push(format!("filters: {filters}"));
+        }
+        if parts.is_empty() {
+            "Click to sort, right-click to filter".into()
+        } else {
+            parts.join("   \u{00b7}   ")
+        }
+    }
+
     /// Header outside the list, following the list's horizontal offset.
     fn header_row(&self, scroll_x: gpui::Pixels, cx: &mut Context<Self>) -> impl IntoElement {
         let column_count = self.columns.len();
+        let summary = self.shape_summary();
         let cells: Vec<_> = (0..column_count)
             .map(|col| {
                 let name = self.header(col);
@@ -431,7 +465,7 @@ impl GridSpike {
                     })
                     .unwrap_or_default();
                 // The purple header border is the filter signal.
-                let is_filtered = self.filtered.contains(&name);
+                let is_filtered = self.filters.iter().any(|(column, _)| *column == name);
                 let indicator = (!indicator.is_empty()).then_some(indicator);
                 div()
                     .id(("col-head", col))
@@ -451,6 +485,12 @@ impl GridSpike {
                     .text_color(rgb(TEXT_DIM))
                     .cursor_pointer()
                     .hover(|cell| cell.bg(rgb(0x2a2f37)))
+                    .tooltip({
+                        let summary = summary.clone();
+                        move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(summary.clone()).build(window, cx)
+                        }
+                    })
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                         let column = this.header(col);
                         let mut sort = this.sort.clone();
@@ -841,7 +881,7 @@ impl Render for GridSpike {
                             .child("Clear")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(panel) = this.filter_panel.take() {
-                                    this.filtered.retain(|name| *name != panel.column);
+                                    this.filters.retain(|(name, _)| *name != panel.column);
                                     cx.emit(GridEvent::FilterRequested {
                                         column: panel.column,
                                         predicate: None,

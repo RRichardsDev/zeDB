@@ -30,7 +30,8 @@ GitHub release notes.
   contains, %patterns% and operators like > 10 pass through). Filters
   become managed conjuncts in the query's top-level WHERE, hand-written
   predicates survive (and simple ones light up the indicators and
-  pre-fill the panel just like UI-made filters), filtered headers show an orange marker and a muted purple border, and the
+  pre-fill the panel just like UI-made filters), filtered headers show a muted purple border, hovering any header
+  summarises every active sort and filter, and the
   statement re-runs like header sorts do.
 - Re-running keeps the previous results on screen (with a "running"
   hint in the header) until replacement rows stream in, and header

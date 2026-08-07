@@ -1448,15 +1448,23 @@ pub fn column_filter(sql: &str, column: &str) -> Option<String> {
         .find(|conjunct| conjunct_column(conjunct).as_deref() == Some(column))
 }
 
-/// Columns the top-level WHERE filters on, ours or hand-written, for
-/// the header indicators.
-pub fn filtered_columns(sql: &str) -> Vec<String> {
+/// Column-attributable top-level WHERE conjuncts, ours or
+/// hand-written, as (column, conjunct) pairs for the header UI.
+pub fn column_filters(sql: &str) -> Vec<(String, String)> {
     let Some((_, content_start, end)) = top_level_where_span(sql).0 else {
         return Vec::new();
     };
     split_conjuncts(&sql[content_start..end])
         .into_iter()
-        .filter_map(|conjunct| conjunct_column(&conjunct))
+        .filter_map(|conjunct| conjunct_column(&conjunct).map(|column| (column, conjunct)))
+        .collect()
+}
+
+/// Columns the top-level WHERE filters on.
+pub fn filtered_columns(sql: &str) -> Vec<String> {
+    column_filters(sql)
+        .into_iter()
+        .map(|(column, _)| column)
         .collect()
 }
 

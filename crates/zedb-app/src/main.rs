@@ -3609,10 +3609,10 @@ impl Workspace {
                 }
                 if let Some(statement) = tab.displayed_statement.clone() {
                     let sort = zedb_ch::schema_intelligence::top_level_order_by(&statement);
-                    let filtered = zedb_ch::schema_intelligence::filtered_columns(&statement);
+                    let filters = zedb_ch::schema_intelligence::column_filters(&statement);
                     tab.result_grid.update(cx, |grid, cx| {
                         grid.set_sort(sort, cx);
-                        grid.set_filtered(filtered, cx);
+                        grid.set_filters(filters, cx);
                     });
                 }
                 this.refresh_schema_after_statements(&successful_statements);
