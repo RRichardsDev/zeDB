@@ -51,25 +51,8 @@ use schema_intelligence_ui::{byte_range_to_lsp, SchemaProvider};
 use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
 use vim::{CommandLineSnapshot, VimController};
 
-const M8_HIGHLIGHTING_SAMPLE: &str = r#"-- M8 ClickHouse syntax-highlighting sample
-WITH
-    range(5) AS values,
-    arrayMap(x -> x * 2, values) AS doubled
-SELECT
-    number,
-    tuple(number, toString(number)) AS pair,
-    toDateTime64(now(), 3) AS observed_at,
-    doubled,
-    count() OVER (ORDER BY number) AS running_count
-FROM numbers(10)
-ARRAY JOIN doubled AS item
-PREWHERE number >= 0
-WHERE item % 2 = 0
-ORDER BY number DESC
-LIMIT 2 BY item
-LIMIT 10
-FORMAT PrettyCompactMonoBlock;
-"#;
+/// The query a fresh install starts with.
+const DEFAULT_QUERY: &str = "select * from PERFOMANCE.ActivityFacts;";
 
 fn format_engine_definition(engine: &str) -> String {
     let mut formatted = format!("ENGINE = {engine}");
@@ -513,7 +496,7 @@ impl Workspace {
             Some(session) if !session.tabs.is_empty() => {
                 session.tabs.iter().map(|tab| tab.sql.clone()).collect()
             }
-            _ => vec![M8_HIGHLIGHTING_SAMPLE.to_string()],
+            _ => vec![DEFAULT_QUERY.to_string()],
         };
         let active_query_tab = saved_session
             .as_ref()
