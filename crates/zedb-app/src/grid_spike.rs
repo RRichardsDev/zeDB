@@ -518,12 +518,9 @@ impl GridSpike {
                                         .child(div().text_color(rgb(TEXT_DIM)).child("Filters"));
                                     for (_, conjunct) in &filters {
                                         card = card.child(
-                                            div()
-                                                .pl_2()
-                                                .max_w(px(400.))
-                                                .overflow_hidden()
-                                                .whitespace_nowrap()
-                                                .child(conjunct.clone()),
+                                            // Wrap: the whole filter must
+                                            // always be readable.
+                                            div().pl_2().max_w(px(400.)).child(conjunct.clone()),
                                         );
                                     }
                                 }
