@@ -316,6 +316,11 @@ pub struct InputState {
 
     pub lsp: Lsp,
 
+    /// zeDB patch: host-app hook to append items to the right-click
+    /// menu, given the text and the clicked byte offset.
+    pub context_menu_extension:
+        Option<Rc<dyn Fn(&Rope, usize, crate::menu::PopupMenu) -> crate::menu::PopupMenu>>,
+
     /// A flag to indicate if we have a pending update to the text.
     ///
     /// If true, will call some update (for example LSP, Syntax Highlight) before render.
@@ -401,6 +406,7 @@ impl InputState {
             lsp: Lsp::default(),
             diagnostic_popover: None,
             context_menu: None,
+            context_menu_extension: None,
             mouse_context_menu,
             completion_inserting: false,
             hover_popover: None,

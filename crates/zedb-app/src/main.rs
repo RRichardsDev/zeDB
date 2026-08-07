@@ -2731,7 +2731,26 @@ impl Workspace {
                 .code_editor("sql")
                 .default_value(default_value);
             editor.lsp.completion_provider = Some(schema_provider.clone());
-            editor.lsp.hover_provider = Some(schema_provider);
+            editor.lsp.hover_provider = Some(schema_provider.clone());
+            // Right-clicking a recognized table adds "View DDL" to the
+            // editor's context menu.
+            editor.context_menu_extension = Some(Rc::new(move |text, offset, menu| {
+                let Some((snapshot, default_database)) = schema_provider.snapshot() else {
+                    return menu;
+                };
+                let sql = text.to_string();
+                match zedb_ch::schema_intelligence::object_at(
+                    &snapshot,
+                    default_database.as_deref(),
+                    &sql,
+                    offset,
+                ) {
+                    Some((database, object)) => menu
+                        .separator()
+                        .menu("View DDL", Box::new(ViewObjectDdl { database, object })),
+                    None => menu,
+                }
+            }));
             editor
         });
         cx.subscribe_in(
@@ -4851,13 +4870,25 @@ impl Render for Workspace {
                 this.request_delete(cx)
             }))
             .on_action(cx.listener(|this, action: &ViewObjectDdl, window, cx| {
-                let object =
-                    this.schema_databases.iter().find_map(|database| {
+                let object = this
+                    .schema_databases
+                    .iter()
+                    .find_map(|database| {
                         if database.meta.name != action.database {
                             return None;
                         }
                         database.objects.as_ref()?.iter().find_map(|object| {
                             (object.name == action.object).then(|| object.clone())
+                        })
+                    })
+                    .or_else(|| {
+                        // The sidebar may not have loaded that database's
+                        // objects yet; the schema cache has them.
+                        this.schema_cache.as_ref().and_then(|cache| {
+                            cache
+                                .snapshot()
+                                .object(&action.database, &action.object)
+                                .map(schema_object_from_cache)
                         })
                     });
                 if let Some(object) = object {

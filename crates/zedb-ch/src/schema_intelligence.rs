@@ -328,6 +328,54 @@ pub fn hover(
     })
 }
 
+/// The object a text offset refers to: database-qualified, a bound
+/// alias, or a bare name resolvable through the default database or
+/// uniqueness. Returns snapshot-canonical (database, object) names.
+pub fn object_at(
+    snapshot: &SchemaSnapshot,
+    default_database: Option<&str>,
+    sql: &str,
+    offset: usize,
+) -> Option<(String, String)> {
+    let range = word_range(sql, offset.min(sql.len()));
+    if range.is_empty() {
+        return None;
+    }
+    let word = &sql[range.clone()];
+    let tokens = tokenize(sql);
+    let (bindings, _, _) = resolve_bindings(snapshot, default_database, &tokens);
+    let qualifier = sql[..range.start]
+        .strip_suffix('.')
+        .map(|before| &before[word_range(before, before.len())])
+        .map(str::to_ascii_lowercase);
+    if let Some(qualifier) = qualifier.as_ref() {
+        if let Some(database) = snapshot
+            .databases
+            .values()
+            .find(|database| database.name.eq_ignore_ascii_case(qualifier))
+        {
+            let object = database
+                .objects
+                .values()
+                .find(|object| object.name.eq_ignore_ascii_case(word))?;
+            return Some((database.name.clone(), object.name.clone()));
+        }
+        // An alias or table qualifier means the word is a column.
+        return None;
+    }
+    if let Some((database, object)) = bindings.aliases.get(&word.to_ascii_lowercase()) {
+        return Some((database.clone(), object.clone()));
+    }
+    let (database, object) = default_database
+        .and_then(|database| {
+            snapshot
+                .object(database, word)
+                .map(|object| (database, object))
+        })
+        .or_else(|| unique_object(snapshot, word))?;
+    Some((database.to_string(), object.name.clone()))
+}
+
 fn object_hover_markdown(database: &str, object: &CachedObject) -> String {
     let mut markdown = format!(
         "**{}.{}**\n\nEngine: `{}`",
@@ -781,6 +829,22 @@ mod tests {
         let cursor = sql.find(". FROM").unwrap() + 1;
         let columns = completions(&snapshot, Some("analytics"), sql, cursor);
         assert_eq!(columns[0].label, "event_id");
+    }
+
+    #[test]
+    fn object_at_resolves_qualified_names_and_aliases() {
+        let snapshot = snapshot(None);
+        let sql = "SELECT e.x FROM analytics.events e";
+        let qualified = object_at(&snapshot, None, sql, sql.rfind("events").unwrap());
+        assert_eq!(qualified, Some(("analytics".into(), "events".into())));
+
+        let alias = object_at(&snapshot, None, sql, sql.len() - 1);
+        assert_eq!(alias, Some(("analytics".into(), "events".into())));
+
+        assert_eq!(
+            object_at(&snapshot, None, sql, sql.find('x').unwrap()),
+            None
+        );
     }
 
     #[test]

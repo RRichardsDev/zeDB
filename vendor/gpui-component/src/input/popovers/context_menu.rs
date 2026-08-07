@@ -48,6 +48,9 @@ impl InputState {
         let has_paste = is_enable && cx.read_from_clipboard().is_some();
 
         let action_context = self.focus_handle.clone();
+        // zeDB patch: host-app extension items appended below the built-ins.
+        let menu_extension = self.context_menu_extension.clone();
+        let extension_text = self.text.clone();
         self.mouse_context_menu.update(cx, |this, cx| {
             this.mouse_position = event.position;
             this.menu.update(cx, |menu, cx| {
@@ -74,6 +77,10 @@ impl InputState {
                     .menu_with_enable(t!("Input.Paste"), Box::new(input::Paste), has_paste)
                     .separator()
                     .menu(t!("Input.Select All"), Box::new(input::SelectAll));
+                let new_menu = match &menu_extension {
+                    Some(extension) => extension(&extension_text, offset, new_menu),
+                    None => new_menu,
+                };
 
                 menu.menu_items = new_menu.menu_items;
                 menu.action_context = Some(action_context);
