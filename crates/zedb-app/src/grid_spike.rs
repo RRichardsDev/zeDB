@@ -466,8 +466,22 @@ impl GridSpike {
                     .cursor_pointer()
                     .hover(|cell| cell.bg(rgb(0x2a2f37)))
                     .tooltip({
-                        let sort = self.sort.clone();
-                        let filters = self.filters.clone();
+                        // Only this column's modifiers, with their overall
+                        // sort priority preserved.
+                        let sort: Vec<(usize, String, bool)> = self
+                            .sort
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, (column, _))| *column == name)
+                            .map(|(index, (column, ascending))| (index, column.clone(), *ascending))
+                            .collect();
+                        let multi = self.sort.len() > 1;
+                        let filters: Vec<(String, String)> = self
+                            .filters
+                            .iter()
+                            .filter(|(column, _)| *column == name)
+                            .cloned()
+                            .collect();
                         move |window, cx| {
                             if sort.is_empty() && filters.is_empty() {
                                 return gpui_component::tooltip::Tooltip::new(
@@ -483,10 +497,10 @@ impl GridSpike {
                                 if !sort.is_empty() {
                                     card =
                                         card.child(div().text_color(rgb(TEXT_DIM)).child("Sort"));
-                                    for (index, (column, ascending)) in sort.iter().enumerate() {
+                                    for (index, column, ascending) in sort.iter() {
                                         let arrow =
                                             if *ascending { '\u{25b4}' } else { '\u{25be}' };
-                                        let line = if sort.len() > 1 {
+                                        let line = if multi {
                                             format!("{}. {column} {arrow}", index + 1)
                                         } else {
                                             format!("{column} {arrow}")
