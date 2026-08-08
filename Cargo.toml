@@ -20,7 +20,7 @@ zedb-ch = { path = "crates/zedb-ch" }
 zedb-acp = { path = "crates/zedb-acp" }
 gpui = "0.2.2"
 chrono = "0.4"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "gzip", "zstd"] }
 futures-util = "0.3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

@@ -95,6 +95,16 @@ impl ChClient {
         if !include_execution_cap {
             params.retain(|(name, _)| name != "max_execution_time");
         }
+        // Compressed transfer by default: reqwest negotiates zstd/gzip
+        // via Accept-Encoding and decompresses the stream transparently;
+        // ClickHouse only compresses when asked. A user-provided row
+        // wins (e.g. "0" to turn it off).
+        if !params
+            .iter()
+            .any(|(name, _)| name == "enable_http_compression")
+        {
+            params.push(("enable_http_compression".into(), "1".into()));
+        }
         params
     }
 

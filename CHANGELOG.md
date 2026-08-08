@@ -17,6 +17,9 @@ GitHub release notes.
   sync.
 - The connection form scrolls when it outgrows the window (many
   nodes, driver settings) instead of clipping the bottom.
+- Query results transfer compressed (zstd/gzip negotiated over HTTP),
+  typically several times less data on large result sets. Add an
+  enable_http_compression=0 driver setting to opt a cluster out.
 
 ## v0.1.9 - 2026-08-08
 
