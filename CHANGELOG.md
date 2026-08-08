@@ -7,6 +7,12 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- DDL and other resultless statements complete cleanly ("OK:
+  statement executed") instead of failing with a RowBinary decode
+  error; ClickHouse answers them with an empty body by design.
+
 ## v0.1.8 - 2026-08-08
 
 Soak-mode fixes from a day of real use.

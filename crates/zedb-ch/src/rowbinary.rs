@@ -72,6 +72,12 @@ impl StreamingDecoder {
 
     pub(crate) fn finish(self) -> Result<()> {
         if self.columns.is_none() {
+            // DDL and other resultless statements return a completely
+            // empty body; no header only means truncation when bytes
+            // actually arrived.
+            if self.buffer.is_empty() {
+                return Ok(());
+            }
             return Err(ChError::Decode("response ended before its header".into()));
         }
         if !self.buffer.is_empty() {
@@ -371,6 +377,18 @@ mod tests {
             buf.extend_from_slice(ty.as_bytes());
         }
         buf
+    }
+
+    #[test]
+    fn empty_body_finishes_cleanly() {
+        // DDL statements return no bytes at all; that is a valid,
+        // resultless response, not a truncated one.
+        let decoder = StreamingDecoder::new();
+        decoder.finish().expect("empty body is not an error");
+
+        let mut partial = StreamingDecoder::new();
+        partial.push(&[3]).ok();
+        assert!(partial.finish().is_err(), "partial header is truncation");
     }
 
     #[test]

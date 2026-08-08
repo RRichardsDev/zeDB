@@ -5412,7 +5412,11 @@ impl Workspace {
                 rows,
                 skipped,
             } => {
-                let mut text = if result_capped {
+                let mut text = if *columns == 0 {
+                    // DDL and other resultless statements: an empty body
+                    // with HTTP 200 is ClickHouse's whole success signal.
+                    "OK: statement executed (no result set)".to_string()
+                } else if result_capped {
                     format!("Showing first {rows} row(s), {columns} column(s)")
                 } else {
                     format!("Complete: {rows} row(s), {columns} column(s)")
