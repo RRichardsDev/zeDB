@@ -14,10 +14,10 @@ use gpui_component::input::{Input, InputState};
 use zedb_core::repo::{scaffold_migration, MigrationRepo, ScaffoldOptions};
 
 use crate::rt;
-use crate::theme::{BG, BG_SIDEBAR, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
+use crate::theme::{BG, BG_SIDEBAR, BORDER, DANGER, HOVER, SUCCESS, TEXT, TEXT_DIM, WARNING};
 use crate::Workspace;
 
-const WARN: u32 = 0xd7a65f;
+const WARN: u32 = WARNING;
 
 /// The rollback story a draft declares; NoFile means irreversible by
 /// omission (no rollback.sql at all).
@@ -461,7 +461,7 @@ impl Workspace {
                     .child(option.label())
                     .when(!readonly, |button| {
                         button
-                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.author_set_rollback_choice(option, window, cx);
                             }))
@@ -529,7 +529,7 @@ impl Workspace {
                             })
                             .when(!readonly, |button| {
                                 button
-                                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if let Some(author) = &mut this.author {
                                             author.targeted = !author.targeted;
@@ -594,7 +594,7 @@ impl Workspace {
                     .border_color(rgb(BORDER))
                     .text_color(rgb(if checking { TEXT_DIM } else { TEXT }))
                     .child(if checking { "Checking..." } else { "Check" })
-                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| this.author_check(cx))),
             )
             .when(!readonly, |footer| {
@@ -610,7 +610,7 @@ impl Workspace {
                         .child("Save to repo")
                         .when(saveable, |button| {
                             button
-                                .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                 .on_click(cx.listener(|this, _, _, cx| this.author_save(cx)))
                         })
                         .when(!saveable, |button| {
@@ -638,7 +638,7 @@ impl Workspace {
                     } else {
                         "Discard draft"
                     })
-                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.author = None;
                         cx.notify();

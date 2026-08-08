@@ -12,7 +12,7 @@ use gpui::{div, prelude::*, px, rgb, Context, Entity, Window};
 use gpui_component::input::{Input, InputState};
 
 use crate::rt;
-use crate::theme::{BG, BG_SIDEBAR, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
+use crate::theme::{BG, BG_SIDEBAR, BORDER, DANGER, HOVER, SUCCESS, TEXT, TEXT_DIM};
 use crate::Workspace;
 
 /// Checkout paths a migration repo owns; only these are ever staged.
@@ -271,7 +271,7 @@ impl Workspace {
                         .border_color(rgb(SUCCESS))
                         .text_color(rgb(SUCCESS))
                         .child("Commit")
-                        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| this.commit_run(cx))),
                 )
             })
@@ -286,7 +286,7 @@ impl Workspace {
                         .border_color(rgb(if pushing { BORDER } else { SUCCESS }))
                         .text_color(rgb(if pushing { TEXT_DIM } else { SUCCESS }))
                         .child(if pushing { "Pushing..." } else { "Push" })
-                        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| this.commit_push(cx))),
                 )
             })
@@ -299,7 +299,7 @@ impl Workspace {
                     .rounded(px(3.))
                     .text_color(rgb(TEXT_DIM))
                     .child("Close")
-                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.commit = None;
                         cx.notify();

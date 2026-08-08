@@ -19,7 +19,10 @@ use zedb_acp::{AcpError, AgentConnection, AgentEvent, PermissionOption, Permissi
 
 use crate::author::RollbackChoice;
 use crate::rt;
-use crate::theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
+use crate::theme::{
+    BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, DANGER_HOVER, DISABLED, HOVER, SELECTED, SUCCESS,
+    TEXT, TEXT_DIM, WARNING,
+};
 use crate::Workspace;
 
 #[derive(Clone, PartialEq, Action)]
@@ -1542,7 +1545,7 @@ impl Workspace {
                                 .rounded(px(3.))
                                 .text_color(rgb(TEXT_DIM))
                                 .child("x")
-                                .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.agent.open = false;
                                     cx.notify();
@@ -1614,7 +1617,7 @@ impl Workspace {
                                 .px_2()
                                 .rounded(px(3.))
                                 .child("remove")
-                                .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.agent_remove_custom(index, cx);
                                 })),
@@ -1636,7 +1639,7 @@ impl Workspace {
                             .border_color(rgb(BORDER))
                             .text_color(rgb(TEXT))
                             .child("Add")
-                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                             .on_click(cx.listener(|this, _, _, cx| this.agent_save_custom(cx))),
                     )
                     .child(
@@ -1647,7 +1650,7 @@ impl Workspace {
                             .rounded(px(3.))
                             .text_color(rgb(TEXT_DIM))
                             .child("Cancel")
-                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.agent.add_form = None;
                                 cx.notify();
@@ -1720,7 +1723,7 @@ impl Workspace {
                     "user" => div()
                         .p_2()
                         .rounded(px(4.))
-                        .bg(rgb(0x2c3a4d))
+                        .bg(rgb(SELECTED))
                         .text_color(rgb(TEXT_DIM))
                         .child(
                             TextView::markdown(("agent-restored", index), text.clone(), window, cx)
@@ -1778,7 +1781,7 @@ impl Workspace {
                                 .gap_2()
                                 .child(svg().path(icon).size(px(13.)).text_color(rgb(TEXT)))
                                 .child(format!("New thread with {last} (cmd-N)"))
-                                .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.agent_start_last_thread(window, cx)
                                 })),
@@ -1795,7 +1798,7 @@ impl Workspace {
                                 .border_color(rgb(BORDER))
                                 .text_xs()
                                 .child("Reopen last thread (read-only)")
-                                .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.agent.restored = load_transcript();
                                     cx.notify();
@@ -1876,7 +1879,7 @@ impl Workspace {
                                             .size(px(12.))
                                             .text_color(rgb(DANGER)),
                                     )
-                                    .hover(|button| button.bg(rgb(0x3d2528)).cursor_pointer())
+                                    .hover(|button| button.bg(rgb(DANGER_HOVER)).cursor_pointer())
                                     .tooltip(|window, cx| {
                                         gpui_component::tooltip::Tooltip::new("Stop the turn")
                                             .build(window, cx)
@@ -1903,7 +1906,7 @@ impl Workspace {
                                             .text_color(rgb(if ready {
                                                 TEXT_DIM
                                             } else {
-                                                0x454b55
+                                                DISABLED
                                             }))
                                             .when(ready, |icon| {
                                                 icon.group_hover("agent-send", |icon| {
@@ -1913,9 +1916,7 @@ impl Workspace {
                                     )
                                     .when(ready, |button| {
                                         button
-                                            .hover(|button| {
-                                                button.bg(rgb(0x303640)).cursor_pointer()
-                                            })
+                                            .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                             .tooltip(|window, cx| {
                                                 gpui_component::tooltip::Tooltip::new(
                                                     "Send (enter)",
@@ -2004,7 +2005,7 @@ fn render_entry(
         ThreadEntry::User(text) => div()
             .p_2()
             .rounded(px(4.))
-            .bg(rgb(0x2c3a4d))
+            .bg(rgb(SELECTED))
             .text_color(rgb(TEXT))
             .child(
                 TextView::markdown(("agent-user", index), text.clone(), window, cx)
@@ -2021,9 +2022,9 @@ fn render_entry(
                     .p_2()
                     .rounded(px(4.))
                     .border_1()
-                    .border_color(rgb(0xd7a65f))
+                    .border_color(rgb(WARNING))
                     .text_xs()
-                    .text_color(rgb(0xd7a65f))
+                    .text_color(rgb(WARNING))
                     .child(
                         TextView::markdown(("agent-notice", index), text.clone(), window, cx)
                             .selectable(true),
@@ -2052,7 +2053,7 @@ fn render_entry(
                             .text_xs()
                             .text_color(rgb(TEXT_DIM))
                             .child(label)
-                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_query_tab_with(&block, window, cx);
                             })),
@@ -2089,13 +2090,13 @@ fn render_entry(
                 .p_2()
                 .rounded(px(4.))
                 .border_1()
-                .border_color(rgb(0xd7a65f))
+                .border_color(rgb(WARNING))
                 .flex()
                 .flex_col()
                 .gap_2()
                 .child(
                     div()
-                        .text_color(rgb(0xd7a65f))
+                        .text_color(rgb(WARNING))
                         .text_xs()
                         .child(format!("Permission: {title}")),
                 )
@@ -2137,7 +2138,7 @@ fn render_entry(
                                 .text_color(rgb(TEXT))
                                 .text_xs()
                                 .child(label)
-                                .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.agent_answer_permission(Some(option_id.clone()), cx);
                                 })),

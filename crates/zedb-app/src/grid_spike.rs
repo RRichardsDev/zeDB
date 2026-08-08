@@ -14,7 +14,10 @@ use gpui_component::Sizable as _;
 use std::collections::HashMap;
 use zedb_core::{ColumnMeta, Value};
 
-use crate::theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, TEXT, TEXT_DIM};
+use crate::theme::{
+    BG, BG_SIDEBAR, BG_STATUS, BORDER, DATE_TINT, FILTER_BORDER, FILTER_TINT, HOVER, ROW_HOVER,
+    ROW_STRIPE, SELECTED, SORT_INDICATOR, TEXT, TEXT_DIM,
+};
 
 actions!(grid_spike, [Copy]);
 
@@ -70,14 +73,6 @@ enum FilterMode {
 }
 
 const ROW_HEIGHT: f32 = 24.0;
-/// Dull orange for the sort arrows and priorities in the header.
-const SORT_INDICATOR: u32 = 0xc08a52;
-/// Muted purple ring around a filtered column's header.
-const FILTER_BORDER: u32 = 0x6f5b99;
-/// Brighter cousin of the border for filter text in hover cards.
-const FILTER_TINT: u32 = 0x9d84cc;
-/// Muted red for the date part of temporal values.
-const DATE_TINT: u32 = 0xb56b6b;
 const COL_WIDTH: f32 = 120.0;
 
 pub struct GridSpike {
@@ -539,7 +534,7 @@ impl GridSpike {
                     })
                     .text_color(rgb(TEXT_DIM))
                     .cursor_pointer()
-                    .hover(|cell| cell.bg(rgb(0x2a2f37)))
+                    .hover(|cell| cell.bg(rgb(ROW_HOVER)))
                     .tooltip({
                         // Only this column's modifiers, with their overall
                         // sort priority preserved.
@@ -886,11 +881,11 @@ impl Render for GridSpike {
                             .h(px(ROW_HEIGHT))
                             .items_center()
                             .w(px(this.total_width()))
-                            .when(row % 2 == 1, |d| d.bg(rgb(0x21252b)))
+                            .when(row % 2 == 1, |d| d.bg(rgb(ROW_STRIPE)))
                             .when(row + 1 == rows, |d| {
                                 d.border_b_1().border_color(rgb(BORDER))
                             })
-                            .hover(|d| d.bg(rgb(0x2a2f37)))
+                            .hover(|d| d.bg(rgb(ROW_HOVER)))
                             .children(cells)
                     })
                     .collect()
@@ -987,7 +982,7 @@ impl Render for GridSpike {
                                 .id("filter-close")
                                 .px_1()
                                 .rounded(px(3.))
-                                .hover(|close| close.bg(rgb(0x303640)).cursor_pointer())
+                                .hover(|close| close.bg(rgb(HOVER)).cursor_pointer())
                                 .child("\u{00d7}")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.filter_panel = None;
@@ -1024,7 +1019,7 @@ impl Render for GridSpike {
                                 .px_1()
                                 .rounded(px(3.))
                                 .cursor_pointer()
-                                .hover(|row| row.bg(rgb(0x2a2f37)))
+                                .hover(|row| row.bg(rgb(ROW_HOVER)))
                                 .child(div().flex_none().child(glyph))
                                 .child(
                                     div()
@@ -1074,10 +1069,7 @@ impl Render for GridSpike {
                             .rounded(px(3.))
                             .text_color(rgb(TEXT_DIM))
                             .hover(|button| {
-                                button
-                                    .bg(rgb(0x303640))
-                                    .text_color(rgb(TEXT))
-                                    .cursor_pointer()
+                                button.bg(rgb(HOVER)).text_color(rgb(TEXT)).cursor_pointer()
                             })
                             .child("Clear")
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1097,7 +1089,7 @@ impl Render for GridSpike {
                             .px_2()
                             .py_0p5()
                             .rounded(px(3.))
-                            .bg(rgb(0x2c3a4d))
+                            .bg(rgb(SELECTED))
                             .text_color(rgb(TEXT))
                             .hover(|button| button.bg(rgb(0x37485f)).cursor_pointer())
                             .child("Apply")

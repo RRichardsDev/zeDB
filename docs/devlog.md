@@ -773,3 +773,12 @@ Status: implementation complete, awaiting UI acceptance.
 - Proven from a terminal with no ClickHouse configured at all:
   schema_search "sneaky" returned zedb_kappa's two drifted columns,
   and lint_sql flagged a fake column while accepting a real one.
+
+## 2026-08-08: palette consolidation
+
+Every reused or semantic color moved into theme.rs (~23 new named
+constants: HOVER, ROW_HOVER, SELECTED, PRIMARY/_HOVER, DISABLED,
+WARNING/ALERT, TOGGLE_*, the grid accents, zebra/inset surfaces).
+Inline hex literals dropped from ~117 occurrences of 35+ distinct
+colors to 17 one-off decorative shades that stay local by design.
+Zero visual change; prerequisite for any future theme system.

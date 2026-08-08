@@ -14,7 +14,7 @@ use gpui::{div, prelude::*, px, rgb, Context};
 use zedb_core::repo::MigrationRepo;
 
 use crate::rt;
-use crate::theme::{BG_SIDEBAR, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
+use crate::theme::{BG_SIDEBAR, BORDER, DANGER, HOVER, SUCCESS, TEXT, TEXT_DIM};
 use crate::Workspace;
 
 /// One chain check's lifecycle in the modal.
@@ -335,7 +335,7 @@ impl Workspace {
                         .border_color(rgb(SUCCESS))
                         .text_color(rgb(SUCCESS))
                         .child("Write current-state")
-                        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| this.codegen_write(cx))),
                 )
             })
@@ -348,7 +348,7 @@ impl Workspace {
                     .rounded(px(3.))
                     .text_color(rgb(TEXT_DIM))
                     .child("Close")
-                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.regen = None;
                         this.checks = None;

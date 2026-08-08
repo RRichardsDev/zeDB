@@ -51,7 +51,11 @@ use components::text_input::{self, TextInput};
 use fleet::FleetState;
 use grid_spike::GridSpike;
 use schema_intelligence_ui::{byte_range_to_lsp, SchemaProvider};
-use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
+use theme::{
+    ACCENT, ALERT, BG, BG_SIDEBAR, BG_STATUS, BG_SUNKEN, BORDER, DANGER, DANGER_HOVER, DISABLED,
+    DISABLED_BORDER, HOVER, PRIMARY, PRIMARY_HOVER, ROW_HOVER, SELECTED, SUCCESS, TEXT,
+    TEXT_BRIGHT, TEXT_DIM, TOGGLE_KNOB_OFF, TOGGLE_KNOB_ON, TOGGLE_OFF, TOGGLE_ON, WARNING,
+};
 use vim::{CommandLineSnapshot, VimController};
 
 /// The query a fresh install starts with: valid on any ClickHouse and
@@ -1403,18 +1407,18 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .when(self.preferences.vim_mode, |toggle| {
-                                    toggle.justify_end().bg(rgb(0x3f6650))
+                                    toggle.justify_end().bg(rgb(TOGGLE_ON))
                                 })
                                 .when(!self.preferences.vim_mode, |toggle| {
-                                    toggle.justify_start().bg(rgb(0x343941))
+                                    toggle.justify_start().bg(rgb(TOGGLE_OFF))
                                 })
                                 .hover(|toggle| toggle.cursor_pointer())
                                 .on_click(cx.listener(|this, _, _, cx| this.toggle_vim_mode(cx)))
                                 .child(div().size(px(20.)).rounded_full().bg(rgb(
                                     if self.preferences.vim_mode {
-                                        0x9ab7a1
+                                        TOGGLE_KNOB_ON
                                     } else {
-                                        0x777e88
+                                        TOGGLE_KNOB_OFF
                                     },
                                 ))),
                         ),
@@ -1456,15 +1460,15 @@ impl Workspace {
             .map(|badge| {
                 if read_only {
                     badge
-                        .bg(rgb(0x2a2f37))
+                        .bg(rgb(ROW_HOVER))
                         .border_color(rgb(TEXT_DIM))
                         .text_color(rgb(TEXT_DIM))
                         .child("READ-ONLY")
                 } else {
                     badge
                         .bg(rgb(0x4d2c2c))
-                        .border_color(rgb(0xe0806f))
-                        .text_color(rgb(0xe0806f))
+                        .border_color(rgb(ALERT))
+                        .text_color(rgb(ALERT))
                         .child("WRITE")
                 }
             })
@@ -1491,8 +1495,8 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .when(selected, |row| row.bg(rgb(0x303640)))
-                    .hover(|row| row.bg(rgb(0x2a2f37)).cursor_pointer())
+                    .when(selected, |row| row.bg(rgb(HOVER)))
+                    .hover(|row| row.bg(rgb(ROW_HOVER)).cursor_pointer())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected = Some(index);
                         this.pending_delete = None;
@@ -1565,7 +1569,7 @@ impl Workspace {
                                     .rounded(px(3.))
                                     .text_color(rgb(TEXT))
                                     .child("+")
-                                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                     .on_click(cx.listener(|this, _, _, cx| this.start_add(cx))),
                             ),
                     )
@@ -1617,7 +1621,7 @@ impl Workspace {
                                                         .child("Cancel")
                                                         .hover(|button| {
                                                             button
-                                                                .bg(rgb(0x303640))
+                                                                .bg(rgb(HOVER))
                                                                 .text_color(rgb(TEXT))
                                                                 .cursor_pointer()
                                                         })
@@ -1640,7 +1644,7 @@ impl Workspace {
                                                         .hover(|button| {
                                                             button
                                                                 .bg(rgb(0x8b3434))
-                                                                .text_color(rgb(0xffffff))
+                                                                .text_color(rgb(TEXT_BRIGHT))
                                                                 .cursor_pointer()
                                                         })
                                                         .on_click(cx.listener(
@@ -1681,7 +1685,7 @@ impl Workspace {
                                                     )
                                                     .hover(|button| {
                                                         button
-                                                            .bg(rgb(0x303640))
+                                                            .bg(rgb(HOVER))
                                                             .text_color(rgb(TEXT))
                                                             .cursor_pointer()
                                                     })
@@ -1714,7 +1718,7 @@ impl Workspace {
                                                     )
                                                     .hover(|button| {
                                                         button
-                                                            .bg(rgb(0x303640))
+                                                            .bg(rgb(HOVER))
                                                             .text_color(rgb(TEXT))
                                                             .cursor_pointer()
                                                     })
@@ -1747,7 +1751,7 @@ impl Workspace {
                                                         button
                                                             .hover(|button| {
                                                                 button
-                                                                    .bg(rgb(0x3d2528))
+                                                                    .bg(rgb(DANGER_HOVER))
                                                                     .text_color(rgb(DANGER))
                                                                     .cursor_pointer()
                                                             })
@@ -1847,8 +1851,8 @@ impl Workspace {
                             .items_center()
                             .gap_2()
                             .rounded(px(3.))
-                            .when(is_selected, |row| row.bg(rgb(0x303640)))
-                            .hover(|row| row.bg(rgb(0x2a2f37)).cursor_pointer())
+                            .when(is_selected, |row| row.bg(rgb(HOVER)))
+                            .hover(|row| row.bg(rgb(ROW_HOVER)).cursor_pointer())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.select_schema_object(
                                     row_database.clone(),
@@ -1912,7 +1916,7 @@ impl Workspace {
                                 .items_center()
                                 .gap_2()
                                 .rounded(px(3.))
-                                .hover(|row| row.bg(rgb(0x2a2f37)).cursor_pointer())
+                                .hover(|row| row.bg(rgb(ROW_HOVER)).cursor_pointer())
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.toggle_schema_database(database_index, window, cx)
                                 }))
@@ -1985,10 +1989,7 @@ impl Workspace {
                                         .text_color(rgb(TEXT_DIM)),
                                 )
                                 .hover(|button| {
-                                    button
-                                        .bg(rgb(0x303640))
-                                        .text_color(rgb(TEXT))
-                                        .cursor_pointer()
+                                    button.bg(rgb(HOVER)).text_color(rgb(TEXT)).cursor_pointer()
                                 })
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.load_schema_databases(cx)),
@@ -3502,17 +3503,21 @@ impl Workspace {
                                         .flex()
                                         .items_center()
                                         .when(form.read_only, |toggle| {
-                                            toggle.justify_end().bg(rgb(0x3f6650))
+                                            toggle.justify_end().bg(rgb(TOGGLE_ON))
                                         })
                                         .when(!form.read_only, |toggle| {
-                                            toggle.justify_start().bg(rgb(0x343941))
+                                            toggle.justify_start().bg(rgb(TOGGLE_OFF))
                                         })
                                         .hover(|toggle| toggle.cursor_pointer())
                                         .on_click(
                                             cx.listener(|this, _, _, cx| this.toggle_read_only(cx)),
                                         )
                                         .child(div().size(px(20.)).rounded_full().bg(rgb(
-                                            if form.read_only { 0x9ab7a1 } else { 0x777e88 },
+                                            if form.read_only {
+                                                TOGGLE_KNOB_ON
+                                            } else {
+                                                TOGGLE_KNOB_OFF
+                                            },
                                         ))),
                                 ),
                         )
@@ -3567,8 +3572,8 @@ impl Workspace {
                                         .px_4()
                                         .py_2()
                                         .rounded(px(3.))
-                                        .bg(rgb(0x2f6f9f))
-                                        .text_color(rgb(0xffffff))
+                                        .bg(rgb(PRIMARY))
+                                        .text_color(rgb(TEXT_BRIGHT))
                                         .child(if self.connecting.is_some() {
                                             "Testing nodes..."
                                         } else {
@@ -3577,7 +3582,7 @@ impl Workspace {
                                         .when(self.connecting.is_none(), |button| {
                                             button
                                                 .hover(|button| {
-                                                    button.bg(rgb(0x3884bd)).cursor_pointer()
+                                                    button.bg(rgb(PRIMARY_HOVER)).cursor_pointer()
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.save_and_connect(cx)
@@ -4779,12 +4784,12 @@ impl Workspace {
                                 if self.connected.is_none() {
                                     // Disabled: the fleet view is per-connection.
                                     button
-                                        .border_color(rgb(0x22262c))
+                                        .border_color(rgb(DISABLED_BORDER))
                                         .child(
                                             svg()
                                                 .path("icons/fleet.svg")
                                                 .size(px(14.))
-                                                .text_color(rgb(0x454b55)),
+                                                .text_color(rgb(DISABLED)),
                                         )
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new(
@@ -4795,7 +4800,7 @@ impl Workspace {
                                 } else {
                                     button
                                         .border_color(rgb(BORDER))
-                                        .when(self.show_fleet, |button| button.bg(rgb(0x2c3a4d)))
+                                        .when(self.show_fleet, |button| button.bg(rgb(SELECTED)))
                                         .child(
                                             svg()
                                                 .path("icons/fleet.svg")
@@ -4809,7 +4814,7 @@ impl Workspace {
                                                     icon.text_color(rgb(TEXT))
                                                 }),
                                         )
-                                        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new("Fleet view")
                                                 .build(window, cx)
@@ -4835,12 +4840,12 @@ impl Workspace {
                                     // Disabled; running from an existing tab
                                     // still gets the connect-first warning.
                                     button
-                                        .border_color(rgb(0x22262c))
+                                        .border_color(rgb(DISABLED_BORDER))
                                         .child(
                                             svg()
                                                 .path("icons/query-plus.svg")
                                                 .size(px(14.))
-                                                .text_color(rgb(0x454b55)),
+                                                .text_color(rgb(DISABLED)),
                                         )
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new(
@@ -4851,7 +4856,7 @@ impl Workspace {
                                 } else {
                                     button
                                         .border_color(rgb(BORDER))
-                                        .when(!self.show_fleet, |button| button.bg(rgb(0x2c3a4d)))
+                                        .when(!self.show_fleet, |button| button.bg(rgb(SELECTED)))
                                         .child(
                                             svg()
                                                 .path("icons/query-plus.svg")
@@ -4865,7 +4870,7 @@ impl Workspace {
                                                     icon.text_color(rgb(TEXT))
                                                 }),
                                         )
-                                        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new("New query")
                                                 .build(window, cx)
@@ -4889,7 +4894,7 @@ impl Workspace {
                             .rounded(px(3.))
                             .border_1()
                             .border_color(rgb(BORDER))
-                            .when(self.agent.open, |button| button.bg(rgb(0x2c3a4d)))
+                            .when(self.agent.open, |button| button.bg(rgb(SELECTED)))
                             .child(
                                 svg()
                                     .path("icons/sparkle.svg")
@@ -4897,7 +4902,7 @@ impl Workspace {
                                     .text_color(rgb(if self.agent.open { TEXT } else { TEXT_DIM }))
                                     .group_hover("btn-agent", |icon| icon.text_color(rgb(TEXT))),
                             )
-                            .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                            .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                             .tooltip(|window, cx| {
                                 gpui_component::tooltip::Tooltip::new(
                                     "Agent pane: AI threads with your installed agents",
@@ -4925,7 +4930,7 @@ impl Workspace {
                                         .size(px(14.))
                                         .text_color(rgb(DANGER)),
                                 )
-                                .hover(|button| button.bg(rgb(0x3d2528)).cursor_pointer())
+                                .hover(|button| button.bg(rgb(DANGER_HOVER)).cursor_pointer())
                                 .tooltip(|window, cx| {
                                     gpui_component::tooltip::Tooltip::new("Disconnect")
                                         .build(window, cx)
@@ -4988,12 +4993,12 @@ impl Workspace {
                                     } else {
                                         // Disabled: nothing selected to connect to.
                                         button
-                                            .border_color(rgb(0x22262c))
+                                            .border_color(rgb(DISABLED_BORDER))
                                             .child(
                                                 svg()
                                                     .path("icons/plug.svg")
                                                     .size(px(14.))
-                                                    .text_color(rgb(0x454b55)),
+                                                    .text_color(rgb(DISABLED)),
                                             )
                                             .tooltip(|window, cx| {
                                                 gpui_component::tooltip::Tooltip::new(
@@ -5183,7 +5188,7 @@ impl Workspace {
                         .items_center()
                         .border_b_2()
                         .when(tab == button_tab, |button| {
-                            button.border_color(rgb(0x6f8fac)).text_color(rgb(TEXT))
+                            button.border_color(rgb(ACCENT)).text_color(rgb(TEXT))
                         })
                         .when(tab != button_tab, |button| {
                             button
@@ -5276,7 +5281,7 @@ impl Workspace {
                                             .rounded(px(3.))
                                             .border_1()
                                             .border_color(rgb(BORDER))
-                                            .bg(rgb(0x191c21))
+                                            .bg(rgb(BG_SUNKEN))
                                             .overflow_hidden()
                                             .child(
                                                 Input::new(&engine_editor)
@@ -5396,7 +5401,7 @@ impl Workspace {
                             .rounded(px(3.))
                             .border_1()
                             .border_color(rgb(BORDER))
-                            .bg(rgb(0x191c21))
+                            .bg(rgb(BG_SUNKEN))
                             .text_color(rgb(TEXT))
                             .when(loading, |panel| panel.child("Loading DDL..."))
                             .when_some(error.as_ref(), |panel, error| {
@@ -5452,7 +5457,7 @@ impl Workspace {
                                     .px_2()
                                     .py(px(2.))
                                     .rounded(px(3.))
-                                    .bg(rgb(0x303640))
+                                    .bg(rgb(HOVER))
                                     .text_xs()
                                     .text_color(rgb(TEXT_DIM))
                                     .child(selected.object.kind.label()),
@@ -5522,7 +5527,7 @@ impl Workspace {
                     .items_center()
                     .border_b_2()
                     .when(index == self.active_query_tab, |tab| {
-                        tab.border_color(rgb(0x6f8fac)).text_color(rgb(TEXT))
+                        tab.border_color(rgb(ACCENT)).text_color(rgb(TEXT))
                     })
                     .when(index != self.active_query_tab, |tab| {
                         tab.border_color(rgb(BG_SIDEBAR))
@@ -5555,7 +5560,7 @@ impl Workspace {
                                         close
                                             .hover(|close| {
                                                 close
-                                                    .bg(rgb(0x303640))
+                                                    .bg(rgb(HOVER))
                                                     .text_color(rgb(TEXT))
                                                     .cursor_pointer()
                                             })
@@ -5688,7 +5693,7 @@ impl Workspace {
                                         button
                                             .text_color(rgb(DANGER))
                                             .hover(|button| {
-                                                button.bg(rgb(0x3d2528)).cursor_pointer()
+                                                button.bg(rgb(DANGER_HOVER)).cursor_pointer()
                                             })
                                             .on_click(
                                                 cx.listener(|this, _, _, cx| this.cancel_query(cx)),
@@ -5723,13 +5728,13 @@ impl Workspace {
                                     .px_3()
                                     .py_1()
                                     .rounded(px(3.))
-                                    .bg(rgb(0x2f6f9f))
-                                    .text_color(rgb(0xffffff))
+                                    .bg(rgb(PRIMARY))
+                                    .text_color(rgb(TEXT_BRIGHT))
                                     .child("Run  ⌘↵")
                                     .when(!running, |button| {
                                         button
                                             .hover(|button| {
-                                                button.bg(rgb(0x3884bd)).cursor_pointer()
+                                                button.bg(rgb(PRIMARY_HOVER)).cursor_pointer()
                                             })
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.run_query(window, cx)
@@ -5842,7 +5847,7 @@ impl Workspace {
                                                 .border_color(rgb(BORDER))
                                                 .text_color(rgb(TEXT))
                                                 .hover(|button| {
-                                                    button.bg(rgb(0x3d2528)).cursor_pointer()
+                                                    button.bg(rgb(DANGER_HOVER)).cursor_pointer()
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.resolve_statement_failure(true, cx)
@@ -5858,7 +5863,7 @@ impl Workspace {
                                                 .border_color(rgb(BORDER))
                                                 .text_color(rgb(TEXT))
                                                 .hover(|button| {
-                                                    button.bg(rgb(0x3d2528)).cursor_pointer()
+                                                    button.bg(rgb(DANGER_HOVER)).cursor_pointer()
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.resolve_statement_failure(false, cx)
@@ -5917,7 +5922,7 @@ impl Workspace {
                             .child(
                                 div()
                                     .flex_none()
-                                    .text_color(rgb(if normal { 0x9ab7a1 } else { TEXT_DIM }))
+                                    .text_color(rgb(if normal { TOGGLE_KNOB_ON } else { TEXT_DIM }))
                                     .child(format!("-- {label} --")),
                             )
                             .when_some(command_line, |row, command_line| {
@@ -5940,7 +5945,7 @@ impl Workspace {
                                 row.child(
                                     div()
                                         .flex_none()
-                                        .text_color(rgb(0xd7a65f))
+                                        .text_color(rgb(WARNING))
                                         .child(format!("recording @{register}")),
                                 )
                             })
@@ -6353,7 +6358,7 @@ impl Workspace {
                                     .text_center()
                                     .text_color(rgb(TEXT))
                                     .child("OK")
-                                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.show_about = false;
                                         cx.notify();
@@ -6370,7 +6375,7 @@ impl Workspace {
                                     .text_center()
                                     .text_color(rgb(TEXT))
                                     .child("Copy")
-                                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                             copy_text.clone(),
@@ -6501,7 +6506,7 @@ fn configure_component_theme(cx: &mut App) {
     theme.colors.foreground = rgb(TEXT).into();
     theme.colors.popover = rgb(BG_SIDEBAR).into();
     theme.colors.popover_foreground = rgb(TEXT_DIM).into();
-    theme.colors.accent = rgb(0x303640).into();
+    theme.colors.accent = rgb(HOVER).into();
     theme.colors.accent_foreground = rgb(TEXT).into();
     theme.colors.secondary_foreground = rgb(TEXT_DIM).into();
     theme.colors.border = rgb(BORDER).into();
@@ -6510,7 +6515,7 @@ fn configure_component_theme(cx: &mut App) {
     theme.colors.muted_foreground = rgb(TEXT_DIM).into();
     theme.colors.caret = rgb(0x9bb8d1).into();
     theme.colors.selection = rgb(0x3b5063).into();
-    theme.colors.ring = rgb(0x6f8fac).into();
+    theme.colors.ring = rgb(ACCENT).into();
     theme.highlight_theme = HighlightTheme::default_dark();
     let highlight = std::sync::Arc::make_mut(&mut theme.highlight_theme);
     highlight.style.editor_background = Some(rgb(BG).into());

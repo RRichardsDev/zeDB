@@ -19,10 +19,13 @@ use zedb_core::save_preferences;
 
 use crate::components::text_input::TextInput;
 use crate::rt;
-use crate::theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
+use crate::theme::{
+    BG, BG_INSET, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, HOVER, ROW_HOVER, ROW_STRIPE, SELECTED,
+    SUCCESS, TEXT, TEXT_DIM, WARNING,
+};
 use crate::Workspace;
 
-const ACCENT_PENDING: u32 = 0xd7a65f;
+const ACCENT_PENDING: u32 = WARNING;
 const ACCENT_CUSTOM: u32 = 0x9d7cd8;
 const ROW_HEIGHT: f32 = 26.0;
 
@@ -251,7 +254,7 @@ fn fleet_icon_button(
                 .text_color(rgb(TEXT_DIM))
                 .group_hover(id, |icon| icon.text_color(rgb(TEXT))),
         )
-        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
         .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tooltip).build(window, cx))
         .on_click(on_click)
 }
@@ -272,7 +275,7 @@ fn action_button(
         .text_color(rgb(color))
         .text_center()
         .child(label)
-        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
         .on_click(on_click)
 }
 
@@ -1177,7 +1180,7 @@ impl Workspace {
                     } else {
                         "Verify"
                     })
-                    .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                     .on_click({
                         let database = database.clone();
                         cx.listener(move |this, _, _, cx| this.fleet_verify(database.clone(), cx))
@@ -1311,7 +1314,7 @@ impl Workspace {
                         .id(("fleet-sql", number as usize))
                         .p_2()
                         .rounded(px(3.))
-                        .bg(rgb(0x1b1e23))
+                        .bg(rgb(BG_INSET))
                         .border_1()
                         .border_color(rgb(BORDER))
                         .text_xs()
@@ -1520,7 +1523,7 @@ impl Workspace {
                         .id(gpui::SharedString::from(format!("modal-sql-{label}")))
                         .p_2()
                         .rounded(px(3.))
-                        .bg(rgb(0x1b1e23))
+                        .bg(rgb(BG_INSET))
                         .border_1()
                         .border_color(rgb(BORDER))
                         .text_xs()
@@ -1613,7 +1616,7 @@ impl Workspace {
                         } else {
                             "Cancel"
                         })
-                        .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.fleet.pending_action = None;
                             cx.notify();
@@ -1985,7 +1988,7 @@ impl Workspace {
                             .text_color(rgb(if applied_anywhere { TEXT_DIM } else { SUCCESS }))
                             .child(label),
                     )
-                    .hover(|cell| cell.bg(rgb(0x303640)).cursor_pointer())
+                    .hover(|cell| cell.bg(rgb(HOVER)).cursor_pointer())
                     .tooltip(move |window, cx| {
                         gpui_component::tooltip::Tooltip::new(if applied_anywhere {
                             "View migration (applied; read-only)"
@@ -2026,9 +2029,9 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .h(px(ROW_HEIGHT))
-                                .when(index % 2 == 1, |line| line.bg(rgb(0x21252b)))
-                                .when(is_selected, |line| line.bg(rgb(0x2c3a4d)))
-                                .hover(|line| line.bg(rgb(0x2a2f37)))
+                                .when(index % 2 == 1, |line| line.bg(rgb(ROW_STRIPE)))
+                                .when(is_selected, |line| line.bg(rgb(SELECTED)))
+                                .hover(|line| line.bg(rgb(ROW_HOVER)))
                                 .on_click({
                                     let database = row.database.clone();
                                     cx.listener(move |this: &mut Workspace, _, _, cx| {
@@ -2253,7 +2256,7 @@ impl Workspace {
                         } else {
                             "All shown"
                         })
-                        .hover(|item| item.bg(rgb(0x303640)).cursor_pointer())
+                        .hover(|item| item.bg(rgb(HOVER)).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.fleet.hidden_databases.clear();
                             cx.notify();
@@ -2284,7 +2287,7 @@ impl Workspace {
                                     .text_color(rgb(if checked { TEXT } else { TEXT_DIM }))
                                     .child(database.clone()),
                             )
-                            .hover(|item| item.bg(rgb(0x303640)).cursor_pointer())
+                            .hover(|item| item.bg(rgb(HOVER)).cursor_pointer())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if !this.fleet.hidden_databases.remove(&database) {
                                     this.fleet.hidden_databases.insert(database.clone());
@@ -2325,9 +2328,9 @@ impl Workspace {
                             .py_1()
                             .rounded(px(3.))
                             .text_color(rgb(if selected { TEXT } else { TEXT_DIM }))
-                            .when(selected, |item| item.bg(rgb(0x2c3a4d)))
+                            .when(selected, |item| item.bg(rgb(SELECTED)))
                             .child(label)
-                            .hover(|item| item.bg(rgb(0x303640)).cursor_pointer())
+                            .hover(|item| item.bg(rgb(HOVER)).cursor_pointer())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.fleet.selected_cluster = option.clone();
                                 this.fleet.cluster_open = false;

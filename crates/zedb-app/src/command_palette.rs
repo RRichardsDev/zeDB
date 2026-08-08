@@ -5,7 +5,7 @@
 use gpui::{div, prelude::*, px, rgb, Context, Entity, Focusable, Window};
 
 use crate::components::text_input::TextInput;
-use crate::theme::{BG, BG_SIDEBAR, BORDER, TEXT, TEXT_DIM};
+use crate::theme::{BG, BG_SIDEBAR, BORDER, SELECTED, TEXT, TEXT_DIM};
 use crate::Workspace;
 
 pub struct PaletteState {
@@ -232,7 +232,7 @@ impl Workspace {
                                             .flex()
                                             .items_center()
                                             .text_color(rgb(TEXT))
-                                            .when(index == selected, |row| row.bg(rgb(0x2c3a4d)))
+                                            .when(index == selected, |row| row.bg(rgb(SELECTED)))
                                             .hover(|row| row.bg(rgb(BG_SIDEBAR)).cursor_pointer())
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.palette_close(window, cx);
