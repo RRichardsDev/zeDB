@@ -51,8 +51,9 @@ use schema_intelligence_ui::{byte_range_to_lsp, SchemaProvider};
 use theme::{BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, SUCCESS, TEXT, TEXT_DIM};
 use vim::{CommandLineSnapshot, VimController};
 
-/// The query a fresh install starts with.
-const DEFAULT_QUERY: &str = "select * from PERFOMANCE.ActivityFacts;";
+/// The query a fresh install starts with: valid on any ClickHouse and
+/// a useful first look at what the server holds.
+const DEFAULT_QUERY: &str = "select database, name, engine, total_rows\nfrom system.tables\nwhere database not in ('system', 'INFORMATION_SCHEMA', 'information_schema')\norder by total_rows desc\nlimit 100;";
 
 fn format_engine_definition(engine: &str) -> String {
     let mut formatted = format!("ENGINE = {engine}");
