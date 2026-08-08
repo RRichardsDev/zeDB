@@ -3318,246 +3318,255 @@ impl Workspace {
             .overflow_y_scroll()
             .bg(rgb(BG))
             .p_6()
-            .flex()
-            .justify_center()
+            // Centering lives on a non-scroll wrapper: a flex scroll
+            // container stretches its child to the viewport height and
+            // clips the overflow before scrolling ever sees it.
             .child(
-                div()
-                    .w(px(520.))
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(div().text_lg().text_color(rgb(TEXT)).child(heading))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(div().text_xs().text_color(rgb(TEXT_DIM)).child("NAME"))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(div().flex_1().child(form.name.clone()))
-                                    .child(
-                                        div()
-                                            .id("cycle-tier")
-                                            .h(px(34.))
-                                            .px_1()
-                                            .flex()
-                                            .items_center()
-                                            .rounded(px(3.))
-                                            .child(Self::tier_badge(form.tier))
-                                            .hover(|button| {
-                                                button.bg(rgb(BG_SIDEBAR)).cursor_pointer()
-                                            })
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| this.cycle_tier(cx)),
-                                            ),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(TEXT_DIM))
-                                            .child("CLUSTER NODES"),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("add-endpoint")
-                                            .px_2()
-                                            .py_1()
-                                            .rounded(px(3.))
-                                            .border_1()
-                                            .border_color(rgb(BORDER))
-                                            .child("+ Add node")
-                                            .hover(|button| {
-                                                button.bg(rgb(BG_SIDEBAR)).cursor_pointer()
-                                            })
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| this.add_endpoint(cx)),
-                                            ),
-                                    ),
-                            )
-                            .children(endpoint_rows),
-                    )
-                    .child(Self::field("USER", form.user.clone()))
-                    .child(Self::field("DATABASE", form.database.clone()))
-                    .child(Self::field("PASSWORD", form.password.clone()))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(
-                                        div().text_xs().text_color(rgb(TEXT_DIM)).child("DRIVER"),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("add-driver-setting")
-                                            .px_2()
-                                            .py_0p5()
-                                            .rounded(px(3.))
-                                            .text_xs()
-                                            .text_color(rgb(TEXT_DIM))
-                                            .hover(|button| {
-                                                button
-                                                    .bg(rgb(BG_SIDEBAR))
-                                                    .text_color(rgb(TEXT))
-                                                    .cursor_pointer()
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.add_driver_setting(cx)
-                                            }))
-                                            .child("+ Add setting"),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap_3()
-                                    .child(div().flex_1().child(Self::field(
-                                        "QUERY TIMEOUT (S)",
-                                        form.driver_max_execution.clone(),
-                                    )))
-                                    .child(div().flex_1().child(Self::field(
-                                        "CONNECT TIMEOUT (S)",
-                                        form.driver_connect_timeout.clone(),
-                                    ))),
-                            )
-                            .children(form.driver_settings.iter().map(|setting| {
-                                div()
-                                    .flex()
-                                    .gap_3()
-                                    .child(
-                                        div().w(px(220.)).flex_none().child(setting.name.clone()),
-                                    )
-                                    .child(div().flex_1().child(setting.value.clone()))
-                            }))
-                            .when(!form.driver_settings.is_empty(), |section| {
-                                section.child(div().text_xs().text_color(rgb(TEXT_DIM)).child(
-                                    "Settings are sent with every query on this cluster; \
+                div().flex().justify_center().w_full().child(
+                    div()
+                        .w(px(520.))
+                        .flex()
+                        .flex_col()
+                        .gap_4()
+                        .child(div().text_lg().text_color(rgb(TEXT)).child(heading))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(div().text_xs().text_color(rgb(TEXT_DIM)).child("NAME"))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(div().flex_1().child(form.name.clone()))
+                                        .child(
+                                            div()
+                                                .id("cycle-tier")
+                                                .h(px(34.))
+                                                .px_1()
+                                                .flex()
+                                                .items_center()
+                                                .rounded(px(3.))
+                                                .child(Self::tier_badge(form.tier))
+                                                .hover(|button| {
+                                                    button.bg(rgb(BG_SIDEBAR)).cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.cycle_tier(cx)
+                                                })),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(TEXT_DIM))
+                                                .child("CLUSTER NODES"),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("add-endpoint")
+                                                .px_2()
+                                                .py_1()
+                                                .rounded(px(3.))
+                                                .border_1()
+                                                .border_color(rgb(BORDER))
+                                                .child("+ Add node")
+                                                .hover(|button| {
+                                                    button.bg(rgb(BG_SIDEBAR)).cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.add_endpoint(cx)
+                                                })),
+                                        ),
+                                )
+                                .children(endpoint_rows),
+                        )
+                        .child(Self::field("USER", form.user.clone()))
+                        .child(Self::field("DATABASE", form.database.clone()))
+                        .child(Self::field("PASSWORD", form.password.clone()))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(TEXT_DIM))
+                                                .child("DRIVER"),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("add-driver-setting")
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded(px(3.))
+                                                .text_xs()
+                                                .text_color(rgb(TEXT_DIM))
+                                                .hover(|button| {
+                                                    button
+                                                        .bg(rgb(BG_SIDEBAR))
+                                                        .text_color(rgb(TEXT))
+                                                        .cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.add_driver_setting(cx)
+                                                }))
+                                                .child("+ Add setting"),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_3()
+                                        .child(div().flex_1().child(Self::field(
+                                            "QUERY TIMEOUT (S)",
+                                            form.driver_max_execution.clone(),
+                                        )))
+                                        .child(div().flex_1().child(Self::field(
+                                            "CONNECT TIMEOUT (S)",
+                                            form.driver_connect_timeout.clone(),
+                                        ))),
+                                )
+                                .children(form.driver_settings.iter().map(|setting| {
+                                    div()
+                                        .flex()
+                                        .gap_3()
+                                        .child(
+                                            div()
+                                                .w(px(220.))
+                                                .flex_none()
+                                                .child(setting.name.clone()),
+                                        )
+                                        .child(div().flex_1().child(setting.value.clone()))
+                                }))
+                                .when(!form.driver_settings.is_empty(), |section| {
+                                    section.child(div().text_xs().text_color(rgb(TEXT_DIM)).child(
+                                        "Settings are sent with every query on this cluster; \
                                          blank the name to remove a row.",
-                                ))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .items_center()
-                            .gap_3()
-                            .child("Read only")
-                            .child(
-                                // Same switch as the Vim mode toggle.
-                                div()
-                                    .id("toggle-read-only")
-                                    .w(px(54.))
-                                    .h(px(28.))
-                                    .px_1()
-                                    .rounded_full()
-                                    .flex()
-                                    .items_center()
-                                    .when(form.read_only, |toggle| {
-                                        toggle.justify_end().bg(rgb(0x3f6650))
-                                    })
-                                    .when(!form.read_only, |toggle| {
-                                        toggle.justify_start().bg(rgb(0x343941))
-                                    })
-                                    .hover(|toggle| toggle.cursor_pointer())
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.toggle_read_only(cx)),
-                                    )
-                                    .child(
-                                        div().size(px(20.)).rounded_full().bg(rgb(
+                                    ))
+                                }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .items_center()
+                                .gap_3()
+                                .child("Read only")
+                                .child(
+                                    // Same switch as the Vim mode toggle.
+                                    div()
+                                        .id("toggle-read-only")
+                                        .w(px(54.))
+                                        .h(px(28.))
+                                        .px_1()
+                                        .rounded_full()
+                                        .flex()
+                                        .items_center()
+                                        .when(form.read_only, |toggle| {
+                                            toggle.justify_end().bg(rgb(0x3f6650))
+                                        })
+                                        .when(!form.read_only, |toggle| {
+                                            toggle.justify_start().bg(rgb(0x343941))
+                                        })
+                                        .hover(|toggle| toggle.cursor_pointer())
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.toggle_read_only(cx)),
+                                        )
+                                        .child(div().size(px(20.)).rounded_full().bg(rgb(
                                             if form.read_only { 0x9ab7a1 } else { 0x777e88 },
-                                        )),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .id("cancel-connection")
-                                    .px_4()
-                                    .py_2()
-                                    .rounded(px(3.))
-                                    .border_1()
-                                    .border_color(rgb(BORDER))
-                                    .child("Cancel")
-                                    .when(self.connecting.is_none(), |button| {
-                                        button
-                                            .hover(|button| {
-                                                button.bg(rgb(BG_SIDEBAR)).cursor_pointer()
-                                            })
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| this.cancel_form(cx)),
-                                            )
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id("save-offline")
-                                    .px_4()
-                                    .py_2()
-                                    .rounded(px(3.))
-                                    .border_1()
-                                    .border_color(rgb(BORDER))
-                                    .child("Save without testing")
-                                    .when(self.connecting.is_none(), |button| {
-                                        button
-                                            .hover(|button| {
-                                                button.bg(rgb(BG_SIDEBAR)).cursor_pointer()
-                                            })
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| this.save_form(cx)),
-                                            )
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id("save-and-connect")
-                                    .px_4()
-                                    .py_2()
-                                    .rounded(px(3.))
-                                    .bg(rgb(0x2f6f9f))
-                                    .text_color(rgb(0xffffff))
-                                    .child(if self.connecting.is_some() {
-                                        "Testing nodes..."
-                                    } else {
-                                        "Save & Connect"
-                                    })
-                                    .when(self.connecting.is_none(), |button| {
-                                        button
-                                            .hover(|button| {
-                                                button.bg(rgb(0x3884bd)).cursor_pointer()
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.save_and_connect(cx)
-                                            }))
-                                    }),
-                            ),
-                    ),
+                                        ))),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id("cancel-connection")
+                                        .px_4()
+                                        .py_2()
+                                        .rounded(px(3.))
+                                        .border_1()
+                                        .border_color(rgb(BORDER))
+                                        .child("Cancel")
+                                        .when(self.connecting.is_none(), |button| {
+                                            button
+                                                .hover(|button| {
+                                                    button.bg(rgb(BG_SIDEBAR)).cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.cancel_form(cx)
+                                                }))
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .id("save-offline")
+                                        .px_4()
+                                        .py_2()
+                                        .rounded(px(3.))
+                                        .border_1()
+                                        .border_color(rgb(BORDER))
+                                        .child("Save without testing")
+                                        .when(self.connecting.is_none(), |button| {
+                                            button
+                                                .hover(|button| {
+                                                    button.bg(rgb(BG_SIDEBAR)).cursor_pointer()
+                                                })
+                                                .on_click(
+                                                    cx.listener(|this, _, _, cx| {
+                                                        this.save_form(cx)
+                                                    }),
+                                                )
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .id("save-and-connect")
+                                        .px_4()
+                                        .py_2()
+                                        .rounded(px(3.))
+                                        .bg(rgb(0x2f6f9f))
+                                        .text_color(rgb(0xffffff))
+                                        .child(if self.connecting.is_some() {
+                                            "Testing nodes..."
+                                        } else {
+                                            "Save & Connect"
+                                        })
+                                        .when(self.connecting.is_none(), |button| {
+                                            button
+                                                .hover(|button| {
+                                                    button.bg(rgb(0x3884bd)).cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.save_and_connect(cx)
+                                                }))
+                                        }),
+                                ),
+                        ),
+                ),
             )
     }
 

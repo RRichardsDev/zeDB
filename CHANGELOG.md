@@ -14,6 +14,8 @@ GitHub release notes.
   ClickHouse settings sent with every query on that cluster. All
   optional; blank means what zeDB always did. Synced with the
   connection through settings sync.
+- The connection form scrolls when it outgrows the window (many
+  nodes, driver settings) instead of clipping the bottom.
 
 ## v0.1.9 - 2026-08-08
 
