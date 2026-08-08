@@ -7,6 +7,11 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- The fresh-install default query surveys the server (largest tables
+  across all databases) instead of assuming a specific database.
+
 ## v0.1.5 - 2026-08-08
 
 Results-grid release: sort, filter, and shape query results from the
