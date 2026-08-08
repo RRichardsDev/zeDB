@@ -7,37 +7,46 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.10 - 2026-08-08
+
+Themes and a per-cluster driver.
+
+### Theming
+
+- Theme switching: Dark (unchanged), a first-draft Light, or System
+  (follows macOS appearance). Switch from Preferences or the command
+  palette; the choice lives in settings and syncs across machines.
+  Built on Zed-style JSON theme configs, so custom themes become
+  possible later.
+- Moving over a theme command in the palette previews it live; Enter
+  keeps it, dismissing reverts to the saved theme.
+- First light-mode polish: badge tints, primary buttons, Connect
+  hover. Expect further tuning.
+
+### Driver and queries
 
 - Per-cluster driver configuration in the connection form: a settings
   list sent with every query on that cluster, pre-seeded with
-  max_execution_time and connect_timeout rows (removable like any
-  other; connect_timeout configures the driver itself). Blank means
-  what zeDB always did. Synced with the connection through settings
-  sync.
-- The connection form scrolls when it outgrows the window (many
-  nodes, driver settings) instead of clipping the bottom.
+  removable max_execution_time and connect_timeout rows
+  (connect_timeout configures the driver itself). Blank means what
+  zeDB always did; synced with the connection through settings sync.
 - Query results transfer compressed (zstd/gzip negotiated over HTTP),
   typically several times less data on large result sets. Add an
   enable_http_compression=0 driver setting to opt a cluster out.
-- Schema sidebar tables show their on-disk size (B/KB/MB), small and
-  right-aligned; refreshes with the schema cache.
-- system.* and INFORMATION_SCHEMA references no longer squiggle as
-  unknown; the built-in databases exist everywhere even though the
-  schema cache skips them.
-- Theme switching: Dark (unchanged), a first-draft Light, or System
-  (follows macOS appearance). Switch from Preferences or the command
-  palette; the choice lives in settings and syncs. Built on Zed-style
-  JSON theme configs, so custom themes become possible later.
+
+### Fixes
+
+- The completion popup no longer crashes on qualified names (table.x)
+  whose typed prefix is longer than the completion label.
 - Modal panels (new migration, commit, delete confirm, about, regen
   checks) block clicks to the view behind them; migration headers can
   no longer be clicked through the authoring window.
-- Moving over a theme command in the palette previews it live;
-  Enter keeps it, dismissing reverts to the saved theme.
-- Light-mode fixes from first use: tier and WRITE badges get light
-  tints, primary buttons keep readable text, and the completion popup
-  no longer crashes on qualified names (table.x) whose match is
-  longer than the completion label.
+- system.* and INFORMATION_SCHEMA references no longer squiggle as
+  unknown.
+- The connection form scrolls when it outgrows the window instead of
+  clipping the bottom.
+- Schema sidebar tables show their on-disk size (B/KB/MB), small and
+  right-aligned.
 
 ## v0.1.9 - 2026-08-08
 
