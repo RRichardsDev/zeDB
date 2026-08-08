@@ -1792,59 +1792,61 @@ impl Workspace {
     }
 
     fn sidebar_resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("sidebar-resize-handle")
-            .w(px(12.))
-            .h_full()
-            .ml(px(-4.))
-            .mr(px(-4.))
-            .flex_none()
-            .relative()
-            .cursor_col_resize()
-            .child(
-                div()
-                    .absolute()
-                    .left(px(3.))
-                    .top_0()
-                    .bottom_0()
-                    .w(px(1.))
-                    .bg(rgb(BORDER)),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                    this.resizing_sidebar = true;
-                    cx.notify();
-                }),
-            )
+        // Deferred paint keeps the whole band topmost, so the resize
+        // cursor shows across it instead of only the exposed sliver.
+        gpui::deferred(
+            div()
+                .id("sidebar-resize-handle")
+                .w(px(9.))
+                .h_full()
+                .flex_none()
+                .relative()
+                .cursor_col_resize()
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(4.))
+                        .top_0()
+                        .bottom_0()
+                        .w(px(1.))
+                        .bg(rgb(BORDER)),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.resizing_sidebar = true;
+                        cx.notify();
+                    }),
+                ),
+        )
     }
 
     fn sidebar_section_resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("sidebar-section-resize-handle")
-            .h(px(12.))
-            .w_full()
-            .mt(px(-4.))
-            .mb(px(-4.))
-            .flex_none()
-            .relative()
-            .cursor_row_resize()
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .top(px(3.))
-                    .h(px(1.))
-                    .bg(rgb(BORDER)),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                    this.resizing_sidebar_sections = true;
-                    cx.notify();
-                }),
-            )
+        gpui::deferred(
+            div()
+                .id("sidebar-section-resize-handle")
+                .h(px(9.))
+                .w_full()
+                .flex_none()
+                .relative()
+                .cursor_row_resize()
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top(px(4.))
+                        .h(px(1.))
+                        .bg(rgb(BORDER)),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.resizing_sidebar_sections = true;
+                        cx.notify();
+                    }),
+                ),
+        )
     }
 
     fn password_for_draft(&self, draft: &ConnectionDraft) -> Result<Option<String>, String> {
@@ -3715,31 +3717,31 @@ impl Workspace {
         target: QueryResizeTarget,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        div()
-            .id(id)
-            .h(px(12.))
-            .w_full()
-            .mt(px(-6.))
-            .mb(px(-6.))
-            .flex_none()
-            .relative()
-            .cursor_row_resize()
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .top(px(3.))
-                    .h(px(1.))
-                    .bg(rgb(BORDER)),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    this.query_resize = Some((target, f32::from(event.position.y)));
-                    cx.notify();
-                }),
-            )
+        gpui::deferred(
+            div()
+                .id(id)
+                .h(px(9.))
+                .w_full()
+                .flex_none()
+                .relative()
+                .cursor_row_resize()
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top(px(4.))
+                        .h(px(1.))
+                        .bg(rgb(BORDER)),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        this.query_resize = Some((target, f32::from(event.position.y)));
+                        cx.notify();
+                    }),
+                ),
+        )
     }
 
     /// Resume a run paused on a failed statement: skip it and continue, or

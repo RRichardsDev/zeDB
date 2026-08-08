@@ -1356,7 +1356,7 @@ impl Workspace {
             .border_l_1()
             .border_color(rgb(BORDER))
             .bg(rgb(BG_SIDEBAR))
-            .child(
+            .child(gpui::deferred(
                 div()
                     .id("agent-pane-resize")
                     .absolute()
@@ -1372,7 +1372,7 @@ impl Workspace {
                             cx.notify();
                         }),
                     ),
-            );
+            ));
 
         // Header: agent name, new thread, close.
         let title = self

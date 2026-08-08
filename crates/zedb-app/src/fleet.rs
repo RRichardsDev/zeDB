@@ -1104,7 +1104,7 @@ impl Workspace {
             .border_l_1()
             .border_color(rgb(BORDER))
             .bg(rgb(BG_SIDEBAR))
-            .child(
+            .child(gpui::deferred(
                 div()
                     .id("fleet-detail-resize")
                     .absolute()
@@ -1120,7 +1120,7 @@ impl Workspace {
                             cx.notify();
                         }),
                     ),
-            )
+            ))
             .child(
                 div()
                     .flex_none()
