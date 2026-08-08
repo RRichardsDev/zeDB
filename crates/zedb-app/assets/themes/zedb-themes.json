@@ -48,7 +48,12 @@
       "font.size": 14,
       "mono_font.family": "Menlo",
       "mono_font.size": 14,
-      "colors": {}
+      "colors": {
+        "primary.background": "#3a7fb5",
+        "primary.hover.background": "#2f6f9f",
+        "primary.foreground": "#ffffff",
+        "ring": "#4a7396"
+      }
     }
   ]
 }

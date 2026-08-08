@@ -5078,7 +5078,11 @@ impl Workspace {
                                             )
                                             .hover(|button| {
                                                 button
-                                                    .bg(rgb(0x294132))
+                                                    .bg(rgb(if theme::is_dark() {
+                                                        0x294132
+                                                    } else {
+                                                        0xdcefdf
+                                                    }))
                                                     .border_color(theme::success())
                                                     .cursor_pointer()
                                             })
