@@ -4093,19 +4093,21 @@ impl Workspace {
         // a buffer edited since the run.
         let position_match = offset
             .filter(|&offset| value.get(offset..offset + statement.len()) == Some(&statement[..]));
-        if let Some(offset) = position_match {
+        // Fallback resolves by the occurrence nearest the last known
+        // position (never blindly the first), so a drifted offset still
+        // lands on the right twin.
+        let splice_at =
+            position_match.or_else(|| nearest_occurrence(&value, &statement, offset.unwrap_or(0)));
+        if let Some(splice_at) = splice_at {
+            if let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) {
+                tab.displayed_statement_offset = Some(splice_at);
+            }
             let updated = format!(
                 "{}{}{}",
-                &value[..offset],
+                &value[..splice_at],
                 rewritten,
-                &value[offset + statement.len()..]
+                &value[splice_at + statement.len()..]
             );
-            editor.update(cx, |editor, cx| editor.set_value(updated, window, cx));
-        } else if value.contains(&statement) {
-            if let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) {
-                tab.displayed_statement_offset = value.find(&statement);
-            }
-            let updated = value.replacen(&statement, &rewritten, 1);
             editor.update(cx, |editor, cx| editor.set_value(updated, window, cx));
         } else {
             if let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) {
