@@ -25,7 +25,9 @@ pub mod schema_intelligence;
 mod types;
 pub mod verify;
 
-pub use client::{ChClient, ChConfig, QueryProgress, QueryStreamEvent, QueryStreamSummary};
+pub use client::{
+    ChClient, ChConfig, ClusterMembership, QueryProgress, QueryStreamEvent, QueryStreamSummary,
+};
 pub use error::{ChError, Result};
 pub use pin::{
     binary_cache_dir, cached_binary, discover_server_version, ensure_binary, smoke_replay, PinError,

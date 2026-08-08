@@ -226,6 +226,23 @@ struct EndpointHealth {
     name: String,
     endpoint: String,
     reachable: bool,
+    /// This node's shard/replica memberships from its own
+    /// system.clusters (empty when unreachable or unknown).
+    memberships: Vec<zedb_ch::ClusterMembership>,
+}
+
+/// The first cluster in which the two nodes sit on different shards:
+/// switching between them changes which slice local tables show.
+fn differentiating_cluster(
+    a: &[zedb_ch::ClusterMembership],
+    b: &[zedb_ch::ClusterMembership],
+) -> Option<String> {
+    a.iter().find_map(|membership| {
+        b.iter()
+            .find(|other| other.cluster == membership.cluster)
+            .filter(|other| other.shard != membership.shard)
+            .map(|_| membership.cluster.clone())
+    })
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -2761,11 +2778,18 @@ impl Workspace {
                     read_only,
                     driver: driver.clone(),
                 });
+                let reachable = client.test_connection().await.is_ok();
+                let memberships = if reachable {
+                    client.cluster_memberships().await.unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 health.push(EndpointHealth {
                     node_index,
                     name: node.name,
                     endpoint: node.endpoint,
-                    reachable: client.test_connection().await.is_ok(),
+                    reachable,
+                    memberships,
                 });
             }
             (health, schema_cache)
@@ -3038,6 +3062,17 @@ impl Workspace {
         else {
             return;
         };
+        let previous_memberships = self
+            .connected
+            .as_ref()
+            .map(|connected| connected.active_node)
+            .and_then(|active| {
+                self.endpoint_health
+                    .get(&connected_name)
+                    .and_then(|health| health.iter().find(|node| node.node_index == active))
+            })
+            .map(|node| node.memberships.clone())
+            .unwrap_or_default();
         let Some(connected) = self.connected.as_mut() else {
             return;
         };
@@ -3048,7 +3083,19 @@ impl Workspace {
         connected.active_node = node.node_index;
         connected.active_endpoint = node.endpoint.clone();
         connected.client_config.url = node.endpoint;
-        self.notice = Some(format!("Using {} for {connected_name}", node.name));
+        // Same shard (or unknown topology): switching is invisible for
+        // data. A different shard is worth one honest sentence.
+        self.notice = Some(
+            match differentiating_cluster(&previous_memberships, &node.memberships) {
+                Some(cluster) => format!(
+                    "Using {} for {connected_name}: a different shard of {cluster}, \
+                     so local tables show that shard's slice (Distributed tables \
+                     are unaffected)",
+                    node.name
+                ),
+                None => format!("Using {} for {connected_name}", node.name),
+            },
+        );
         self.load_schema_databases(cx);
         cx.notify();
     }
@@ -4784,16 +4831,33 @@ impl Workspace {
             .iter()
             .find(|connection| connection.name == connected.name)?;
         let health = self.endpoint_health.get(&connected.name);
+        // A cluster that puts any two of these nodes on different shards
+        // makes the picker label every node's shard in that cluster.
+        let shard_cluster = health.and_then(|health| {
+            health.iter().find_map(|node| {
+                health.iter().find_map(|other| {
+                    differentiating_cluster(&node.memberships, &other.memberships)
+                })
+            })
+        });
         let nodes = connection
             .nodes
             .iter()
             .enumerate()
             .map(|(index, node)| {
-                let reachable = health
-                    .and_then(|health| health.iter().find(|item| item.node_index == index))
-                    .map(|item| item.reachable)
-                    .unwrap_or(false);
-                (index, node.name.clone(), reachable)
+                let entry =
+                    health.and_then(|health| health.iter().find(|item| item.node_index == index));
+                let reachable = entry.map(|item| item.reachable).unwrap_or(false);
+                let label = match (&shard_cluster, entry) {
+                    (Some(cluster), Some(item)) => item
+                        .memberships
+                        .iter()
+                        .find(|membership| &membership.cluster == cluster)
+                        .map(|membership| format!("{}  ·  shard {}", node.name, membership.shard))
+                        .unwrap_or_else(|| node.name.clone()),
+                    _ => node.name.clone(),
+                };
+                (index, label, reachable)
             })
             .collect::<Vec<_>>();
         let active_name = connection
@@ -6895,6 +6959,34 @@ mod tests {
             formatted,
             "ENGINE = MergeTree\nORDER BY id\nPARTITION BY toYYYYMM(created_at)\nSETTINGS index_granularity = 8192"
         );
+    }
+
+    fn membership(cluster: &str, shard: u64, replica: u64) -> zedb_ch::ClusterMembership {
+        zedb_ch::ClusterMembership {
+            cluster: cluster.into(),
+            shard,
+            replica,
+        }
+    }
+
+    #[test]
+    fn differentiating_cluster_finds_shard_splits_only() {
+        // Replicas of the same shard: interchangeable.
+        let node_a = vec![membership("default", 1, 1), membership("main", 1, 1)];
+        let node_b = vec![membership("default", 1, 1), membership("main", 1, 2)];
+        assert_eq!(super::differentiating_cluster(&node_a, &node_b), None);
+
+        // Same nodes also form a sharded cluster: that one differentiates,
+        // even though they replicate each other elsewhere.
+        let node_a = vec![membership("main", 1, 1), membership("sharded", 1, 1)];
+        let node_b = vec![membership("main", 1, 2), membership("sharded", 2, 1)];
+        assert_eq!(
+            super::differentiating_cluster(&node_a, &node_b),
+            Some("sharded".into())
+        );
+
+        // Unknown topology (empty memberships) never differentiates.
+        assert_eq!(super::differentiating_cluster(&[], &node_b), None);
     }
 
     #[test]

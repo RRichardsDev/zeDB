@@ -7,6 +7,16 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Sharding awareness, first slice (docs/PHASE-5.md M1+M2): on
+  connect, zeDB asks each node for its own shard/replica memberships
+  (system.clusters, is_local), the node picker labels nodes with
+  their shard when a cluster splits them, and switching to a
+  different shard says so once: local tables show that shard's slice;
+  Distributed tables are unaffected. Replicas and unknown topologies
+  behave exactly as before.
+
 ## v0.1.11 - 2026-08-08
 
 - Replacing or closing a huge result set no longer freezes the app:

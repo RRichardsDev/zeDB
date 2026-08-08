@@ -48,6 +48,15 @@ pub struct QueryProgress {
     pub received_bytes: u64,
 }
 
+/// One row of `system.clusters WHERE is_local = 1`: this node's place
+/// in one named cluster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClusterMembership {
+    pub cluster: String,
+    pub shard: u64,
+    pub replica: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueryStreamSummary {
     pub rows: usize,
@@ -308,6 +317,42 @@ impl ChClient {
     /// authentication, so it cannot be used as a connection test.
     pub async fn test_connection(&self) -> Result<()> {
         self.request("SELECT 1", &[]).await.map(|_| ())
+    }
+
+    /// Which cluster shards this node is a member of, from its own
+    /// system.clusters (`is_local = 1`). Asking the node about itself
+    /// works regardless of how its endpoint is reached (port-mapped
+    /// docker, DNS aliases, load balancers).
+    pub async fn cluster_memberships(&self) -> Result<Vec<ClusterMembership>> {
+        let result = self
+            .query(
+                "SELECT cluster, shard_num, replica_num                  FROM system.clusters WHERE is_local = 1 ORDER BY cluster",
+            )
+            .await?;
+        result
+            .rows
+            .into_iter()
+            .map(|row| {
+                let text = |value: &Value| match value {
+                    Value::String(text) => Ok(text.clone()),
+                    other => Err(ChError::Decode(format!(
+                        "expected cluster name, got {other:?}"
+                    ))),
+                };
+                let number = |value: &Value| match value {
+                    Value::UInt(number) => Ok(*number),
+                    Value::Int(number) => Ok(*number as u64),
+                    other => Err(ChError::Decode(format!(
+                        "expected shard number, got {other:?}"
+                    ))),
+                };
+                Ok(ClusterMembership {
+                    cluster: text(&row[0])?,
+                    shard: number(&row[1])?,
+                    replica: number(&row[2])?,
+                })
+            })
+            .collect()
     }
 
     async fn request(&self, sql: &str, params: &[(&str, &str)]) -> Result<Vec<u8>> {
