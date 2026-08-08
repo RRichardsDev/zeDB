@@ -10,3 +10,12 @@ pub fn tokio() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| Runtime::new().expect("start tokio runtime"))
 }
+
+/// Drop a potentially huge value off the UI thread. Freeing a
+/// multi-gigabyte result set is millions of tiny deallocations; done
+/// synchronously it beachballs the app for minutes.
+pub fn drop_in_background<T: Send + 'static>(value: T) {
+    tokio().spawn(async move {
+        drop(value);
+    });
+}

@@ -142,6 +142,14 @@ impl GridSpike {
     }
 
     /// Swap the pending result in, discarding what was displayed.
+    /// Hand every held row to a background drop (tab close).
+    pub fn release_rows(&mut self) {
+        crate::rt::drop_in_background(std::mem::take(&mut self.rows));
+        if let Some(pending) = self.pending.take() {
+            crate::rt::drop_in_background(pending);
+        }
+    }
+
     fn adopt_pending(&mut self) {
         if let Some((columns, requested_rows)) = self.pending.take() {
             self.col_widths = self
@@ -151,7 +159,8 @@ impl GridSpike {
                 .cloned()
                 .unwrap_or_else(|| vec![COL_WIDTH; columns.len()]);
             self.columns = columns;
-            self.rows = Vec::new();
+            // The outgoing result may be enormous; free it off-thread.
+            crate::rt::drop_in_background(std::mem::take(&mut self.rows));
             self.requested_rows = requested_rows;
             self.result_complete = false;
             self.result_capped = false;

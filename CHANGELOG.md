@@ -7,6 +7,13 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Replacing or closing a huge result set no longer freezes the app:
+  the old rows are freed on a background thread. (A 193M-row result
+  previously beachballed the UI for minutes when the next query
+  landed.)
+
 ## v0.1.10 - 2026-08-08
 
 Themes and a per-cluster driver.

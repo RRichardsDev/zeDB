@@ -3930,7 +3930,11 @@ impl Workspace {
         ) {
             return;
         }
-        self.query_tabs.remove(index);
+        let closed = self.query_tabs.remove(index);
+        // A closed tab may hold a huge result; clear it into a
+        // background drop before the entity goes away.
+        closed.result_grid.update(cx, |grid, _| grid.release_rows());
+        drop(closed);
         self.active_query_tab = self
             .active_query_tab
             .min(self.query_tabs.len().saturating_sub(1));
