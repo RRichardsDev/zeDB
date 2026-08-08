@@ -416,6 +416,37 @@ impl Workspace {
     /// switch): forget the old probe, clear a URL only if the probe put
     /// it there, and probe again for the new identity.
     pub(crate) fn settings_sync_identity_changed(&mut self, cx: &mut Context<Self>) {
+        // Signed in with one forge while sync is linked to the other:
+        // unlink into the text box, old URL prefilled, so one Enable
+        // relinks it (or clearing the field adopts the new provider).
+        // A sign-out alone never unlinks; sync is BYO and works
+        // without any identity.
+        if let crate::GithubAuth::SignedIn(profile) = &self.github {
+            if let Some(url) = self.preferences.settings_sync_url.clone() {
+                let other_host = match profile.provider {
+                    github::Provider::GitHub => "gitlab.com",
+                    github::Provider::GitLab => "github.com",
+                };
+                if url.contains(other_host) {
+                    self.preferences.settings_sync_url = None;
+                    self.preferences.settings_sync_repo = None;
+                    let _ = zedb_core::save_preferences(&self.preferences);
+                    self.settings_sync.generation += 1;
+                    self.settings_sync
+                        .url_input
+                        .clone()
+                        .update(cx, |input, cx| input.set_text(url, cx));
+                    self.settings_sync.status = Some((
+                        format!(
+                            "Unlinked the {other_host} repo after the account switch; \
+                             press Enable to relink it, or clear the field to use {}",
+                            profile.provider.name()
+                        ),
+                        false,
+                    ));
+                }
+            }
+        }
         if let Some(prefilled) = self.settings_sync.probed_url.take() {
             let input = self.settings_sync.url_input.clone();
             if input.read(cx).text().trim() == prefilled {
