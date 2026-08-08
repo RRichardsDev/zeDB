@@ -92,6 +92,13 @@ impl RenderOnce for CompletionMenuItem {
             .as_ref()
             .map(|s| s.len())
             .unwrap_or(self.highlight_prefix.len());
+        // zeDB patch: a qualified filter ("table.x") can be longer than
+        // the label ("x"); out-of-range or mid-char highlight ranges
+        // make StyledText panic. Clamp to a char boundary in the label.
+        let mut matched_len = matched_len.min(item.label.len());
+        while matched_len > 0 && !item.label.is_char_boundary(matched_len) {
+            matched_len -= 1;
+        }
 
         let highlights = vec![(
             0..matched_len,

@@ -1498,10 +1498,18 @@ impl Workspace {
     }
 
     fn tier_colors(tier: EnvTier) -> (u32, u32) {
-        match tier {
-            EnvTier::Dev => (0x294132, 0x8abe94),
-            EnvTier::Staging => (0x463b28, 0xc7a969),
-            EnvTier::Production => (0x472d31, 0xd4868d),
+        if theme::is_dark() {
+            match tier {
+                EnvTier::Dev => (0x294132, 0x8abe94),
+                EnvTier::Staging => (0x463b28, 0xc7a969),
+                EnvTier::Production => (0x472d31, 0xd4868d),
+            }
+        } else {
+            match tier {
+                EnvTier::Dev => (0xdcefdf, 0x2f6f43),
+                EnvTier::Staging => (0xf3e9d2, 0x8a6d1f),
+                EnvTier::Production => (0xf5dcdf, 0xa03744),
+            }
         }
     }
 
@@ -1537,7 +1545,7 @@ impl Workspace {
                         .child("READ-ONLY")
                 } else {
                     badge
-                        .bg(rgb(0x4d2c2c))
+                        .bg(rgb(if theme::is_dark() { 0x4d2c2c } else { 0xf7dfd9 }))
                         .border_color(theme::alert())
                         .text_color(theme::alert())
                         .child("WRITE")
@@ -3652,7 +3660,7 @@ impl Workspace {
                                         .py_2()
                                         .rounded(px(3.))
                                         .bg(theme::primary())
-                                        .text_color(theme::text_bright())
+                                        .text_color(theme::primary_foreground())
                                         .child(if self.connecting.is_some() {
                                             "Testing nodes..."
                                         } else {
@@ -5819,7 +5827,7 @@ impl Workspace {
                                         button
                                             .text_color(theme::text())
                                             .hover(|button| {
-                                                button.bg(rgb(0x2c3d4a)).cursor_pointer()
+                                                button.bg(theme::hover()).cursor_pointer()
                                             })
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.run_selection(window, cx)
@@ -5833,7 +5841,7 @@ impl Workspace {
                                     .py_1()
                                     .rounded(px(3.))
                                     .bg(theme::primary())
-                                    .text_color(theme::text_bright())
+                                    .text_color(theme::primary_foreground())
                                     .child("Run  ⌘↵")
                                     .when(!running, |button| {
                                         button

@@ -29,6 +29,10 @@ GitHub release notes.
   (follows macOS appearance). Switch from Preferences or the command
   palette; the choice lives in settings and syncs. Built on Zed-style
   JSON theme configs, so custom themes become possible later.
+- Light-mode fixes from first use: tier and WRITE badges get light
+  tints, primary buttons keep readable text, and the completion popup
+  no longer crashes on qualified names (table.x) whose match is
+  longer than the completion label.
 
 ## v0.1.9 - 2026-08-08
 

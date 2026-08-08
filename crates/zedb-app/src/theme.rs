@@ -30,6 +30,7 @@ pub struct Palette {
     pub accent: Hsla,
     pub primary: Hsla,
     pub primary_hover: Hsla,
+    pub primary_foreground: Hsla,
     pub disabled: Hsla,
     pub disabled_border: Hsla,
     pub success: Hsla,
@@ -128,6 +129,7 @@ impl Palette {
             accent: rgb(0x6f8fac).into(),
             primary: rgb(0x2f6f9f).into(),
             primary_hover: rgb(0x3884bd).into(),
+            primary_foreground: rgb(0xffffff).into(),
             disabled: rgb(a.disabled).into(),
             disabled_border: rgb(a.disabled_border).into(),
             success: rgb(0x76a981).into(),
@@ -156,6 +158,14 @@ fn get(read: impl Fn(&Palette) -> Hsla) -> Hsla {
     read(&palette_lock().read().expect("palette lock"))
 }
 
+static DARK_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether the active palette is the dark one (for the few app colors
+/// picked outside the palette, e.g. tier badges).
+pub fn is_dark() -> bool {
+    DARK_MODE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Rebuild the palette snapshot from the active gpui-component theme.
 /// Call after every `Theme::change` and once at startup.
 pub fn apply(cx: &mut App) {
@@ -178,6 +188,7 @@ pub fn apply(cx: &mut App) {
         accent: theme.colors.ring,
         primary: theme.colors.primary,
         primary_hover: theme.colors.primary_hover,
+        primary_foreground: theme.colors.primary_foreground,
         disabled: rgb(accents.disabled).into(),
         disabled_border: rgb(accents.disabled_border).into(),
         success: theme.colors.success,
@@ -195,6 +206,7 @@ pub fn apply(cx: &mut App) {
         date_tint: rgb(accents.date_tint).into(),
     };
     *palette_lock().write().expect("palette lock") = palette;
+    DARK_MODE.store(theme.is_dark(), std::sync::atomic::Ordering::Relaxed);
 }
 
 macro_rules! accessors {
@@ -225,6 +237,7 @@ accessors!(
     accent,
     primary,
     primary_hover,
+    primary_foreground,
     disabled,
     disabled_border,
     success,
