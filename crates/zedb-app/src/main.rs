@@ -3303,24 +3303,38 @@ impl Workspace {
                     .child(Self::field("DATABASE", form.database.clone()))
                     .child(Self::field("PASSWORD", form.password.clone()))
                     .child(
-                        div().flex().justify_end().child(
-                            div()
-                                .id("toggle-read-only")
-                                .w(px(250.))
-                                .h(px(34.))
-                                .px_3()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .rounded(px(3.))
-                                .border_1()
-                                .border_color(rgb(BORDER))
-                                .child("Read only")
-                                .child(if form.read_only { "ON" } else { "OFF" })
-                                .when(form.read_only, |button| button.text_color(rgb(SUCCESS)))
-                                .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_read_only(cx))),
-                        ),
+                        div()
+                            .flex()
+                            .justify_end()
+                            .items_center()
+                            .gap_3()
+                            .child("Read only")
+                            .child(
+                                // Same switch as the Vim mode toggle.
+                                div()
+                                    .id("toggle-read-only")
+                                    .w(px(54.))
+                                    .h(px(28.))
+                                    .px_1()
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .when(form.read_only, |toggle| {
+                                        toggle.justify_end().bg(rgb(0x3f6650))
+                                    })
+                                    .when(!form.read_only, |toggle| {
+                                        toggle.justify_start().bg(rgb(0x343941))
+                                    })
+                                    .hover(|toggle| toggle.cursor_pointer())
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.toggle_read_only(cx)),
+                                    )
+                                    .child(
+                                        div().size(px(20.)).rounded_full().bg(rgb(
+                                            if form.read_only { 0x9ab7a1 } else { 0x777e88 },
+                                        )),
+                                    ),
+                            ),
                     )
                     .child(
                         div()

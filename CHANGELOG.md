@@ -7,6 +7,11 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- The connection form's read-only control is the same switch as the
+  Vim mode toggle instead of an ON/OFF button.
+
 ## v0.1.7 - 2026-08-08
 
 GitLab joins GitHub as an identity provider, with the same one-click
