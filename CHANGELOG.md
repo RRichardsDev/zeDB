@@ -23,6 +23,12 @@ GitHub release notes.
   signed in to GitHub, zeDB spots an existing zedb-settings repo via
   your own ssh key and prefills it, and can create a private one for
   you with a one-time approval that is never kept.
+- Command palette on cmd-shift-P: type to filter, arrows and Enter to
+  run; includes Open settings.json, Preferences, new query, fleet and
+  agent panes, vim mode, sync now, and disconnect.
+- The settings file is now `settings.json` (renamed from
+  `preferences.json`; migrated automatically) and can be opened in
+  your editor from the palette.
 
 ## v0.1.5 - 2026-08-08
 

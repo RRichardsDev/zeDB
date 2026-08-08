@@ -1,4 +1,5 @@
 mod agent_pane;
+mod command_palette;
 mod author;
 mod codegen;
 mod commit;
@@ -77,6 +78,7 @@ actions!(
     [
         OpenAbout,
         CheckForUpdates,
+        OpenCommandPalette,
         OpenPreferences,
         ToggleAgentPane,
         QuitZeDb,
@@ -439,6 +441,7 @@ struct Workspace {
     query_run_id: u64,
     query_resize: Option<(QueryResizeTarget, f32)>,
     preferences: Preferences,
+    palette: command_palette::PaletteState,
     settings_sync: settings_sync::SettingsSyncState,
     show_preferences: bool,
     show_about: bool,
@@ -537,6 +540,30 @@ impl Workspace {
         cx.intercept_keystrokes(move |event, window, cx| {
             if let Some(workspace) = workspace.upgrade() {
                 workspace.update(cx, |this, cx| {
+                    // Palette keys come first: it floats above everything
+                    // and its input must not feed vim or the editors.
+                    if this.palette.open {
+                        match event.keystroke.key.as_str() {
+                            "escape" => {
+                                this.palette_close(cx);
+                                cx.stop_propagation();
+                            }
+                            "up" => {
+                                this.palette_move(-1, cx);
+                                cx.stop_propagation();
+                            }
+                            "down" => {
+                                this.palette_move(1, cx);
+                                cx.stop_propagation();
+                            }
+                            "enter" => {
+                                this.palette_run_selected(window, cx);
+                                cx.stop_propagation();
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
                     // Escape closes an open filter popover regardless of
                     // where focus sits (checkbox panels hold none).
                     if event.keystroke.key == "escape" {
@@ -641,6 +668,7 @@ impl Workspace {
                 query_run_id: 0,
                 query_resize: None,
                 preferences,
+                palette: command_palette::PaletteState::new(cx),
                 settings_sync: settings_sync::SettingsSyncState::new(cx),
                 show_preferences: false,
                 show_about: false,
@@ -701,6 +729,7 @@ impl Workspace {
                 query_run_id: 0,
                 query_resize: None,
                 preferences,
+                palette: command_palette::PaletteState::new(cx),
                 settings_sync: settings_sync::SettingsSyncState::new(cx),
                 show_preferences: false,
                 show_about: false,
@@ -5687,6 +5716,9 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &ToggleAgentPane, window, cx| this.agent_toggle(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &OpenCommandPalette, window, cx| {
+                this.palette_toggle(window, cx)
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
@@ -5765,6 +5797,7 @@ impl Render for Workspace {
                     this.query_resize = None;
                 }),
             )
+            .when(self.palette.open, |root| root.child(self.command_palette_overlay(cx)))
             .child(self.title_bar(cx))
             .child(
                 div()
@@ -6188,6 +6221,7 @@ fn main() {
             KeyBinding::new("cmd-enter", RunQuery, None),
             KeyBinding::new("ctrl-x", RunSelection, None),
             KeyBinding::new("cmd-,", OpenPreferences, None),
+            KeyBinding::new("cmd-shift-p", OpenCommandPalette, None),
             KeyBinding::new("cmd-i", ToggleAgentPane, None),
             // In multi-line inputs the composer sends on plain enter;
             // shift-enter keeps inserting a newline via the secondary

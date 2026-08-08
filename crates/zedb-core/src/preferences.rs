@@ -43,7 +43,20 @@ fn preferences_path() -> Result<PathBuf, StoreError> {
             .ok_or(StoreError::NoConfigDir)?
             .join("zedb"),
     };
-    Ok(dir.join("preferences.json"))
+    let path = dir.join("settings.json");
+    // The file was preferences.json before v0.1.6; carry it over once.
+    if !path.exists() {
+        let legacy = dir.join("preferences.json");
+        if legacy.exists() {
+            let _ = std::fs::rename(&legacy, &path);
+        }
+    }
+    Ok(path)
+}
+
+/// Where the user-editable settings file lives (for "open settings.json").
+pub fn settings_file_path() -> Result<PathBuf, StoreError> {
+    preferences_path()
 }
 
 pub fn load_preferences() -> Result<Preferences, StoreError> {
@@ -103,6 +116,23 @@ mod tests {
         };
         save_preferences(&preferences).unwrap();
         assert_eq!(load_preferences().unwrap(), preferences);
+
+        unsafe { std::env::remove_var("ZEDB_CONFIG_DIR") };
+    }
+
+    #[test]
+    fn legacy_preferences_json_migrates_to_settings_json() {
+        let _environment = crate::store::CONFIG_ENV_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("ZEDB_CONFIG_DIR", directory.path()) };
+
+        let legacy = directory.path().join("preferences.json");
+        std::fs::write(&legacy, r#"{"vim_mode": true}"#).unwrap();
+
+        let loaded = load_preferences().unwrap();
+        assert!(loaded.vim_mode);
+        assert!(directory.path().join("settings.json").exists());
+        assert!(!legacy.exists(), "legacy file is renamed, not copied");
 
         unsafe { std::env::remove_var("ZEDB_CONFIG_DIR") };
     }
