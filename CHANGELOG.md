@@ -7,7 +7,7 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.5 - 2026-08-08
 
 - The update pill in the status bar wears the standard muted border,
   and the version number reads in plain white.
