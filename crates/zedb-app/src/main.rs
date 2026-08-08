@@ -1602,6 +1602,13 @@ impl Workspace {
                     .when(selected, |row| row.bg(theme::hover()))
                     .hover(|row| row.bg(theme::row_hover()).cursor_pointer())
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        // A second click on the already-selected row
+                        // brings up its Cluster connection screen (the
+                        // only route back to it while connected).
+                        if this.selected == Some(index) && this.show_query_editor {
+                            this.show_query_editor = false;
+                            this.show_fleet = false;
+                        }
                         this.selected = Some(index);
                         this.pending_delete = None;
                         this.notice = None;
@@ -5278,10 +5285,114 @@ impl Workspace {
                                 .child(Self::tier_badge(connection.tier)),
                         )
                         .child(div().flex().flex_col().gap_2().children(nodes))
+                        .children(self.topology_section(connection))
                 })
                 .when(selected.is_none(), |panel| {
                     panel.child("Add or select a cluster connection to begin.")
                 }),
+        )
+    }
+
+    /// Phase 5 M4: a read-only shards-and-replicas view, built entirely
+    /// from the memberships each node reported about itself at connect
+    /// time. Nothing here is configurable; zeDB displays what the
+    /// servers said. Absent topology (never connected, LBs, Cloud)
+    /// renders nothing.
+    fn topology_section(&self, connection: &ConnectionConfig) -> Option<impl IntoElement> {
+        let health = self.endpoint_health.get(&connection.name)?;
+        // cluster -> shard -> node display names, insertion-ordered.
+        type Shards = Vec<(u64, Vec<String>)>;
+        let mut clusters: Vec<(String, Shards)> = Vec::new();
+        for node in health {
+            for membership in &node.memberships {
+                // Each node's implicit "default" cluster contains only
+                // itself; merging them across nodes would invent a
+                // cluster that does not exist.
+                if membership.cluster == "default" {
+                    continue;
+                }
+                let cluster = match clusters
+                    .iter_mut()
+                    .find(|(name, _)| *name == membership.cluster)
+                {
+                    Some((_, shards)) => shards,
+                    None => {
+                        clusters.push((membership.cluster.clone(), Vec::new()));
+                        &mut clusters.last_mut().expect("just pushed").1
+                    }
+                };
+                match cluster
+                    .iter_mut()
+                    .find(|(shard, _)| *shard == membership.shard)
+                {
+                    Some((_, members)) => members.push(node.name.clone()),
+                    None => cluster.push((membership.shard, vec![node.name.clone()])),
+                }
+            }
+        }
+        if clusters.is_empty() {
+            return None;
+        }
+        for (_, shards) in &mut clusters {
+            shards.sort_by_key(|(shard, _)| *shard);
+        }
+
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(div().text_color(theme::text_dim()).child("Topology"))
+                .children(clusters.into_iter().map(|(cluster, shards)| {
+                    let shard_count = shards.len();
+                    let replicas_per_shard = shards
+                        .first()
+                        .map(|(_, members)| members.len())
+                        .unwrap_or(0);
+                    let uniform = shards
+                        .iter()
+                        .all(|(_, members)| members.len() == replicas_per_shard);
+                    let replica_summary = if uniform {
+                        format!("{shard_count} shard(s) \u{d7} {replicas_per_shard} replica(s)")
+                    } else {
+                        format!("{shard_count} shards")
+                    };
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .p_3()
+                        .rounded(px(4.))
+                        .border_1()
+                        .border_color(theme::border())
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().text_color(theme::text()).child(cluster))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme::text_dim())
+                                        .child(replica_summary),
+                                ),
+                        )
+                        .children(shards.into_iter().map(|(shard, members)| {
+                            div()
+                                .flex()
+                                .gap_2()
+                                .text_sm()
+                                .child(
+                                    div()
+                                        .w(px(80.))
+                                        .flex_none()
+                                        .text_color(theme::text_dim())
+                                        .child(format!("shard {shard}")),
+                                )
+                                .child(div().text_color(theme::text()).child(members.join(", ")))
+                        }))
+                })),
         )
     }
 

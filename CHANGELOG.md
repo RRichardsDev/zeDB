@@ -19,6 +19,12 @@ GitHub release notes.
 - Distributed tables show their sharding key in the object overview,
   parsed from the engine definition, and wear a DT glyph in the
   schema sidebar (alongside T/V/MV/D).
+- A read-only Topology section on the Cluster connection screen: one
+  card per named cluster showing its shards and which nodes hold
+  them (e.g. replicas in one cluster, shards in another over the
+  same nodes), built from what each node reports about itself.
+  Clicking the already-selected connection in the sidebar returns to
+  this screen; previously it was unreachable while connected.
 - Distributed tables get a real size and row count: the local table
   summed across shards (one replica per shard via the cluster()
   function), shown in parentheses with a "virtual" tooltip since the
