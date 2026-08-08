@@ -1026,38 +1026,36 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child("Account")
-                        .child(
-                            div()
-                                .id("github-sign-in")
-                                .px_3()
-                                .py_1()
-                                .rounded(px(3.))
-                                .border_1()
-                                .border_color(rgb(BORDER))
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .text_color(rgb(TEXT))
-                                .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
-                                .on_click(cx.listener(|this, _, _, cx| this.github_sign_in(cx)))
-                                .child(
-                                    svg()
-                                        .path("icons/github.svg")
-                                        .size(px(16.))
-                                        .text_color(rgb(TEXT)),
-                                )
-                                .child("Sign in with GitHub"),
-                        ),
-                )
+                .child("Account")
                 .child(div().text_sm().text_color(rgb(TEXT_DIM)).child(
                     "Optional: shows your profile and enables settings sync later",
-                )),
+                ))
+                .child(
+                    // One provider today; this row is where GitLab and
+                    // friends land later.
+                    div().flex().items_center().gap_2().mt_2().child(
+                        div()
+                            .id("github-sign-in")
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_color(rgb(TEXT))
+                            .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                            .on_click(cx.listener(|this, _, _, cx| this.github_sign_in(cx)))
+                            .child(
+                                svg()
+                                    .path("icons/github.svg")
+                                    .size(px(16.))
+                                    .text_color(rgb(TEXT)),
+                            )
+                            .child("Sign in with GitHub"),
+                    ),
+                ),
             GithubAuth::Authorizing {
                 user_code,
                 verification_uri,
