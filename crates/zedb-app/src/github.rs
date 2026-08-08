@@ -13,10 +13,10 @@ use serde::Deserialize;
 
 /// Public OAuth app identifiers; not secrets by design.
 const GITHUB_CLIENT_ID: &str = "Ov23liSgqeNFWxRXVJ2a";
-/// Fill in after registering the GitLab OAuth application (public,
-/// scopes read_user + api). Empty means the GitLab button explains
-/// itself instead of starting a flow that cannot work.
-const GITLAB_CLIENT_ID: &str = "";
+/// Registered GitLab OAuth application (public, scopes read_user +
+/// api). Empty would make the GitLab button explain itself instead of
+/// starting a flow that cannot work.
+const GITLAB_CLIENT_ID: &str = "28a35fe3bcfcc90f04214d43388e014824d2167720fbaeca3c2e18f286096591";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
