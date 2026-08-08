@@ -1752,6 +1752,13 @@ impl Workspace {
                     .text_color(rgb(TEXT_DIM))
                     .child("Start a thread with the + menu above")
                     .when_some(self.preferences.last_agent.clone(), |hint, last| {
+                        let icon = self
+                            .agent
+                            .agents
+                            .iter()
+                            .find(|agent| agent.name == last)
+                            .map(|agent| icon_for(&agent.id))
+                            .unwrap_or("icons/sparkle.svg");
                         hint.child(
                             div()
                                 .id("agent-new-last")
@@ -1761,6 +1768,10 @@ impl Workspace {
                                 .border_1()
                                 .border_color(rgb(BORDER))
                                 .text_xs()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(svg().path(icon).size(px(13.)).text_color(rgb(TEXT)))
                                 .child(format!("New thread with {last} (cmd-N)"))
                                 .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
                                 .on_click(cx.listener(|this, _, window, cx| {
