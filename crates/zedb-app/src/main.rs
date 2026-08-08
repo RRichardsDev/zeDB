@@ -138,6 +138,7 @@ impl AssetSource for Assets {
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
             "icons/copy.svg" => Some(include_bytes!("../assets/icons/copy.svg")),
             "icons/github.svg" => Some(include_bytes!("../assets/icons/github.svg")),
+            "icons/gitlab.svg" => Some(include_bytes!("../assets/icons/gitlab.svg")),
             "icons/check-chain.svg" => Some(include_bytes!("../assets/icons/check-chain.svg")),
             "icons/commit.svg" => Some(include_bytes!("../assets/icons/commit.svg")),
             "icons/fleet.svg" => Some(include_bytes!("../assets/icons/fleet.svg")),
@@ -490,8 +491,9 @@ impl Workspace {
         })
         .detach();
         // A stored GitHub token restores the profile quietly.
-        if let Some(token) = github::stored_token() {
-            let handle = rt::tokio().spawn(async move { github::fetch_profile(&token).await });
+        if let Some((provider, token)) = github::stored_token_any() {
+            let handle =
+                rt::tokio().spawn(async move { github::fetch_profile(provider, &token).await });
             cx.spawn(async move |this, cx| {
                 if let Ok(Ok(profile)) = handle.await {
                     this.update(cx, |this, cx| {
@@ -993,10 +995,20 @@ impl Workspace {
 
     /// Start the GitHub device flow: browser opens, code shows in the
     /// panel, and we poll until approved.
-    fn github_sign_in(&mut self, cx: &mut Context<Self>) {
+    fn github_sign_in(&mut self, provider: github::Provider, cx: &mut Context<Self>) {
+        if !provider.configured() {
+            self.flash_warning(
+                format!(
+                    "{} sign-in isn't wired up in this build yet",
+                    provider.name()
+                ),
+                cx,
+            );
+            return;
+        }
         self.github_generation += 1;
         let generation = self.github_generation;
-        let handle = rt::tokio().spawn(github::start_device_flow());
+        let handle = rt::tokio().spawn(github::start_device_flow(provider));
         cx.spawn(async move |this, cx| {
             let device = match handle.await {
                 Ok(Ok(device)) => device,
@@ -1029,7 +1041,7 @@ impl Workspace {
                 return;
             }
             let token = rt::tokio()
-                .spawn(async move { github::poll_for_token(&poll_device).await })
+                .spawn(async move { github::poll_for_token(provider, &poll_device).await })
                 .await;
             let token = match token {
                 Ok(Ok(token)) => token,
@@ -1045,14 +1057,14 @@ impl Workspace {
                 }
                 Err(_) => return,
             };
-            if let Err(error) = github::store_token(&token) {
+            if let Err(error) = github::store_token(provider, &token) {
                 this.update(cx, |this, cx| {
                     this.flash_warning(format!("Could not store the token: {error}"), cx)
                 })
                 .ok();
             }
             let profile = rt::tokio()
-                .spawn(async move { github::fetch_profile(&token).await })
+                .spawn(async move { github::fetch_profile(provider, &token).await })
                 .await;
             this.update(cx, |this, cx| {
                 if this.github_generation != generation {
@@ -1060,7 +1072,11 @@ impl Workspace {
                 }
                 match profile {
                     Ok(Ok(profile)) => {
-                        this.notice = Some(format!("Signed in to GitHub as {}", profile.login));
+                        this.notice = Some(format!(
+                            "Signed in to {} as {}",
+                            provider.name(),
+                            profile.login
+                        ));
                         this.notice_warning = false;
                         this.github = GithubAuth::SignedIn(profile);
                     }
@@ -1078,14 +1094,19 @@ impl Workspace {
     }
 
     fn github_sign_out(&mut self, cx: &mut Context<Self>) {
-        github::clear_token();
+        let provider = match &self.github {
+            GithubAuth::SignedIn(profile) => profile.provider,
+            _ => github::Provider::GitHub,
+        };
+        github::clear_token(provider);
         self.github_generation += 1;
         self.github = GithubAuth::SignedOut;
-        self.notice = Some(
-            "Signed out of GitHub on this Mac; revoke zeDB under GitHub settings, \
-             Applications, if you want the grant gone too"
-                .into(),
-        );
+        self.notice = Some(format!(
+            "Signed out of {} on this Mac; revoke zeDB under the {} application \
+             settings if you want the grant gone too",
+            provider.name(),
+            provider.name(),
+        ));
         self.notice_warning = false;
         cx.notify();
     }
@@ -1146,43 +1167,48 @@ impl Workspace {
     fn account_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let row = div().py_3().border_b_1().border_color(rgb(BORDER));
         match &self.github {
-            GithubAuth::SignedOut => row
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child("Account")
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(TEXT_DIM))
-                        .child("Optional: shows your profile and enables settings sync later"),
-                )
-                .child(
-                    // One provider today; this row is where GitLab and
-                    // friends land later.
-                    div().flex().items_center().gap_2().mt_2().child(
+            GithubAuth::SignedOut => {
+                row.flex()
+                    .flex_col()
+                    .gap_1()
+                    .child("Account")
+                    .child(
                         div()
-                            .id("github-sign-in")
-                            .px_3()
-                            .py_1()
-                            .rounded(px(3.))
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_color(rgb(TEXT))
-                            .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
-                            .on_click(cx.listener(|this, _, _, cx| this.github_sign_in(cx)))
-                            .child(
-                                svg()
-                                    .path("icons/github.svg")
-                                    .size(px(16.))
-                                    .text_color(rgb(TEXT)),
-                            )
-                            .child("Sign in with GitHub"),
-                    ),
-                ),
+                            .text_sm()
+                            .text_color(rgb(TEXT_DIM))
+                            .child("Optional: shows your profile and enables settings sync later"),
+                    )
+                    .child(div().flex().items_center().gap_2().mt_2().children(
+                        github::Provider::ALL.into_iter().map(|provider| {
+                            div()
+                                .id(provider.name())
+                                .px_3()
+                                .py_1()
+                                .rounded(px(3.))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .text_color(rgb(if provider.configured() {
+                                    TEXT
+                                } else {
+                                    TEXT_DIM
+                                }))
+                                .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.github_sign_in(provider, cx)
+                                }))
+                                .child(
+                                    svg()
+                                        .path(provider.icon())
+                                        .size(px(16.))
+                                        .text_color(rgb(TEXT)),
+                                )
+                                .child(format!("Sign in with {}", provider.name()))
+                        }),
+                    ))
+            }
             GithubAuth::Authorizing {
                 user_code,
                 verification_uri,
@@ -1261,7 +1287,7 @@ impl Workspace {
                                             .text_color(rgb(TEXT_DIM))
                                             .child(
                                                 svg()
-                                                    .path("icons/github.svg")
+                                                    .path(profile.provider.icon())
                                                     .size(px(13.))
                                                     .text_color(rgb(TEXT_DIM)),
                                             )

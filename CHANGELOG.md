@@ -7,6 +7,13 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- GitLab sign-in alongside GitHub: same device flow, ssh probe for an
+  existing zedb-settings project, and one-time elevated create. (The
+  GitLab OAuth app registration is pending; the button says so until
+  then.)
+
 ## v0.1.6 - 2026-08-08
 
 Identity and settings release: optional GitHub sign-in, settings that

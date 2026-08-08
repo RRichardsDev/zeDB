@@ -382,7 +382,7 @@ impl Workspace {
             return;
         }
         self.settings_sync.probed = true;
-        let url = format!("git@github.com:{}/zedb-settings.git", profile.login);
+        let url = profile.provider.ssh_url(&profile.login, "zedb-settings");
         let probe_url = url.clone();
         let handle = rt::tokio().spawn(async move { git::remote_exists(&probe_url) });
         cx.spawn(async move |this, cx| {
@@ -414,13 +414,16 @@ impl Workspace {
     /// sign-in keeps its read-only scope.
     pub(crate) fn settings_sync_bootstrap(&mut self, cx: &mut Context<Self>) {
         let crate::GithubAuth::SignedIn(profile) = &self.github else {
-            self.flash_warning("Sign in with GitHub first", cx);
+            self.flash_warning("Sign in first", cx);
             return;
         };
+        let provider = profile.provider;
         let login = profile.login.clone();
         self.settings_sync.bootstrap_generation += 1;
         let generation = self.settings_sync.bootstrap_generation;
-        let handle = rt::tokio().spawn(github::start_device_flow_scoped("repo"));
+        let handle = rt::tokio().spawn(async move {
+            github::start_device_flow_scoped(provider, provider.elevated_scope()).await
+        });
         cx.spawn(async move |this, cx| {
             let device = match handle.await {
                 Ok(Ok(device)) => device,
@@ -452,7 +455,7 @@ impl Workspace {
                 return;
             }
             let token = match rt::tokio()
-                .spawn(async move { github::poll_for_token(&poll_device).await })
+                .spawn(async move { github::poll_for_token(provider, &poll_device).await })
                 .await
             {
                 Ok(Ok(token)) => token,
@@ -486,7 +489,7 @@ impl Workspace {
             let lookup_login = login.clone();
             let existing = rt::tokio()
                 .spawn(async move {
-                    github::get_repo(&lookup_token, &lookup_login, "zedb-settings").await
+                    github::get_repo(provider, &lookup_token, &lookup_login, "zedb-settings").await
                 })
                 .await;
             match existing {
@@ -522,6 +525,7 @@ impl Workspace {
                     let created = rt::tokio()
                         .spawn(async move {
                             github::create_private_repo(
+                                provider,
                                 &token,
                                 "zedb-settings",
                                 "zeDB settings sync (created by zeDB)",
