@@ -577,6 +577,17 @@ impl Workspace {
                         }
                         return;
                     }
+                    // cmd-n with the agent pane open: new thread with the
+                    // last-used agent.
+                    if event.keystroke.modifiers.platform
+                        && !event.keystroke.modifiers.shift
+                        && event.keystroke.key == "n"
+                        && this.agent.open
+                    {
+                        this.agent_start_last_thread(window, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
                     // Escape closes an open filter popover regardless of
                     // where focus sits (checkbox panels hold none).
                     if event.keystroke.key == "escape" {

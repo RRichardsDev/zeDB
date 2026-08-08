@@ -295,6 +295,27 @@ impl Workspace {
 
     /// Spawn an agent and open a thread with it. The spawn is cheap and
     /// synchronous; initialize and session setup stream in behind it.
+    /// cmd-n in the open agent pane: a new thread with the last-used
+    /// agent, falling back to the picker when there is no history.
+    pub(crate) fn agent_start_last_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.agent.agents.is_empty() {
+            self.agent_refresh_registry();
+        }
+        let remembered = self
+            .preferences
+            .last_agent
+            .as_deref()
+            .and_then(|name| self.agent.agents.iter().position(|agent| agent.name == name))
+            .or_else(|| (self.agent.agents.len() == 1).then_some(0));
+        match remembered {
+            Some(index) => self.agent_start_thread(index, window, cx),
+            None => {
+                self.agent.picker_open = true;
+                cx.notify();
+            }
+        }
+    }
+
     pub(crate) fn agent_start_thread(
         &mut self,
         agent_index: usize,
@@ -314,6 +335,8 @@ impl Workspace {
             cx.notify();
             return;
         }
+        self.preferences.last_agent = Some(agent.name.clone());
+        let _ = zedb_core::save_preferences(&self.preferences);
         let name = agent.name.clone();
         let icon = icon_for(&agent.id).to_string();
         let program = agent.command.clone();

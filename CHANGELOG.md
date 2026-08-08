@@ -29,6 +29,9 @@ GitHub release notes.
 - The settings file is now `settings.json` (renamed from
   `preferences.json`; migrated automatically) and can be opened in
   your editor from the palette.
+- cmd-N in the open agent pane starts a new thread with the
+  last-used agent (remembered in settings; the picker opens if
+  there's no history yet).
 
 ## v0.1.5 - 2026-08-08
 
