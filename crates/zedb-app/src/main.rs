@@ -1794,6 +1794,7 @@ impl Workspace {
     fn sidebar_resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("sidebar-resize-handle")
+            .hover(|handle| handle.bg(gpui::rgba(0x8a93a126)))
             .w(px(12.))
             .h_full()
             .ml(px(-4.))
@@ -1822,6 +1823,7 @@ impl Workspace {
     fn sidebar_section_resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("sidebar-section-resize-handle")
+            .hover(|handle| handle.bg(gpui::rgba(0x8a93a126)))
             .h(px(12.))
             .w_full()
             .mt(px(-4.))
@@ -3717,6 +3719,7 @@ impl Workspace {
     ) -> impl IntoElement {
         div()
             .id(id)
+            .hover(|handle| handle.bg(gpui::rgba(0x8a93a126)))
             .h(px(12.))
             .w_full()
             .mt(px(-6.))

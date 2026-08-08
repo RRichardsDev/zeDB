@@ -16,6 +16,7 @@ GitHub release notes.
   everything matching.
 - Result grid columns are drag-resizable from the header dividers, and
   widths are remembered per column set within the session.
+- Drag bands glow softly on hover so you can see you're on them.
 - Every drag target got meaningfully fatter: column dividers are
   grabbable from both sides of the line and never mis-fire a sort, and
   the sidebar, pane, and editor splitters all widened.

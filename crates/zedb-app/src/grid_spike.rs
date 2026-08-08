@@ -703,6 +703,7 @@ impl GridSpike {
                     .child(
                         div()
                             .id(("col-resize", col))
+                            .hover(|handle| handle.bg(gpui::rgba(0x8a93a126)))
                             .absolute()
                             .right_0()
                             .top_0()
@@ -725,6 +726,7 @@ impl GridSpike {
                         cell.child(
                             div()
                                 .id(("col-resize-left", col))
+                                .hover(|handle| handle.bg(gpui::rgba(0x8a93a126)))
                                 .absolute()
                                 .left_0()
                                 .top_0()

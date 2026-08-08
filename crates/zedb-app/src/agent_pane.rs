@@ -1359,6 +1359,7 @@ impl Workspace {
             .child(
                 div()
                     .id("agent-pane-resize")
+                    .hover(|handle| handle.bg(gpui::rgba(0x8a93a126)))
                     .absolute()
                     .left(px(-6.))
                     .top_0()
