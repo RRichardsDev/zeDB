@@ -5394,12 +5394,15 @@ impl Workspace {
                     .map(|details| !details.engine_full.is_empty())
                     .unwrap_or(false);
                 let metadata = details.as_ref().map(|details| {
+                    let sharding_key = zedb_ch::distributed_sharding_key(&details.engine_full)
+                        .map(|key| ("Sharding key", key));
                     [
                         ("Partition key", details.partition_key.clone()),
                         ("Order by", details.sorting_key.clone()),
                         ("Primary key", details.primary_key.clone()),
                     ]
                     .into_iter()
+                    .chain(sharding_key)
                     .map(|(label, value)| {
                         div()
                             .py_3()

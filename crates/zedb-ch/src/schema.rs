@@ -298,6 +298,47 @@ fn optional_u64_at(row: &[Value], index: usize, label: &str) -> Result<Option<u6
     }
 }
 
+/// The sharding expression of a Distributed engine definition:
+/// `Distributed(cluster, database, table[, sharding_key[, policy]])`.
+/// Returns `None` for non-Distributed engines or the 3-argument form.
+pub fn distributed_sharding_key(engine_full: &str) -> Option<String> {
+    let start = engine_full.find("Distributed(")? + "Distributed(".len();
+    let rest = &engine_full[start..];
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut args: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for ch in rest.chars() {
+        match ch {
+            '\'' if depth == 0 => {
+                in_string = !in_string;
+                current.push(ch);
+            }
+            '(' if !in_string => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' if !in_string => {
+                if depth == 0 {
+                    args.push(current.trim().to_string());
+                    let key = args.get(3)?.clone();
+                    // A quoted fourth argument is a storage policy, not
+                    // a sharding expression.
+                    return (!key.is_empty() && !key.starts_with('\'')).then_some(key);
+                }
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if !in_string && depth == 0 => {
+                args.push(current.trim().to_string());
+                current = String::new();
+            }
+            other => current.push(other),
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use zedb_core::{ColumnMeta, QueryResult};
@@ -357,5 +398,37 @@ mod tests {
         assert!(details
             .create_table_query
             .starts_with("CREATE TABLE events"));
+    }
+}
+
+#[cfg(test)]
+mod sharding_key_tests {
+    use super::distributed_sharding_key;
+
+    #[test]
+    fn extracts_the_sharding_expression() {
+        assert_eq!(
+            distributed_sharding_key(
+                "Distributed('zedb_sharded', 'shard_demo', 'events_local', user_id)"
+            )
+            .as_deref(),
+            Some("user_id")
+        );
+        assert_eq!(
+            distributed_sharding_key("Distributed('c', 'db', 't', cityHash64(user_id, kind))")
+                .as_deref(),
+            Some("cityHash64(user_id, kind)")
+        );
+        // Three-argument form: no key.
+        assert_eq!(
+            distributed_sharding_key("Distributed('c', 'db', 't')"),
+            None
+        );
+        // Quoted fourth argument is a policy, not a key.
+        assert_eq!(
+            distributed_sharding_key("Distributed('c', 'db', 't', 'policy')"),
+            None
+        );
+        assert_eq!(distributed_sharding_key("MergeTree ORDER BY id"), None);
     }
 }
