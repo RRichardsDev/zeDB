@@ -610,12 +610,13 @@ impl Workspace {
                     .mt_2()
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
                             .text_sm()
                             .text_color(rgb(TEXT_DIM))
                             .font_family("Menlo")
                             .child(url),
                     )
-                    .child(div().flex_1())
                     .child(
                         div()
                             .id("sync-now")
@@ -754,10 +755,9 @@ impl Workspace {
                             .mt_2()
                             .text_sm()
                             .text_color(rgb(TEXT_DIM))
-                            .child(format!(
+                            .child(div().flex_1().min_w_0().child(format!(
                                 "Looks like you already have zedb-settings ({ssh_url})."
-                            ))
-                            .child(div().flex_1())
+                            )))
                             .child(
                                 div()
                                     .id("bootstrap-link")
