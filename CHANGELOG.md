@@ -9,55 +9,55 @@ GitHub release notes.
 
 ## v0.1.5 - 2026-08-08
 
-- Refocusing the window quietly re-checks cluster health and looks for
-  updates (debounced to once per 30 seconds); a dead connection is
-  noticed on your return instead of at the next 5-minute poll.
+Results-grid release: sort, filter, and shape query results from the
+grid itself, with the SQL always telling the truth.
 
-- The update pill in the status bar wears the standard muted border,
-  and the version number reads in plain white.
-- Schema sidebar databases collapse again while a filter is applied;
-  the chevron now always tells the truth. Editing the filter re-expands
-  everything matching.
-- Result grid columns are drag-resizable from the header dividers, and
-  widths are remembered per column set within the session.
-- Splitters keep their tight 1px seam but carry a 13px invisible grab
-  band on both sides, Zed-style: the cursor may only flip near the
-  line, the drag works well before it.
-- Every drag target got meaningfully fatter: column dividers are
-  grabbable from both sides of the line and never mis-fire a sort, and
-  the sidebar, pane, and editor splitters all widened.
-- Filter popovers: Enter applies, Escape or clicking away closes, a
-  "(null)" checkbox appears for nullable columns, and the text field
-  understands "is null" / "is not null".
-- Click a result column header to sort by it: the query's top-level
-  ORDER BY is rewritten in the editor (on its own line) and just that
-  statement re-runs on the server. Clicks cycle ascending, descending,
-  and no sort; shift-click builds multi-column sorts with numbered
-  arrows; the indicators always reflect the SQL that actually ran.
-- Right-click a result header for an "Order by" submenu (Descending,
-  Ascending, Clear); with shift held it becomes "Add to order by" for
-  multi-column sorts. Header clicks now cycle descending first.
-- Right-click a result header for "Filter...": any column with ten or
-  fewer distinct values gets a checkbox list (a capped server probe
-  checks, short-circuiting past ten; Enum variants come straight from
-  the type), everything else a text field (plain text means
-  contains, %patterns% and operators like > 10 pass through). Filters
-  become managed conjuncts in the query's top-level WHERE, hand-written
-  predicates survive (and simple ones light up the indicators and
-  pre-fill the panel just like UI-made filters), filtered headers show a muted purple border, hovering any header
-  summarises every active sort and filter, and the
-  statement re-runs like header sorts do.
-- Re-running keeps the previous results on screen (with a "running"
-  hint in the header) until replacement rows stream in, and header
-  tiles show a hand cursor. Rapid sort and filter changes coalesce
-  into one run: the SQL and indicators update instantly, the query
-  fires after a beat, and an in-flight run is cancelled and restarted
-  rather than blocking the next change.
-- Read/size progress in the status bar resets per statement instead of
-  carrying a previous statement's totals; the vim mode chip reads
-  "-- INSERT --" and lives in the bottom status bar (with the command
-  line and recording indicator) instead of next to query output; NULL cells
-  render muted and italic.
+### Sorting from the grid
+
+- Click a column header to sort (descending first, then ascending,
+  then off). Shift-click builds multi-column sorts with numbered
+  arrows; right-click offers an "Order by" submenu.
+- The query's top-level ORDER BY is rewritten in the editor, on its
+  own line, and only that statement re-runs. Indicators always
+  reflect the SQL that actually executed, including hand-written
+  sorts.
+
+### Filtering from the grid
+
+- Right-click a header for "Filter...". Columns with ten or fewer
+  distinct values (checked by a capped server probe; Enum variants
+  read from the type) get a checkbox list, including a "(null)" entry
+  for nullable columns; everything else gets a text field where plain
+  text means contains, and %patterns%, operators (> 10), and
+  "is null" pass through.
+- Filters land as managed conjuncts in the top-level WHERE.
+  Hand-written predicates survive, light the indicators, and pre-fill
+  the panel. Filtered headers wear a muted purple border; hovering a
+  header summarises its sorts and filters.
+- Enter applies, Escape or clicking anywhere else closes.
+
+### Grid feel
+
+- Columns drag-resize from the header dividers; widths are remembered
+  per column set for the session.
+- Re-running keeps the previous rows on screen (with a "running"
+  hint) until the replacement streams in. Rapid sort/filter changes
+  coalesce into one run, cancelling anything in flight.
+- Timestamps render two-tone (muted-red date, muted time) and NULLs
+  muted italic.
+
+### Fixes and polish
+
+- Splitters keep their tight 1px seam but carry a wide invisible grab
+  band on both sides; column dividers grab from either side and never
+  mis-fire a sort.
+- Schema sidebar databases collapse correctly while a filter is
+  applied.
+- Refocusing the window quietly re-checks cluster health and looks
+  for updates (debounced), so a dead connection is noticed on return.
+- Status-bar read/size counters reset per statement; the vim mode
+  chip reads "-- INSERT --" and lives in the bottom bar; the update
+  pill matches the badge styling.
 
 ## v0.1.4 - 2026-08-07
 

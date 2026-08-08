@@ -53,6 +53,10 @@ This project is indexed by GitNexus as **zeDB** (2444 symbols, 7128 relationship
 - Every user-facing change adds a line under `## Unreleased` in
   `CHANGELOG.md` as part of making it. User-facing means a user of the
   app or CLI would notice; internals go in `docs/devlog.md` instead.
-- Cutting a release renames Unreleased to `## vX.Y.Z - date` (leave a
-  fresh empty Unreleased is not needed; the next change recreates it).
-  The release workflow publishes that section as the release notes.
+- Cutting a release renames Unreleased to `## vX.Y.Z - date` and
+  CURATES the accumulated bullets into grouped, readable notes (###
+  subheadings by theme, tight bullets, no mid-sentence patches); the
+  raw accumulation is drafting material, not the final notes. The
+  release workflow publishes that section verbatim as the release
+  notes. A fresh empty Unreleased is not needed; the next change
+  recreates it.
