@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui::{div, prelude::*, px, rgb, Context, Entity};
+use gpui::{div, prelude::*, px, rgb, svg, Context, Entity};
 use zedb_core::{git, sync};
 
 use crate::components::text_input::TextInput;
@@ -31,6 +31,9 @@ pub struct SettingsSyncState {
     /// The URL the probe prefilled, so an identity change can clear it
     /// without touching anything the user typed themselves.
     pub probed_url: Option<String>,
+    /// A zedb-settings repo found under the newly signed-in provider
+    /// while the input still holds the old provider's URL.
+    pub switch_offer: Option<String>,
 }
 
 /// Where the repo bootstrap is. The elevated `repo`-scoped token lives
@@ -58,6 +61,7 @@ impl SettingsSyncState {
             bootstrap_generation: 0,
             probed: false,
             probed_url: None,
+            switch_offer: None,
         }
     }
 }
@@ -294,6 +298,7 @@ impl Workspace {
     }
 
     fn settings_sync_enable_url(&mut self, url: String, cx: &mut Context<Self>) {
+        self.settings_sync.switch_offer = None;
         // A local path that is already a checkout needs no clone.
         let local = PathBuf::from(&url);
         if local.join(".git").exists() {
@@ -416,6 +421,7 @@ impl Workspace {
     /// switch): forget the old probe, clear a URL only if the probe put
     /// it there, and probe again for the new identity.
     pub(crate) fn settings_sync_identity_changed(&mut self, cx: &mut Context<Self>) {
+        self.settings_sync.switch_offer = None;
         // Signed in with one forge while sync is linked to the other:
         // unlink into the text box, old URL prefilled, so one Enable
         // relinks it (or clearing the field adopts the new provider).
@@ -444,6 +450,24 @@ impl Workspace {
                         ),
                         false,
                     ));
+                    // Look for a counterpart under the new provider and
+                    // offer a one-click switch if it exists.
+                    let candidate = profile.provider.ssh_url(&profile.login, "zedb-settings");
+                    let probe = candidate.clone();
+                    let handle = rt::tokio().spawn(async move { git::remote_exists(&probe) });
+                    cx.spawn(async move |this, cx| {
+                        if !matches!(handle.await, Ok(true)) {
+                            return;
+                        }
+                        this.update(cx, |this, cx| {
+                            if this.preferences.settings_sync_url.is_none() {
+                                this.settings_sync.switch_offer = Some(candidate);
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                    })
+                    .detach();
                 }
             }
         }
@@ -732,7 +756,10 @@ impl Workspace {
                     ),
             )
         } else {
-            let signed_in = matches!(self.github, crate::GithubAuth::SignedIn(_));
+            let signed_in_provider = match &self.github {
+                crate::GithubAuth::SignedIn(profile) => Some(profile.provider),
+                _ => None,
+            };
             let section = section.child(
                 div()
                     .flex()
@@ -753,29 +780,97 @@ impl Workspace {
                             .on_click(cx.listener(|this, _, _, cx| this.settings_sync_enable(cx)))
                             .child("Enable"),
                     )
-                    .when(signed_in && self.settings_sync.bootstrap.is_none(), |row| {
-                        row.child(
-                            div()
-                                .id("sync-bootstrap")
-                                .px_3()
-                                .py_1()
-                                .rounded(px(3.))
-                                .border_1()
-                                .border_color(rgb(BORDER))
-                                .text_color(rgb(TEXT_DIM))
-                                .hover(|button| {
-                                    button
-                                        .bg(rgb(BG_SIDEBAR))
-                                        .text_color(rgb(TEXT))
-                                        .cursor_pointer()
-                                })
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.settings_sync_bootstrap(cx)),
-                                )
-                                .child("Create repo for me"),
-                        )
-                    }),
+                    .when_some(
+                        signed_in_provider.filter(|_| self.settings_sync.bootstrap.is_none()),
+                        |row, provider| {
+                            row.child(
+                                div()
+                                    .id("sync-bootstrap")
+                                    .px_3()
+                                    .py_1()
+                                    .rounded(px(3.))
+                                    .border_1()
+                                    .border_color(rgb(BORDER))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .text_color(rgb(TEXT_DIM))
+                                    .hover(|button| {
+                                        button
+                                            .bg(rgb(BG_SIDEBAR))
+                                            .text_color(rgb(TEXT))
+                                            .cursor_pointer()
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.settings_sync_bootstrap(cx)
+                                    }))
+                                    .child("Create on")
+                                    .child(
+                                        svg()
+                                            .path(provider.icon())
+                                            .size(px(14.))
+                                            .text_color(rgb(TEXT)),
+                                    )
+                                    .child(provider.name()),
+                            )
+                        },
+                    ),
             );
+            let section = match &self.settings_sync.switch_offer {
+                Some(candidate) => {
+                    let switch_url = candidate.clone();
+                    section.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .mt_2()
+                            .text_sm()
+                            .text_color(rgb(TEXT_DIM))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(format!("Found {candidate} under this account.")),
+                            )
+                            .child(
+                                div()
+                                    .id("sync-switch-now")
+                                    .px_3()
+                                    .py_1()
+                                    .rounded(px(3.))
+                                    .border_1()
+                                    .border_color(rgb(BORDER))
+                                    .text_color(rgb(TEXT))
+                                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.settings_sync_enable_url(switch_url.clone(), cx);
+                                    }))
+                                    .child("Switch now"),
+                            )
+                            .child(
+                                div()
+                                    .id("sync-switch-dismiss")
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded(px(3.))
+                                    .text_color(rgb(TEXT_DIM))
+                                    .hover(|button| {
+                                        button
+                                            .bg(rgb(BG_SIDEBAR))
+                                            .text_color(rgb(TEXT))
+                                            .cursor_pointer()
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.settings_sync.switch_offer = None;
+                                        cx.notify();
+                                    }))
+                                    .child("Not now"),
+                            ),
+                    )
+                }
+                None => section,
+            };
             match &self.settings_sync.bootstrap {
                 None => section,
                 Some(Bootstrap::Authorizing { user_code }) => section
