@@ -423,6 +423,17 @@ impl Workspace {
                 self.settings_sync.status = None;
             }
         }
+        // The example URL follows the signed-in provider.
+        let placeholder = match &self.github {
+            crate::GithubAuth::SignedIn(profile) => {
+                profile.provider.ssh_url("you", "zedb-settings")
+            }
+            _ => github::Provider::GitHub.ssh_url("you", "zedb-settings"),
+        };
+        self.settings_sync
+            .url_input
+            .clone()
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
         self.settings_sync.probed = false;
         self.settings_sync_probe_existing(cx);
     }

@@ -86,6 +86,12 @@ impl TextInput {
         self.content.to_string()
     }
 
+    /// Swap the placeholder (e.g. to match the signed-in provider).
+    pub fn set_placeholder(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.placeholder = text.into();
+        cx.notify();
+    }
+
     /// Replace the content programmatically (e.g. a detected default),
     /// cursor at the end.
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
