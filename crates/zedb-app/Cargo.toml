@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "zedb-app"
+name = "zedb"
 path = "src/main.rs"
 
 [dependencies]

@@ -36,7 +36,7 @@ cargo build --manifest-path "$root/Cargo.toml" --release -p zedb-app
 
 rm -rf "$app"
 mkdir -p "$contents/MacOS" "$contents/Resources"
-install -m 755 "$root/target/release/zedb-app" "$contents/MacOS/zedb"
+install -m 755 "$root/target/release/zedb" "$contents/MacOS/zedb"
 install -m 644 "$root/packaging/macos/Info.plist" "$contents/Info.plist"
 
 /usr/libexec/PlistBuddy \

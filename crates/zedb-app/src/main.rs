@@ -80,6 +80,7 @@ actions!(
         CheckForUpdates,
         OpenCommandPalette,
         OpenPreferences,
+        OpenSettingsFile,
         ToggleAgentPane,
         QuitZeDb,
         RunQuery,
@@ -545,7 +546,7 @@ impl Workspace {
                     if this.palette.open {
                         match event.keystroke.key.as_str() {
                             "escape" => {
-                                this.palette_close(cx);
+                                this.palette_close(window, cx);
                                 cx.stop_propagation();
                             }
                             "up" => {
@@ -5716,9 +5717,6 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &ToggleAgentPane, window, cx| this.agent_toggle(window, cx)),
             )
-            .on_action(cx.listener(|this, _: &OpenCommandPalette, window, cx| {
-                this.palette_toggle(window, cx)
-            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
@@ -6244,6 +6242,13 @@ fn main() {
                 MenuItem::separator(),
                 MenuItem::action("Quit zeDB", QuitZeDb),
             ],
+        }, Menu {
+            name: "View".into(),
+            items: vec![
+                MenuItem::action("Command Palette…", OpenCommandPalette),
+                MenuItem::separator(),
+                MenuItem::action("Open settings.json", OpenSettingsFile),
+            ],
         }]);
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
@@ -6258,6 +6263,24 @@ fn main() {
             },
             |window, cx| {
                 let workspace = cx.new(|cx| Workspace::new(window, cx));
+                let palette_workspace = workspace.clone();
+                let palette_window = window.window_handle();
+                cx.on_action(move |_: &OpenCommandPalette, cx| {
+                    let workspace = palette_workspace.clone();
+                    palette_window
+                        .update(cx, |_, window, cx| {
+                            workspace.update(cx, |workspace, cx| {
+                                workspace.palette_toggle(window, cx);
+                            });
+                        })
+                        .ok();
+                });
+                let settings_file_workspace = workspace.clone();
+                cx.on_action(move |_: &OpenSettingsFile, cx| {
+                    settings_file_workspace.update(cx, |workspace, cx| {
+                        workspace.open_settings_file(cx);
+                    });
+                });
                 let preferences_workspace = workspace.clone();
                 cx.on_action(move |_: &OpenPreferences, cx| {
                     preferences_workspace.update(cx, |workspace, cx| {

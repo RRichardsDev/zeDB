@@ -12,6 +12,9 @@ pub struct PaletteState {
     pub open: bool,
     pub input: Entity<TextInput>,
     pub selected: usize,
+    /// Where focus was when the palette opened; restored on close so
+    /// key dispatch (and menu key equivalents) keep a live path.
+    pub previous_focus: Option<gpui::FocusHandle>,
 }
 
 impl PaletteState {
@@ -22,6 +25,7 @@ impl PaletteState {
             open: false,
             input,
             selected: 0,
+            previous_focus: None,
         }
     }
 }
@@ -116,9 +120,10 @@ impl Workspace {
 
     pub(crate) fn palette_toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.palette.open {
-            self.palette_close(cx);
+            self.palette_close(window, cx);
             return;
         }
+        self.palette.previous_focus = window.focused(cx);
         self.palette.open = true;
         self.palette.selected = 0;
         let input = self.palette.input.clone();
@@ -127,8 +132,15 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(crate) fn palette_close(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn palette_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette.open = false;
+        // Focus must land somewhere live, or the window loses its key
+        // dispatch path and every shortcut goes dead.
+        if let Some(previous) = self.palette.previous_focus.take() {
+            window.focus(&previous);
+        } else if let Some(tab) = self.query_tabs.get(self.active_query_tab) {
+            window.focus(&tab.editor.read(cx).focus_handle(cx));
+        }
         cx.notify();
     }
 
@@ -160,7 +172,7 @@ impl Workspace {
         else {
             return;
         };
-        self.palette_close(cx);
+        self.palette_close(window, cx);
         command.run(self, window, cx);
     }
 
@@ -179,7 +191,7 @@ impl Workspace {
                         .inset_0()
                         .on_mouse_down(
                             gpui::MouseButton::Left,
-                            cx.listener(|this, _, _, cx| this.palette_close(cx)),
+                            cx.listener(|this, _, window, cx| this.palette_close(window, cx)),
                         ),
                 )
                 .child(
@@ -231,7 +243,7 @@ impl Workspace {
                                                 })
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
-                                                        this.palette_close(cx);
+                                                        this.palette_close(window, cx);
                                                         command.run(this, window, cx);
                                                     },
                                                 ))
