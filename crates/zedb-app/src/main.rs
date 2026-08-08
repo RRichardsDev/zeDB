@@ -1891,7 +1891,7 @@ impl Workspace {
                                 row.child(
                                     div()
                                         .flex_none()
-                                        .text_xs()
+                                        .text_size(px(9.))
                                         .text_color(rgb(TEXT_DIM))
                                         .child(Self::format_bytes(bytes)),
                                 )
