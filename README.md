@@ -1,78 +1,68 @@
 # zeDB
 
-A fast, native database tool for ClickHouse: an explorer with Zed-grade
-responsiveness, and a git-backed migration engine that knows the schema
-state of an entire fleet.
+A fast, native ClickHouse explorer and fleet migration tool for macOS.
+Built with [GPUI](https://www.gpui.rs) (the UI framework behind the Zed
+editor), so it feels like an editor, not an electron app: instant
+launch, native rendering, and million-row result sets that scroll
+without jank.
 
-## What it is
+![The query view: sort and filter straight from the results grid](docs/screenshots/query.png)
 
-zeDB is two tools that share one core:
+## What you get
 
-- **An explorer.** A GPU-accelerated desktop app (built with GPUI, the UI
-  framework behind the Zed editor) for browsing databases, writing SQL, and
-  scrolling through very large result sets without jank. Connections are
-  tiered (dev / staging / production), read-only by default, and passwords
-  live in the macOS Keychain, not in config files.
-- **A migration engine.** Migrations are plain SQL files in a plain git
-  repository. Instead of parsing your SQL or asking you to re-describe your
-  schema declaratively, zeDB replays migrations through a real,
-  version-pinned `clickhouse local` and lets the database itself answer
-  every semantic question. It can then tell you, across hundreds of
-  databases on multiple clusters, exactly which migrations have been
-  applied where, what has drifted, and what an apply would do before you
-  run it.
+**A serious query workbench.**
+Connect to clusters with tiered identities (dev / staging / production),
+read-only by default, passwords in the macOS Keychain. Write SQL with
+schema-aware completions, hover cards, and typo underlines powered by a
+per-connection schema cache that persists across launches. Stream
+results into a virtualized grid; sort and filter by clicking the
+headers, and zeDB rewrites the actual SQL (a real `ORDER BY`, a real
+`WHERE`) and re-runs just that statement, so what you see is always what
+the server did.
 
-## Why it exists
+![Filter popovers offer checkboxes when a column has few distinct values](docs/screenshots/filtering.png)
 
-ClickHouse deserves better tooling. General-purpose database GUIs treat it
-shallowly, and no existing migration tool understands fleets: many
-databases sharing one migration history, spread across clusters.
+**A migration engine that understands fleets.**
+Migrations are plain SQL files in a plain git repository. zeDB replays
+them through a real, version-pinned ClickHouse rather than parsing your
+SQL, then shows you, across every database on the cluster, exactly what
+is applied, pending, customised, or drifted, and what an apply would do
+before you run it. Applying to production takes layered, explicit
+consent, not a confirmation dialog.
 
-The design bets are simple:
+![The fleet view: one row per database, one column per migration](docs/screenshots/fleet.png)
 
-1. **Replay, don't interpret.** The tool never reimplements ClickHouse
-   semantics; a real pinned ClickHouse is the parser and the referee.
-2. **Safety is architecture.** Mutating production requires layered,
-   explicit consent: visual environment identity, read-only defaults,
-   mandatory dry-run diffs, rollback-class acknowledgement, and an audit
-   log. Not a confirmation dialog.
-3. **Headless core.** All logic lives in library crates; the GUI and the
-   CLI are thin clients. CI runs everything without a window server.
-4. **BYO git.** Migration repos are ordinary directories in any git remote.
-   No forge coupling, no hosted service.
+**Your AI agents, inside the app.**
+Open the agent pane (`cmd-i`) and run Claude Code, Codex, or any
+ACP-speaking agent with the auth you already have. Agents see what you
+see, query through zeDB's read-only, capped MCP tools, search the
+schema cache instantly, and can draft migrations or queries into the
+app for your review; they cannot write anything themselves.
 
-## Layout
+## Install
 
-| Crate | Role |
-|---|---|
-| `crates/zedb-core` | Shared domain model: connections, preferences, secrets |
-| `crates/zedb-ch` | ClickHouse client, replay engine, migrations, fleet state |
-| `crates/zedb-cli` | Command-line interface for the same operations |
-| `crates/zedb-app` | The GPUI desktop app (macOS) |
+Grab the latest DMG from
+[Releases](https://github.com/RRichardsDev/zeDB/releases). zeDB checks
+for updates itself and installs them in place.
 
-`docs/SPEC.md` is the full design document; `docs/devlog.md` records
-findings and gotchas as development goes.
+## Quick start
 
-## Building
+1. Add a connection (`+` in the sidebar): name, nodes, tier, and
+   whether it may ever write. Test and save.
+2. Connect; you land in a query tab with the schema sidebar warming
+   itself in the background.
+3. Write SQL and `cmd-enter`, or click around the results grid: header
+   clicks sort, right-click filters, dividers resize.
+4. For migrations, open the fleet view (grid icon) and point it at a
+   migration repo, or paste a git URL and let zeDB clone and manage the
+   checkout for you.
 
-Rust stable on macOS. GPUI needs Apple's Metal toolchain, which no longer
-ships with the Command Line Tools:
+## Development
 
-```sh
-xcodebuild -downloadComponent MetalToolchain   # one-time, ~700MB
-cargo build
-cargo run -p zedb-app
-```
-
-Packaged, signed builds come from `scripts/bundle-macos.sh`; releases are
-cut by tagging `v*` (see `packaging/TODO.md` for the pipeline details).
-
-## Status
-
-Early and moving fast. Built in the open for the ClickHouse community;
-opinionated about migration layout and workflow, and those opinions are the
-product. Other database engines are welcome as guests later via a
-capability-based driver model, but ClickHouse is first-class.
+Everything about building, architecture, and design decisions lives in
+[DEV_README.md](DEV_README.md). The full design document is
+`docs/SPEC.md`; user-facing changes land in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
