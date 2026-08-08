@@ -40,12 +40,11 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct DriverConfig {
-    /// Server-side cap (seconds) sent as max_execution_time with every
-    /// interactive query. None = no cap beyond the server's own.
-    pub max_execution_time_secs: Option<u32>,
-    /// TCP connect timeout in seconds. None = the driver default (10).
-    pub connect_timeout_secs: Option<u32>,
-    /// Extra ClickHouse settings sent with every query.
+    /// ClickHouse settings sent with every query on this cluster.
+    /// Two names are special: `max_execution_time` is excluded from
+    /// the agent-facing guarded path (its own stricter cap wins), and
+    /// `connect_timeout` configures the HTTP client (seconds) instead
+    /// of being sent to the server.
     pub settings: Vec<DriverSetting>,
 }
 

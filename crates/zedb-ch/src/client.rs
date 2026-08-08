@@ -56,9 +56,16 @@ pub struct QueryStreamSummary {
 
 impl ChClient {
     pub fn new(cfg: ChConfig) -> Self {
-        let connect_timeout = cfg.driver.connect_timeout_secs.unwrap_or(10).max(1);
+        let connect_timeout = cfg
+            .driver
+            .settings
+            .iter()
+            .find(|setting| setting.name.trim() == "connect_timeout")
+            .and_then(|setting| setting.value.trim().parse::<u64>().ok())
+            .filter(|&secs| secs > 0)
+            .unwrap_or(10);
         let http = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(connect_timeout as u64))
+            .connect_timeout(Duration::from_secs(connect_timeout))
             .build()
             .unwrap_or_default();
         Self { cfg, http }
@@ -73,23 +80,19 @@ impl ChClient {
             .driver
             .settings
             .iter()
-            .filter(|setting| !setting.name.trim().is_empty())
-            .map(|setting| (setting.name.trim().to_string(), setting.value.clone()))
+            .filter(|setting| {
+                let name = setting.name.trim();
+                // connect_timeout shapes the HTTP client, not the query.
+                !name.is_empty() && !setting.value.trim().is_empty() && name != "connect_timeout"
+            })
+            .map(|setting| {
+                (
+                    setting.name.trim().to_string(),
+                    setting.value.trim().to_string(),
+                )
+            })
             .collect();
-        if include_execution_cap {
-            if let Some(cap) = self
-                .cfg
-                .driver
-                .max_execution_time_secs
-                .filter(|&cap| cap > 0)
-            {
-                // A hand-written max_execution_time setting wins over
-                // the dedicated field.
-                if !params.iter().any(|(name, _)| name == "max_execution_time") {
-                    params.push(("max_execution_time".into(), cap.to_string()));
-                }
-            }
-        } else {
+        if !include_execution_cap {
             params.retain(|(name, _)| name != "max_execution_time");
         }
         params

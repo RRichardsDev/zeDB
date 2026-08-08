@@ -191,10 +191,8 @@ struct ConnectionForm {
     password: Entity<TextInput>,
     tier: EnvTier,
     read_only: bool,
-    /// Driver knobs, per cluster: seconds fields accept blank for
-    /// "default"; settings rows with a blank name are dropped on save.
-    driver_max_execution: Entity<TextInput>,
-    driver_connect_timeout: Entity<TextInput>,
+    /// Driver settings rows; rows with a blank name or value are
+    /// dropped on save.
     driver_settings: Vec<DriverSettingForm>,
 }
 
@@ -2060,9 +2058,7 @@ impl Workspace {
             password: Self::input("", "stored in macOS Keychain", true, cx),
             tier: EnvTier::Dev,
             read_only: true,
-            driver_max_execution: Self::input("", "none", false, cx),
-            driver_connect_timeout: Self::input("", "10", false, cx),
-            driver_settings: Vec::new(),
+            driver_settings: Self::seeded_driver_settings(&[], cx),
         });
         self.notice = None;
         cx.notify();
@@ -2096,35 +2092,7 @@ impl Workspace {
             password: Self::input("", "leave blank to keep existing", true, cx),
             tier: connection.tier,
             read_only: connection.read_only,
-            driver_max_execution: Self::input(
-                connection
-                    .driver
-                    .max_execution_time_secs
-                    .map(|secs| secs.to_string())
-                    .unwrap_or_default(),
-                "none",
-                false,
-                cx,
-            ),
-            driver_connect_timeout: Self::input(
-                connection
-                    .driver
-                    .connect_timeout_secs
-                    .map(|secs| secs.to_string())
-                    .unwrap_or_default(),
-                "10",
-                false,
-                cx,
-            ),
-            driver_settings: connection
-                .driver
-                .settings
-                .into_iter()
-                .map(|setting| DriverSettingForm {
-                    name: Self::input(setting.name, "setting", false, cx),
-                    value: Self::input(setting.value, "value", false, cx),
-                })
-                .collect(),
+            driver_settings: Self::seeded_driver_settings(&connection.driver.settings, cx),
         });
         self.notice = None;
         cx.notify();
@@ -2236,8 +2204,6 @@ impl Workspace {
         order.push(form.user.clone());
         order.push(form.database.clone());
         order.push(form.password.clone());
-        order.push(form.driver_max_execution.clone());
-        order.push(form.driver_connect_timeout.clone());
         for setting in &form.driver_settings {
             order.push(setting.name.clone());
             order.push(setting.value.clone());
@@ -2274,6 +2240,47 @@ impl Workspace {
         if let Some(form) = &mut self.form {
             form.read_only = !form.read_only;
             cx.notify();
+        }
+    }
+
+    /// The saved driver settings as form rows, with the two well-known
+    /// names seeded (empty, so they drop on save unless filled) when
+    /// absent. They behave exactly like manually added rows.
+    fn seeded_driver_settings(
+        saved: &[zedb_core::DriverSetting],
+        cx: &mut Context<Self>,
+    ) -> Vec<DriverSettingForm> {
+        let mut rows: Vec<DriverSettingForm> = Vec::new();
+        for name in ["max_execution_time", "connect_timeout"] {
+            if !saved.iter().any(|setting| setting.name == name) {
+                rows.push(DriverSettingForm {
+                    name: Self::input(name, "setting", false, cx),
+                    value: Self::input(
+                        "",
+                        if name == "connect_timeout" {
+                            "10"
+                        } else {
+                            "seconds"
+                        },
+                        false,
+                        cx,
+                    ),
+                });
+            }
+        }
+        rows.extend(saved.iter().map(|setting| DriverSettingForm {
+            name: Self::input(setting.name.clone(), "setting", false, cx),
+            value: Self::input(setting.value.clone(), "value", false, cx),
+        }));
+        rows
+    }
+
+    fn remove_driver_setting(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(form) = &mut self.form {
+            if index < form.driver_settings.len() {
+                form.driver_settings.remove(index);
+                cx.notify();
+            }
         }
     }
 
@@ -2350,28 +2357,19 @@ impl Workspace {
             return Err(format!("A connection named {name:?} already exists"));
         }
 
-        let parse_secs = |input: &Entity<TextInput>, label: &str| -> Result<Option<u32>, String> {
-            let text = input.read(cx).text().trim().to_string();
-            if text.is_empty() {
-                return Ok(None);
-            }
-            text.parse::<u32>()
-                .map(|secs| (secs > 0).then_some(secs))
-                .map_err(|_| format!("{label} must be a whole number of seconds"))
-        };
         let driver = zedb_core::DriverConfig {
-            max_execution_time_secs: parse_secs(&form.driver_max_execution, "Query timeout")?,
-            connect_timeout_secs: parse_secs(&form.driver_connect_timeout, "Connect timeout")?,
             settings: form
                 .driver_settings
                 .iter()
                 .filter_map(|setting| {
                     let name = value(&setting.name);
                     let setting_value = value(&setting.value);
-                    (!name.is_empty()).then_some(zedb_core::DriverSetting {
-                        name,
-                        value: setting_value,
-                    })
+                    (!name.is_empty() && !setting_value.is_empty()).then_some(
+                        zedb_core::DriverSetting {
+                            name,
+                            value: setting_value,
+                        },
+                    )
                 })
                 .collect(),
         };
@@ -3433,35 +3431,47 @@ impl Workspace {
                                                 .child("+ Add setting"),
                                         ),
                                 )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap_3()
-                                        .child(div().flex_1().child(Self::field(
-                                            "QUERY TIMEOUT (S)",
-                                            form.driver_max_execution.clone(),
-                                        )))
-                                        .child(div().flex_1().child(Self::field(
-                                            "CONNECT TIMEOUT (S)",
-                                            form.driver_connect_timeout.clone(),
-                                        ))),
-                                )
-                                .children(form.driver_settings.iter().map(|setting| {
-                                    div()
-                                        .flex()
-                                        .gap_3()
-                                        .child(
-                                            div()
-                                                .w(px(220.))
-                                                .flex_none()
-                                                .child(setting.name.clone()),
-                                        )
-                                        .child(div().flex_1().child(setting.value.clone()))
-                                }))
+                                .children(form.driver_settings.iter().enumerate().map(
+                                    |(index, setting)| {
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .w(px(220.))
+                                                    .flex_none()
+                                                    .child(setting.name.clone()),
+                                            )
+                                            .child(div().flex_1().child(setting.value.clone()))
+                                            .child(
+                                                div()
+                                                    .id(("remove-driver-setting", index))
+                                                    .w(px(30.))
+                                                    .h(px(30.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded(px(3.))
+                                                    .border_1()
+                                                    .border_color(rgb(BORDER))
+                                                    .child("-")
+                                                    .hover(|button| {
+                                                        button.bg(rgb(BG_SIDEBAR)).cursor_pointer()
+                                                    })
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            this.remove_driver_setting(index, cx)
+                                                        },
+                                                    )),
+                                            )
+                                    },
+                                ))
                                 .when(!form.driver_settings.is_empty(), |section| {
                                     section.child(div().text_xs().text_color(rgb(TEXT_DIM)).child(
-                                        "Settings are sent with every query on this cluster; \
-                                         blank the name to remove a row.",
+                                        "Sent with every query on this cluster; \
+                                         connect_timeout configures the driver instead. \
+                                         Rows without a value are dropped on save.",
                                     ))
                                 }),
                         )

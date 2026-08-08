@@ -9,11 +9,12 @@ GitHub release notes.
 
 ## Unreleased
 
-- Per-cluster driver configuration in the connection form: a query
-  timeout (max_execution_time), a connect timeout, and free-form
-  ClickHouse settings sent with every query on that cluster. All
-  optional; blank means what zeDB always did. Synced with the
-  connection through settings sync.
+- Per-cluster driver configuration in the connection form: a settings
+  list sent with every query on that cluster, pre-seeded with
+  max_execution_time and connect_timeout rows (removable like any
+  other; connect_timeout configures the driver itself). Blank means
+  what zeDB always did. Synced with the connection through settings
+  sync.
 - The connection form scrolls when it outgrows the window (many
   nodes, driver settings) instead of clipping the bottom.
 
