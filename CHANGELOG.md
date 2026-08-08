@@ -17,7 +17,8 @@ GitHub release notes.
   Distributed tables are unaffected. Replicas and unknown topologies
   behave exactly as before.
 - Distributed tables show their sharding key in the object overview,
-  parsed from the engine definition.
+  parsed from the engine definition, and wear a DT glyph in the
+  schema sidebar (alongside T/V/MV/D).
 
 ## v0.1.11 - 2026-08-08
 

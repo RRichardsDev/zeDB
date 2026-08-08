@@ -1881,8 +1881,11 @@ impl Workspace {
             .child(self.schema_sidebar(cx))
     }
 
-    fn schema_kind_label(kind: SchemaObjectKind) -> &'static str {
+    fn schema_kind_label(kind: SchemaObjectKind, engine: &str) -> &'static str {
         match kind {
+            // A Distributed table holds no data of its own; it scatters
+            // over the cluster's shard-local tables.
+            SchemaObjectKind::Table if engine == "Distributed" => "DT",
             SchemaObjectKind::Table => "T",
             SchemaObjectKind::View => "V",
             SchemaObjectKind::MaterializedView => "MV",
@@ -1984,7 +1987,7 @@ impl Workspace {
                                     .w(px(20.))
                                     .text_xs()
                                     .text_color(theme::text_dim())
-                                    .child(Self::schema_kind_label(object.kind)),
+                                    .child(Self::schema_kind_label(object.kind, &object.engine)),
                             )
                             .child(
                                 div()
