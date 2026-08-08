@@ -7,15 +7,28 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.7 - 2026-08-08
 
-- GitLab sign-in alongside GitHub: same device flow, ssh probe for an
-  existing zedb-settings project, and one-time elevated create.
-  Switching providers unlinks a synced repo into the URL field and
-  offers a one-click switch when the new account has its own
-  zedb-settings.
-- Connection form fixes: Tab and shift-Tab move between the fields,
-  and double-clicking a field selects its whole value.
+GitLab joins GitHub as an identity provider, with the same one-click
+settings-sync journey; plus connection-form polish.
+
+### GitLab
+
+- Sign in with GitLab from Preferences: the same device flow, code
+  presentation, and Keychain handling as GitHub, with `read_user`
+  scope only.
+- The zedb-settings probe, URL prefill, and one-time elevated
+  "Create on GitLab" all follow the signed-in provider.
+- Switching providers unlinks a synced repo into the URL field (old
+  URL prefilled for easy relinking) and, when the new account has its
+  own zedb-settings, offers a one-click "Switch now". Signing out
+  never unlinks; sync is plain git and works without any identity.
+
+### Connection form
+
+- Tab and shift-Tab move between the fields.
+- Double-clicking a field selects its whole value, and only the
+  focused field ever shows a selection.
 
 ## v0.1.6 - 2026-08-08
 
