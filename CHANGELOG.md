@@ -13,6 +13,9 @@ GitHub release notes.
   Vim mode toggle instead of an ON/OFF button.
 - Disconnect is a red broken-plug icon (the connect plug with a line
   through it) instead of a stop square.
+- Grid sorts and filters target the statement that actually ran:
+  with identical queries in the editor, rewrites land on the executed
+  one (tracked by position), not the first lookalike.
 
 ## v0.1.7 - 2026-08-08
 

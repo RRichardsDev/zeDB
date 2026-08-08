@@ -354,6 +354,9 @@ struct QueryTab {
     /// The last successfully executed statement, i.e. the one whose
     /// result the grid is showing; header sorts rewrite and re-run it.
     displayed_statement: Option<String>,
+    /// Byte offset of the displayed statement in the editor at run
+    /// time, so rewrites target the right one among identical twins.
+    displayed_statement_offset: Option<usize>,
 }
 
 enum QueryOutcome {
@@ -3513,6 +3516,7 @@ impl Workspace {
             vim_recording: None,
             schema_analysis_generation: 0,
             displayed_statement: None,
+            displayed_statement_offset: None,
         }
     }
 
@@ -3902,7 +3906,11 @@ impl Workspace {
                 })
                 .unwrap_or_default()
         });
-        self.start_statements(vec![sql], cx);
+        let offset = self.query_tabs.get(self.active_query_tab).and_then(|tab| {
+            let editor = tab.editor.read(cx);
+            nearest_occurrence(editor.value().as_ref(), sql.trim(), editor.cursor())
+        });
+        self.start_statements(vec![(sql.trim().to_string(), offset)], cx);
     }
 
     /// Run every statement in the selection (or the whole buffer when nothing
@@ -3911,22 +3919,37 @@ impl Workspace {
         if self.query_abort.is_some() {
             return;
         }
-        let text = self.selected_text(window, cx).or_else(|| {
-            self.query_tabs
-                .get(self.active_query_tab)
-                .map(|tab| tab.editor.read(cx).value().to_string())
-        });
-        let statements = text
-            .map(|text| {
-                split_statements(&text)
-                    .into_iter()
-                    .filter_map(|(start, end)| {
-                        let statement = text[start..end].trim();
-                        (!statement.is_empty()).then(|| statement.to_string())
-                    })
-                    .collect()
+        let selection = self.selected_text(window, cx);
+        let (full_text, cursor) = self
+            .query_tabs
+            .get(self.active_query_tab)
+            .map(|tab| {
+                let editor = tab.editor.read(cx);
+                (editor.value().to_string(), editor.cursor())
             })
             .unwrap_or_default();
+        // Offsets are absolute editor positions; a selection anchors its
+        // relative offsets at the occurrence nearest the cursor.
+        let (text, base) = match selection {
+            Some(selection) => {
+                let base = nearest_occurrence(&full_text, &selection, cursor);
+                (selection, base)
+            }
+            None => (full_text, Some(0)),
+        };
+        let statements = split_statements(&text)
+            .into_iter()
+            .filter_map(|(start, end)| {
+                let raw = &text[start..end.min(text.len())];
+                let statement = raw.trim();
+                if statement.is_empty() {
+                    return None;
+                }
+                let leading = raw.len() - raw.trim_start().len();
+                let offset = base.map(|base| base + start + leading);
+                Some((statement.to_string(), offset))
+            })
+            .collect();
         self.start_statements(statements, cx);
     }
 
@@ -4062,12 +4085,32 @@ impl Workspace {
         // Later header interactions compose on this rewrite even before
         // it has run.
         tab.displayed_statement = Some(rewritten.clone());
+        let offset = tab.displayed_statement_offset;
         let editor = tab.editor.clone();
         let value = editor.read(cx).value().to_string();
-        if value.contains(&statement) {
+        // Position first: identical statements elsewhere in the buffer
+        // must not swallow the rewrite. Text match is the fallback for
+        // a buffer edited since the run.
+        let position_match = offset
+            .filter(|&offset| value.get(offset..offset + statement.len()) == Some(&statement[..]));
+        if let Some(offset) = position_match {
+            let updated = format!(
+                "{}{}{}",
+                &value[..offset],
+                rewritten,
+                &value[offset + statement.len()..]
+            );
+            editor.update(cx, |editor, cx| editor.set_value(updated, window, cx));
+        } else if value.contains(&statement) {
+            if let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) {
+                tab.displayed_statement_offset = value.find(&statement);
+            }
             let updated = value.replacen(&statement, &rewritten, 1);
             editor.update(cx, |editor, cx| editor.set_value(updated, window, cx));
         } else {
+            if let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) {
+                tab.displayed_statement_offset = None;
+            }
             self.flash_warning(
                 "Query changed since it ran; rewriting the last executed statement",
                 cx,
@@ -4090,14 +4133,22 @@ impl Workspace {
                 if this.query_abort.is_some() {
                     this.cancel_query(cx);
                 }
-                this.start_statements(vec![statement], cx);
+                let offset = this
+                    .query_tabs
+                    .get(this.active_query_tab)
+                    .and_then(|tab| tab.displayed_statement_offset);
+                this.start_statements(vec![(statement, offset)], cx);
             })
             .ok();
         })
         .detach();
     }
 
-    fn start_statements(&mut self, mut statements: Vec<String>, cx: &mut Context<Self>) {
+    fn start_statements(
+        &mut self,
+        mut statements: Vec<(String, Option<usize>)>,
+        cx: &mut Context<Self>,
+    ) {
         if self.query_abort.is_some() {
             return;
         }
@@ -4105,7 +4156,7 @@ impl Workspace {
             self.flash_warning("Connect to a cluster before running a query", cx);
             return;
         };
-        statements.retain(|statement| !statement.trim().is_empty());
+        statements.retain(|(statement, _)| !statement.trim().is_empty());
         let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) else {
             return;
         };
@@ -4140,7 +4191,7 @@ impl Workspace {
             let mut summary: Option<QueryStreamSummary> = None;
             let mut skipped = 0usize;
             let mut succeeded = Vec::new();
-            for (index, sql) in statements.iter().enumerate() {
+            for (index, (sql, offset)) in statements.iter().enumerate() {
                 let outcome = client
                     .query_stream(sql, row_limit.unwrap_or(usize::MAX), |event| {
                         let _ = sender.send(RunEvent::Stream(event));
@@ -4149,7 +4200,7 @@ impl Workspace {
                 match outcome {
                     Ok(current) => {
                         summary = Some(current);
-                        succeeded.push(sql.clone());
+                        succeeded.push((sql.clone(), *offset));
                     }
                     Err(error) => {
                         let message = if total > 1 {
@@ -4280,8 +4331,9 @@ impl Workspace {
                 // Re-sync the sort indicator with reality: the executed
                 // SQL on success, or the still-displayed old result's SQL
                 // when the run failed after an optimistic indicator.
-                if let Some(statement) = successful_statements.last() {
+                if let Some((statement, offset)) = successful_statements.last() {
                     tab.displayed_statement = Some(statement.clone());
+                    tab.displayed_statement_offset = *offset;
                 }
                 if let Some(statement) = tab.displayed_statement.clone() {
                     let sort = zedb_ch::schema_intelligence::top_level_order_by(&statement);
@@ -4291,7 +4343,11 @@ impl Workspace {
                         grid.set_filters(filters, cx);
                     });
                 }
-                this.refresh_schema_after_statements(&successful_statements);
+                let successful_sql: Vec<String> = successful_statements
+                    .iter()
+                    .map(|(sql, _)| sql.clone())
+                    .collect();
+                this.refresh_schema_after_statements(&successful_sql);
                 cx.notify();
             })
             .ok();
@@ -6197,6 +6253,27 @@ fn split_statements(text: &str) -> Vec<(usize, usize)> {
 /// Return the statement containing the byte offset `cursor`. When the cursor
 /// sits in blank space between statements, prefer the nearest non-empty
 /// statement before it, then after it.
+/// The occurrence of `needle` in `text` closest to `cursor`, so a
+/// statement resolved by content lands on the instance the user acted
+/// on when the buffer holds identical twins.
+fn nearest_occurrence(text: &str, needle: &str, cursor: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    text.match_indices(needle)
+        .map(|(start, _)| {
+            let end = start + needle.len();
+            let distance = if cursor < start {
+                start - cursor
+            } else {
+                cursor.saturating_sub(end)
+            };
+            (distance, start)
+        })
+        .min()
+        .map(|(_, start)| start)
+}
+
 fn statement_at_cursor(text: &str, cursor: usize) -> Option<&str> {
     let segments = split_statements(text);
     let idx = segments
