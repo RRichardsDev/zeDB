@@ -776,12 +776,13 @@ impl Workspace {
                             div()
                                 .id("toolbar-profile")
                                 .ml_2()
+                                .mt(px(3.))
                                 .size(px(28.))
+                                .cursor_pointer()
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .rounded_full()
-                                .hover(|button| button.cursor_pointer())
                                 .map(|button| match profile.avatar.clone() {
                                     Some(avatar) => button.child(
                                         gpui::img(gpui::ImageSource::Resource(
