@@ -5195,6 +5195,19 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &ToggleAgentPane, window, cx| this.agent_toggle(window, cx)),
             )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    // Any click that reaches the root dismisses an open
+                    // filter popover; clicks inside it stop propagation.
+                    if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                        let grid = tab.result_grid.clone();
+                        grid.update(cx, |grid, cx| {
+                            grid.close_filter_panel(cx);
+                        });
+                    }
+                }),
+            )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.resizing_sidebar {
                     this.sidebar_width = f32::from(event.position.x).clamp(180.0, 480.0);
