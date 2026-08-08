@@ -602,6 +602,11 @@ impl Workspace {
         let _ = zedb_core::save_preferences(&self.preferences);
         self.settings_sync.generation += 1;
         self.settings_sync.status = None;
+        // Offer the way back: probe again so the repo that was just
+        // unlinked (or any other existing one) prefills for re-enable.
+        self.settings_sync.probed = false;
+        self.settings_sync.probed_url = None;
+        self.settings_sync_probe_existing(cx);
         self.notice = Some("Settings sync disabled; the repo and its history are untouched".into());
         self.notice_warning = false;
         cx.notify();
