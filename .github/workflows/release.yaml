@@ -111,10 +111,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The tag's CHANGELOG section becomes the release notes.
+          # The tag's CHANGELOG section becomes the release notes. The
+          # changelog is hard-wrapped for editors, but GitHub renders
+          # every newline in a release body as a line break, so joined
+          # lines are unwrapped into one line per bullet or paragraph.
           changelog=$(awk -v tag="$GITHUB_REF_NAME" '
             /^## /{p = ($2 == tag)} p && !/^## /{print}
-          ' CHANGELOG.md)
+          ' CHANGELOG.md | awk '
+            function flush() { if (length(buf)) print buf; buf = "" }
+            /^$/   { flush(); print; next }
+            /^#/   { flush(); print; next }
+            /^- /  { flush(); buf = $0; next }
+                   { line = $0; sub(/^[ \t]+/, "", line);
+                     if (length(buf)) buf = buf " " line; else buf = line; next }
+            END    { flush() }
+          ')
           notes="macOS app bundle (DMG or zip)."
           if [[ -z "${ZEDB_CODESIGN_IDENTITY:-}" ]]; then
             notes="$notes Ad-hoc signed: Gatekeeper will block it on other machines until Developer ID signing secrets are configured."
