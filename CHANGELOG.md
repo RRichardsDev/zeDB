@@ -7,29 +7,40 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.12 - 2026-08-08
 
-- Sharding awareness, first slice (docs/PHASE-5.md M1+M2): on
-  connect, zeDB asks each node for its own shard/replica memberships
-  (system.clusters, is_local), the node picker labels nodes with
-  their shard when a cluster splits them, and switching to a
-  different shard says so once: local tables show that shard's slice;
-  Distributed tables are unaffected. Replicas and unknown topologies
+Sharding awareness (docs/PHASE-5.md, complete). zeDB reads a
+cluster's topology from what each node reports about itself and
+stops implying equivalence it cannot verify; Distributed tables
+remain the query path and nothing becomes configurable.
+
+### Know your shards
+
+- On connect, each node reports its shard/replica memberships
+  (system.clusters, is_local), so topology works regardless of how
+  endpoints are reached (port-mapped docker, DNS aliases).
+- The node picker labels nodes with their shard when a cluster
+  splits them, and switching to a different shard says so once:
+  local tables show that shard's slice; Distributed tables are
+  unaffected. Replicas, load balancers, and unknown topologies
   behave exactly as before.
-- Distributed tables show their sharding key in the object overview,
-  parsed from the engine definition, and wear a DT glyph in the
-  schema sidebar (alongside T/V/MV/D).
 - A read-only Topology section on the Cluster connection screen: one
   card per named cluster showing its shards and which nodes hold
-  them (e.g. replicas in one cluster, shards in another over the
-  same nodes), built from what each node reports about itself.
-  Clicking the already-selected connection in the sidebar returns to
-  this screen; previously it was unreachable while connected.
-- Distributed tables get a real size and row count: the local table
-  summed across shards (one replica per shard via the cluster()
-  function), shown in parentheses with a "virtual" tooltip since the
-  number is derived, not stored. Plain views stay sizeless; a
-  materialized view's data belongs to its target table.
+  them (replicas in one cluster, shards in another over the same
+  nodes both render truthfully). Clicking the already-selected
+  connection in the sidebar returns to this screen, previously
+  unreachable while connected.
+
+### Honest Distributed tables
+
+- A DT glyph in the schema sidebar (alongside T/V/MV/D) and the
+  sharding key in the object overview, parsed from the engine
+  definition.
+- A real size and row count: the local table summed across shards
+  (one replica per shard via the cluster() function), shown in
+  parentheses with a "virtual" tooltip since the number is derived,
+  not stored. Plain views stay sizeless; a materialized view's data
+  belongs to its target table.
 
 ## v0.1.11 - 2026-08-08
 
