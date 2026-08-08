@@ -1794,7 +1794,7 @@ impl Workspace {
     fn sidebar_resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("sidebar-resize-handle")
-            .w(px(8.))
+            .w(px(12.))
             .h_full()
             .ml(px(-4.))
             .mr(px(-4.))
@@ -1822,7 +1822,7 @@ impl Workspace {
     fn sidebar_section_resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("sidebar-section-resize-handle")
-            .h(px(8.))
+            .h(px(12.))
             .w_full()
             .mt(px(-4.))
             .mb(px(-4.))
@@ -3717,10 +3717,10 @@ impl Workspace {
     ) -> impl IntoElement {
         div()
             .id(id)
-            .h(px(8.))
+            .h(px(12.))
             .w_full()
-            .mt(px(-4.))
-            .mb(px(-4.))
+            .mt(px(-6.))
+            .mb(px(-6.))
             .flex_none()
             .relative()
             .cursor_row_resize()

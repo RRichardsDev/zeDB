@@ -1360,10 +1360,10 @@ impl Workspace {
                 div()
                     .id("agent-pane-resize")
                     .absolute()
-                    .left_0()
+                    .left(px(-6.))
                     .top_0()
                     .bottom_0()
-                    .w(px(6.))
+                    .w(px(12.))
                     .cursor_col_resize()
                     .on_mouse_down(
                         gpui::MouseButton::Left,

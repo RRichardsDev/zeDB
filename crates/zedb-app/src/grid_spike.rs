@@ -93,6 +93,8 @@ pub struct GridSpike {
     col_widths: Vec<f32>,
     /// An active header-divider drag: (column, start width, start mouse x).
     resizing_column: Option<(usize, f32, f32)>,
+    /// A resize drag just ended; swallow the click it would produce.
+    just_resized: bool,
     /// The sort the displayed result actually ran with, by column name.
     sort: Vec<(String, bool)>,
     /// A result whose header arrived but whose rows have not: the old
@@ -120,6 +122,7 @@ impl GridSpike {
             selected: None,
             col_widths: Vec::new(),
             resizing_column: None,
+            just_resized: false,
             sort: Vec::new(),
             pending: None,
             filters: Vec::new(),
@@ -607,6 +610,9 @@ impl GridSpike {
                         }
                     })
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                        if std::mem::take(&mut this.just_resized) {
+                            return;
+                        }
                         let column = this.header(col);
                         let mut sort = this.sort.clone();
                         if event.modifiers().shift {
@@ -701,17 +707,44 @@ impl GridSpike {
                             .right_0()
                             .top_0()
                             .h_full()
-                            .w(px(7.))
+                            .w(px(10.))
                             .cursor_col_resize()
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
                                     this.resizing_column =
                                         Some((col, this.width(col), f32::from(event.position.x)));
                                     cx.notify();
                                 }),
                             ),
                     )
+                    .when(col > 0, |cell| {
+                        // The previous divider is grabbable from this side
+                        // too, doubling the effective target.
+                        cell.child(
+                            div()
+                                .id(("col-resize-left", col))
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .h_full()
+                                .w(px(10.))
+                                .cursor_col_resize()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        this.resizing_column = Some((
+                                            col - 1,
+                                            this.width(col - 1),
+                                            f32::from(event.position.x),
+                                        ));
+                                        cx.notify();
+                                    }),
+                                ),
+                        )
+                    })
             })
             .collect();
         div()
@@ -1102,7 +1135,9 @@ impl Render for GridSpike {
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _, cx| {
                     if this.resizing_column.take().is_some() {
-                        // Same column set, same widths next time.
+                        // Same column set, same widths next time; and the
+                        // release must not read as a sort click.
+                        this.just_resized = true;
                         this.width_memory
                             .insert(Self::width_key(&this.columns), this.col_widths.clone());
                         cx.notify();
