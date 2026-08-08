@@ -1797,7 +1797,7 @@ impl Workspace {
         gpui::deferred(
             div()
                 .id("sidebar-resize-handle")
-                .w(px(9.))
+                .w(px(13.))
                 .h_full()
                 .flex_none()
                 .relative()
@@ -1805,7 +1805,7 @@ impl Workspace {
                 .child(
                     div()
                         .absolute()
-                        .left(px(4.))
+                        .left(px(6.))
                         .top_0()
                         .bottom_0()
                         .w(px(1.))
@@ -1825,7 +1825,7 @@ impl Workspace {
         gpui::deferred(
             div()
                 .id("sidebar-section-resize-handle")
-                .h(px(9.))
+                .h(px(13.))
                 .w_full()
                 .flex_none()
                 .relative()
@@ -1835,7 +1835,7 @@ impl Workspace {
                         .absolute()
                         .left_0()
                         .right_0()
-                        .top(px(4.))
+                        .top(px(6.))
                         .h(px(1.))
                         .bg(rgb(BORDER)),
                 )
@@ -3720,7 +3720,7 @@ impl Workspace {
         gpui::deferred(
             div()
                 .id(id)
-                .h(px(9.))
+                .h(px(13.))
                 .w_full()
                 .flex_none()
                 .relative()
@@ -3730,7 +3730,7 @@ impl Workspace {
                         .absolute()
                         .left_0()
                         .right_0()
-                        .top(px(4.))
+                        .top(px(6.))
                         .h(px(1.))
                         .bg(rgb(BORDER)),
                 )
@@ -5314,7 +5314,32 @@ impl Render for Workspace {
                             }),
                     )
                     .when(self.agent.open, |row| {
-                        row.child(self.agent_panel(window, cx))
+                        row.child(gpui::deferred(
+                            div()
+                                .id("agent-pane-gutter")
+                                .w(px(13.))
+                                .h_full()
+                                .flex_none()
+                                .relative()
+                                .cursor_col_resize()
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left(px(6.))
+                                        .top_0()
+                                        .bottom_0()
+                                        .w(px(1.))
+                                        .bg(rgb(BORDER)),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                        this.agent.resizing = true;
+                                        cx.notify();
+                                    }),
+                                ),
+                        ))
+                        .child(self.agent_panel(window, cx))
                     }),
             )
             .child(self.status_bar())

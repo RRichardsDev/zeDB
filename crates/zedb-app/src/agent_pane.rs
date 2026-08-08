@@ -1353,26 +1353,7 @@ impl Workspace {
             .relative()
             .flex()
             .flex_col()
-            .border_l_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(BG_SIDEBAR))
-            .child(gpui::deferred(
-                div()
-                    .id("agent-pane-resize")
-                    .absolute()
-                    .left(px(-6.))
-                    .top_0()
-                    .bottom_0()
-                    .w(px(12.))
-                    .cursor_col_resize()
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
-                            this.agent.resizing = true;
-                            cx.notify();
-                        }),
-                    ),
-            ));
+            .bg(rgb(BG_SIDEBAR));
 
         // Header: agent name, new thread, close.
         let title = self

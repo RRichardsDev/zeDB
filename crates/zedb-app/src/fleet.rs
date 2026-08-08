@@ -1101,26 +1101,7 @@ impl Workspace {
             .relative()
             .flex()
             .flex_col()
-            .border_l_1()
-            .border_color(rgb(BORDER))
             .bg(rgb(BG_SIDEBAR))
-            .child(gpui::deferred(
-                div()
-                    .id("fleet-detail-resize")
-                    .absolute()
-                    .left(px(-6.))
-                    .top_0()
-                    .bottom_0()
-                    .w(px(12.))
-                    .cursor_col_resize()
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
-                            this.fleet.resizing_detail = true;
-                            cx.notify();
-                        }),
-                    ),
-            ))
             .child(
                 div()
                     .flex_none()
@@ -2179,7 +2160,35 @@ impl Workspace {
                     .min_h_0()
                     .flex()
                     .child(div().flex_1().min_h_0().child(list))
-                    .when_some(detail, |content, detail| content.child(detail)),
+                    .when_some(detail, |content, detail| {
+                        content
+                            .child(gpui::deferred(
+                                div()
+                                    .id("fleet-detail-gutter")
+                                    .w(px(13.))
+                                    .h_full()
+                                    .flex_none()
+                                    .relative()
+                                    .cursor_col_resize()
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .left(px(6.))
+                                            .top_0()
+                                            .bottom_0()
+                                            .w(px(1.))
+                                            .bg(rgb(BORDER)),
+                                    )
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
+                                            this.fleet.resizing_detail = true;
+                                            cx.notify();
+                                        }),
+                                    ),
+                            ))
+                            .child(detail)
+                    }),
             )
             .child(
                 div()
