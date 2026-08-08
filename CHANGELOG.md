@@ -16,10 +16,9 @@ GitHub release notes.
   everything matching.
 - Result grid columns are drag-resizable from the header dividers, and
   widths are remembered per column set within the session.
-- Splitters own a real 13px gutter (nothing overlaps them), so the
-  resize cursor appears across the whole band instead of a 1px sliver;
-  the agent pane and fleet detail edges converted from overlay handles
-  to the same honest gutters.
+- Splitters keep their tight 1px seam but carry a 13px invisible grab
+  band on both sides, Zed-style: the cursor may only flip near the
+  line, the drag works well before it.
 - Every drag target got meaningfully fatter: column dividers are
   grabbable from both sides of the line and never mis-fire a sort, and
   the sidebar, pane, and editor splitters all widened.

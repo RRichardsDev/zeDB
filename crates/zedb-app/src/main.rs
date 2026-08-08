@@ -1799,6 +1799,8 @@ impl Workspace {
                 .id("sidebar-resize-handle")
                 .w(px(13.))
                 .h_full()
+                .ml(px(-6.))
+                .mr(px(-6.))
                 .flex_none()
                 .relative()
                 .cursor_col_resize()
@@ -1827,6 +1829,8 @@ impl Workspace {
                 .id("sidebar-section-resize-handle")
                 .h(px(13.))
                 .w_full()
+                .mt(px(-6.))
+                .mb(px(-6.))
                 .flex_none()
                 .relative()
                 .cursor_row_resize()
@@ -3722,6 +3726,8 @@ impl Workspace {
                 .id(id)
                 .h(px(13.))
                 .w_full()
+                .mt(px(-6.))
+                .mb(px(-6.))
                 .flex_none()
                 .relative()
                 .cursor_row_resize()
@@ -5314,32 +5320,7 @@ impl Render for Workspace {
                             }),
                     )
                     .when(self.agent.open, |row| {
-                        row.child(gpui::deferred(
-                            div()
-                                .id("agent-pane-gutter")
-                                .w(px(13.))
-                                .h_full()
-                                .flex_none()
-                                .relative()
-                                .cursor_col_resize()
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .left(px(6.))
-                                        .top_0()
-                                        .bottom_0()
-                                        .w(px(1.))
-                                        .bg(rgb(BORDER)),
-                                )
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                        this.agent.resizing = true;
-                                        cx.notify();
-                                    }),
-                                ),
-                        ))
-                        .child(self.agent_panel(window, cx))
+                        row.child(self.agent_panel(window, cx))
                     }),
             )
             .child(self.status_bar())
