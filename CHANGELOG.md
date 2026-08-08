@@ -7,15 +7,18 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.8 - 2026-08-08
 
+Soak-mode fixes from a day of real use.
+
+- Grid sorts and filters target the statement that actually ran: with
+  identical queries in the editor, rewrites land on the executed one
+  (tracked by its position, with a nearest-occurrence fallback), not
+  the first lookalike.
 - The connection form's read-only control is the same switch as the
   Vim mode toggle instead of an ON/OFF button.
 - Disconnect is a red broken-plug icon (the connect plug with a line
   through it) instead of a stop square.
-- Grid sorts and filters target the statement that actually ran:
-  with identical queries in the editor, rewrites land on the executed
-  one (tracked by position), not the first lookalike.
 
 ## v0.1.7 - 2026-08-08
 
