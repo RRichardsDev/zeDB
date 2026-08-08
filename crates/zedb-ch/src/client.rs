@@ -7,12 +7,12 @@ use futures_util::StreamExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zedb_core::QueryResult;
-use zedb_core::{ColumnMeta, Value};
+use zedb_core::{ColumnMeta, DriverConfig, Value};
 
 use crate::error::{ChError, Result};
 use crate::rowbinary;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ChConfig {
     /// Base URL of the HTTP interface, e.g. `http://localhost:8123`.
     pub url: String,
@@ -24,6 +24,8 @@ pub struct ChConfig {
     /// writes and DDL while still allowing query-level settings. Safety is
     /// enforced server-side, not by client-side SQL inspection.
     pub read_only: bool,
+    /// Per-cluster driver knobs (timeouts, extra ClickHouse settings).
+    pub driver: DriverConfig,
 }
 
 pub struct ChClient {
@@ -54,10 +56,43 @@ pub struct QueryStreamSummary {
 
 impl ChClient {
     pub fn new(cfg: ChConfig) -> Self {
-        Self {
-            cfg,
-            http: reqwest::Client::new(),
+        let connect_timeout = cfg.driver.connect_timeout_secs.unwrap_or(10).max(1);
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(connect_timeout as u64))
+            .build()
+            .unwrap_or_default();
+        Self { cfg, http }
+    }
+
+    /// Query-string pairs for this cluster's driver settings. The
+    /// guarded (agent) path skips the execution cap: its own stricter
+    /// cap must win.
+    fn driver_params(&self, include_execution_cap: bool) -> Vec<(String, String)> {
+        let mut params: Vec<(String, String)> = self
+            .cfg
+            .driver
+            .settings
+            .iter()
+            .filter(|setting| !setting.name.trim().is_empty())
+            .map(|setting| (setting.name.trim().to_string(), setting.value.clone()))
+            .collect();
+        if include_execution_cap {
+            if let Some(cap) = self
+                .cfg
+                .driver
+                .max_execution_time_secs
+                .filter(|&cap| cap > 0)
+            {
+                // A hand-written max_execution_time setting wins over
+                // the dedicated field.
+                if !params.iter().any(|(name, _)| name == "max_execution_time") {
+                    params.push(("max_execution_time".into(), cap.to_string()));
+                }
+            }
+        } else {
+            params.retain(|(name, _)| name != "max_execution_time");
         }
+        params
     }
 
     /// Run a query with server-side guardrails on top of read-only:
@@ -118,6 +153,9 @@ impl ChClient {
         }
         if self.cfg.read_only {
             request = request.query(&[("readonly", "2")]);
+        }
+        for (name, value) in self.driver_params(true) {
+            request = request.query(&[(name.as_str(), value.as_str())]);
         }
         let query_id = next_query_id();
         request = request.query(&[("query_id", query_id.as_str())]);
@@ -273,6 +311,12 @@ impl ChClient {
         }
         if self.cfg.read_only {
             req = req.query(&[("readonly", "2")]);
+        }
+        // Guarded callers pass their own caps in `params`; the driver's
+        // execution cap stays out of their way.
+        let guarded = params.iter().any(|(name, _)| *name == "max_execution_time");
+        for (name, value) in self.driver_params(!guarded) {
+            req = req.query(&[(name.as_str(), value.as_str())]);
         }
         req = req.query(params);
 

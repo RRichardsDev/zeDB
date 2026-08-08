@@ -124,6 +124,7 @@ impl EphemeralServer {
             password: None,
             database: None,
             read_only,
+            driver: Default::default(),
         })
     }
 
@@ -319,6 +320,7 @@ async fn query_roundtrip_type_zoo() {
         password: Some("definitely-wrong".into()),
         database: None,
         read_only: true,
+        driver: Default::default(),
     });
     assert!(
         invalid.test_connection().await.is_err(),

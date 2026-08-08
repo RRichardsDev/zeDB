@@ -229,6 +229,7 @@ impl ConnectionArgs {
                 password: (!self.password.is_empty()).then(|| self.password.clone()),
                 database: None,
                 read_only: false,
+                driver: Default::default(),
             },
             admin: self.admin_user.as_ref().map(|user| zedb_ch::ChConfig {
                 url: self.server.clone(),
@@ -236,6 +237,7 @@ impl ConnectionArgs {
                 password: (!self.admin_password.is_empty()).then(|| self.admin_password.clone()),
                 database: None,
                 read_only: false,
+                driver: Default::default(),
             }),
             cluster: self.cluster.clone(),
             no_cluster: self.no_cluster,
@@ -367,6 +369,7 @@ fn run(cli: Cli) -> Result<(), String> {
                             password: (!password.is_empty()).then_some(password),
                             database: None,
                             read_only: true,
+                            driver: Default::default(),
                         }))
                         .map_err(|error| error.to_string())?;
                     println!("server runs ClickHouse {discovered}");
@@ -673,6 +676,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 password: (!password.is_empty()).then_some(password),
                 database: None,
                 read_only: true,
+                driver: Default::default(),
             });
             let mut mcp = zedb_ch::mcp::McpServer::new(repo, config, Default::default());
             if let Some(name) = cache_connection {

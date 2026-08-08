@@ -34,6 +34,27 @@ fn default_true() -> bool {
     true
 }
 
+/// Per-cluster driver configuration: how zeDB's HTTP client talks to
+/// this cluster. Everything optional; the defaults are what zeDB has
+/// always done.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct DriverConfig {
+    /// Server-side cap (seconds) sent as max_execution_time with every
+    /// interactive query. None = no cap beyond the server's own.
+    pub max_execution_time_secs: Option<u32>,
+    /// TCP connect timeout in seconds. None = the driver default (10).
+    pub connect_timeout_secs: Option<u32>,
+    /// Extra ClickHouse settings sent with every query.
+    pub settings: Vec<DriverSetting>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DriverSetting {
+    pub name: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionNode {
     pub name: String,
@@ -93,6 +114,9 @@ pub struct ConnectionConfig {
     pub user: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
+    /// Per-cluster driver knobs; defaults mean "as zeDB always did".
+    #[serde(default)]
+    pub driver: DriverConfig,
     #[serde(default)]
     pub tier: EnvTier,
     /// Read-only is the default posture; writing requires opting out.

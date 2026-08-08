@@ -13,7 +13,7 @@ mod store;
 pub mod sync;
 mod value;
 
-pub use connection::{ConnectionConfig, ConnectionNode, EnvTier};
+pub use connection::{ConnectionConfig, ConnectionNode, DriverConfig, DriverSetting, EnvTier};
 pub use preferences::{
     load_preferences, save_preferences, settings_file_path, CustomAgent, Preferences,
 };

@@ -194,6 +194,7 @@ mod tests {
             database: None,
             tier: EnvTier::Staging,
             read_only: true,
+            driver: Default::default(),
         }]
     }
 

@@ -94,6 +94,7 @@ mod tests {
             database: None,
             tier: EnvTier::Staging,
             read_only: true,
+            driver: Default::default(),
         }];
         save_connections(&conns).unwrap();
         assert_eq!(load_connections().unwrap(), conns);

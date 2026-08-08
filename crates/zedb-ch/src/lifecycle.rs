@@ -81,6 +81,7 @@ fn config(url: &str, user: &str, password: Option<&str>) -> ChConfig {
         password: password.map(ToString::to_string),
         database: None,
         read_only: false,
+        driver: Default::default(),
     }
 }
 

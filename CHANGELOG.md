@@ -7,6 +7,14 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Per-cluster driver configuration in the connection form: a query
+  timeout (max_execution_time), a connect timeout, and free-form
+  ClickHouse settings sent with every query on that cluster. All
+  optional; blank means what zeDB always did. Synced with the
+  connection through settings sync.
+
 ## v0.1.9 - 2026-08-08
 
 - DDL and other resultless statements complete cleanly ("OK:

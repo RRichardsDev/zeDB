@@ -191,6 +191,16 @@ struct ConnectionForm {
     password: Entity<TextInput>,
     tier: EnvTier,
     read_only: bool,
+    /// Driver knobs, per cluster: seconds fields accept blank for
+    /// "default"; settings rows with a blank name are dropped on save.
+    driver_max_execution: Entity<TextInput>,
+    driver_connect_timeout: Entity<TextInput>,
+    driver_settings: Vec<DriverSettingForm>,
+}
+
+struct DriverSettingForm {
+    name: Entity<TextInput>,
+    value: Entity<TextInput>,
 }
 
 struct NodeForm {
@@ -2050,6 +2060,9 @@ impl Workspace {
             password: Self::input("", "stored in macOS Keychain", true, cx),
             tier: EnvTier::Dev,
             read_only: true,
+            driver_max_execution: Self::input("", "none", false, cx),
+            driver_connect_timeout: Self::input("", "10", false, cx),
+            driver_settings: Vec::new(),
         });
         self.notice = None;
         cx.notify();
@@ -2083,6 +2096,35 @@ impl Workspace {
             password: Self::input("", "leave blank to keep existing", true, cx),
             tier: connection.tier,
             read_only: connection.read_only,
+            driver_max_execution: Self::input(
+                connection
+                    .driver
+                    .max_execution_time_secs
+                    .map(|secs| secs.to_string())
+                    .unwrap_or_default(),
+                "none",
+                false,
+                cx,
+            ),
+            driver_connect_timeout: Self::input(
+                connection
+                    .driver
+                    .connect_timeout_secs
+                    .map(|secs| secs.to_string())
+                    .unwrap_or_default(),
+                "10",
+                false,
+                cx,
+            ),
+            driver_settings: connection
+                .driver
+                .settings
+                .into_iter()
+                .map(|setting| DriverSettingForm {
+                    name: Self::input(setting.name, "setting", false, cx),
+                    value: Self::input(setting.value, "value", false, cx),
+                })
+                .collect(),
         });
         self.notice = None;
         cx.notify();
@@ -2194,6 +2236,12 @@ impl Workspace {
         order.push(form.user.clone());
         order.push(form.database.clone());
         order.push(form.password.clone());
+        order.push(form.driver_max_execution.clone());
+        order.push(form.driver_connect_timeout.clone());
+        for setting in &form.driver_settings {
+            order.push(setting.name.clone());
+            order.push(setting.value.clone());
+        }
         order
     }
 
@@ -2225,6 +2273,17 @@ impl Workspace {
     fn toggle_read_only(&mut self, cx: &mut Context<Self>) {
         if let Some(form) = &mut self.form {
             form.read_only = !form.read_only;
+            cx.notify();
+        }
+    }
+
+    fn add_driver_setting(&mut self, cx: &mut Context<Self>) {
+        let setting = DriverSettingForm {
+            name: Self::input("", "setting", false, cx),
+            value: Self::input("", "value", false, cx),
+        };
+        if let Some(form) = &mut self.form {
+            form.driver_settings.push(setting);
             cx.notify();
         }
     }
@@ -2291,6 +2350,32 @@ impl Workspace {
             return Err(format!("A connection named {name:?} already exists"));
         }
 
+        let parse_secs = |input: &Entity<TextInput>, label: &str| -> Result<Option<u32>, String> {
+            let text = input.read(cx).text().trim().to_string();
+            if text.is_empty() {
+                return Ok(None);
+            }
+            text.parse::<u32>()
+                .map(|secs| (secs > 0).then_some(secs))
+                .map_err(|_| format!("{label} must be a whole number of seconds"))
+        };
+        let driver = zedb_core::DriverConfig {
+            max_execution_time_secs: parse_secs(&form.driver_max_execution, "Query timeout")?,
+            connect_timeout_secs: parse_secs(&form.driver_connect_timeout, "Connect timeout")?,
+            settings: form
+                .driver_settings
+                .iter()
+                .filter_map(|setting| {
+                    let name = value(&setting.name);
+                    let setting_value = value(&setting.value);
+                    (!name.is_empty()).then_some(zedb_core::DriverSetting {
+                        name,
+                        value: setting_value,
+                    })
+                })
+                .collect(),
+        };
+
         Ok(ConnectionDraft {
             config: ConnectionConfig {
                 name,
@@ -2299,6 +2384,7 @@ impl Workspace {
                 database: (!database.is_empty()).then_some(database),
                 tier: form.tier,
                 read_only: form.read_only,
+                driver,
             },
             password: form.password.read(cx).text(),
             editing: form.editing,
@@ -2558,6 +2644,7 @@ impl Workspace {
         let user = connection.user.clone();
         let database = connection.database.clone();
         let read_only = connection.read_only;
+        let driver = connection.driver.clone();
         let connected_password = password.clone();
         self.connecting = Some(name.clone());
         self.notice = Some(format!("Testing {} node(s) for {name}...", nodes.len()));
@@ -2574,6 +2661,7 @@ impl Workspace {
                     password: password.clone(),
                     database: database.clone(),
                     read_only,
+                    driver: driver.clone(),
                 });
                 health.push(EndpointHealth {
                     node_index,
@@ -2630,6 +2718,7 @@ impl Workspace {
                         password: connected_password.clone(),
                         database: connection.database.clone(),
                         read_only: connection.read_only,
+                        driver: connection.driver.clone(),
                     },
                 });
                 this.password_cache
@@ -3306,6 +3395,68 @@ impl Workspace {
                     .child(Self::field("USER", form.user.clone()))
                     .child(Self::field("DATABASE", form.database.clone()))
                     .child(Self::field("PASSWORD", form.password.clone()))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div().text_xs().text_color(rgb(TEXT_DIM)).child("DRIVER"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("add-driver-setting")
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded(px(3.))
+                                            .text_xs()
+                                            .text_color(rgb(TEXT_DIM))
+                                            .hover(|button| {
+                                                button
+                                                    .bg(rgb(BG_SIDEBAR))
+                                                    .text_color(rgb(TEXT))
+                                                    .cursor_pointer()
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.add_driver_setting(cx)
+                                            }))
+                                            .child("+ Add setting"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_3()
+                                    .child(div().flex_1().child(Self::field(
+                                        "QUERY TIMEOUT (S)",
+                                        form.driver_max_execution.clone(),
+                                    )))
+                                    .child(div().flex_1().child(Self::field(
+                                        "CONNECT TIMEOUT (S)",
+                                        form.driver_connect_timeout.clone(),
+                                    ))),
+                            )
+                            .children(form.driver_settings.iter().map(|setting| {
+                                div()
+                                    .flex()
+                                    .gap_3()
+                                    .child(
+                                        div().w(px(220.)).flex_none().child(setting.name.clone()),
+                                    )
+                                    .child(div().flex_1().child(setting.value.clone()))
+                            }))
+                            .when(!form.driver_settings.is_empty(), |section| {
+                                section.child(div().text_xs().text_color(rgb(TEXT_DIM)).child(
+                                    "Settings are sent with every query on this cluster; \
+                                         blank the name to remove a row.",
+                                ))
+                            }),
+                    )
                     .child(
                         div()
                             .flex()
@@ -6375,6 +6526,7 @@ fn run_mcp_serve(config_path: &str) -> ! {
                     .map(str::to_string),
                 database: None,
                 read_only: true,
+                driver: Default::default(),
             });
         let mut server = zedb_ch::mcp::McpServer::new(repo, connection, Default::default());
         if let Some(socket) = config.get("app_socket").and_then(|value| value.as_str()) {
