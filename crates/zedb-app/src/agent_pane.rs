@@ -1751,6 +1751,23 @@ impl Workspace {
                     .gap_2()
                     .text_color(rgb(TEXT_DIM))
                     .child("Start a thread with the + menu above")
+                    .when_some(self.preferences.last_agent.clone(), |hint, last| {
+                        hint.child(
+                            div()
+                                .id("agent-new-last")
+                                .px_3()
+                                .py_1()
+                                .rounded(px(3.))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .text_xs()
+                                .child(format!("New thread with {last} (cmd-N)"))
+                                .hover(|button| button.bg(rgb(0x303640)).cursor_pointer())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.agent_start_last_thread(window, cx)
+                                })),
+                        )
+                    })
                     .when(has_saved, |hint| {
                         hint.child(
                             div()

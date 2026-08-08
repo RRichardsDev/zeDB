@@ -577,6 +577,16 @@ impl Workspace {
                         }
                         return;
                     }
+                    // cmd-i toggles the agent pane; interceptor-handled
+                    // like the palette chord so focus state can't kill it.
+                    if event.keystroke.modifiers.platform
+                        && !event.keystroke.modifiers.shift
+                        && event.keystroke.key == "i"
+                    {
+                        this.agent_toggle(window, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
                     // cmd-n with the agent pane open: new thread with the
                     // last-used agent.
                     if event.keystroke.modifiers.platform
@@ -6242,7 +6252,6 @@ fn main() {
             KeyBinding::new("cmd-enter", RunQuery, None),
             KeyBinding::new("ctrl-x", RunSelection, None),
             KeyBinding::new("cmd-,", OpenPreferences, None),
-            KeyBinding::new("cmd-i", ToggleAgentPane, None),
             // In multi-line inputs the composer sends on plain enter;
             // shift-enter keeps inserting a newline via the secondary
             // Enter action (which the composer ignores).
