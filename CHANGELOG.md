@@ -16,6 +16,13 @@ GitHub release notes.
   toolbar, and lays the groundwork for settings sync. The one-time
   code is auto-copied to the clipboard and presented GitHub-style;
   the token lives in the macOS Keychain.
+- Settings sync (Preferences): keep preferences, connections, and
+  custom agents in a git repo you own. Pulls on launch and window
+  refocus, pushes on change, and a fresh machine inherits the repo's
+  settings on enable. Passwords never sync. Paste any git URL, or,
+  signed in to GitHub, zeDB spots an existing zedb-settings repo via
+  your own ssh key and prefills it, and can create a private one for
+  you with a one-time approval that is never kept.
 
 ## v0.1.5 - 2026-08-08
 

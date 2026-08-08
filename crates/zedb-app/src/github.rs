@@ -40,10 +40,17 @@ fn client() -> Result<reqwest::Client, String> {
 
 /// Ask GitHub for a device code the user approves in their browser.
 pub async fn start_device_flow() -> Result<DeviceCode, String> {
+    start_device_flow_scoped("read:user").await
+}
+
+/// Same flow with an explicit scope: the settings-repo bootstrap asks
+/// for `repo` this way, holds that token in memory only, and never
+/// stores it; the Keychain token stays `read:user`.
+pub async fn start_device_flow_scoped(scope: &str) -> Result<DeviceCode, String> {
     let response = client()?
         .post("https://github.com/login/device/code")
         .header("Accept", "application/json")
-        .form(&[("client_id", CLIENT_ID), ("scope", "read:user")])
+        .form(&[("client_id", CLIENT_ID), ("scope", scope)])
         .send()
         .await
         .map_err(|error| format!("could not reach GitHub: {error}"))?;
@@ -52,6 +59,67 @@ pub async fn start_device_flow() -> Result<DeviceCode, String> {
         .await
         .map_err(|error| format!("unexpected device-code reply: {error}"))?;
     serde_json::from_str(&body).map_err(|error| format!("unexpected device-code reply: {error}"))
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RepoInfo {
+    pub full_name: String,
+    pub ssh_url: String,
+}
+
+/// Look up a repo the token can see. `Ok(None)` means it does not exist
+/// (or is invisible to this token, which for our `repo`-scoped lookup
+/// amounts to the same thing).
+pub async fn get_repo(token: &str, owner: &str, name: &str) -> Result<Option<RepoInfo>, String> {
+    let response = client()?
+        .get(format!("https://api.github.com/repos/{owner}/{name}"))
+        .header("Accept", "application/vnd.github+json")
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| format!("could not reach GitHub: {error}"))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let response = response
+        .error_for_status()
+        .map_err(|error| format!("GitHub refused the lookup: {error}"))?;
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("unexpected repo reply: {error}"))?;
+    serde_json::from_str(&body)
+        .map(Some)
+        .map_err(|error| format!("unexpected repo reply: {error}"))
+}
+
+/// Create a private repo on the user's account.
+pub async fn create_private_repo(
+    token: &str,
+    name: &str,
+    description: &str,
+) -> Result<RepoInfo, String> {
+    let body = serde_json::json!({
+        "name": name,
+        "private": true,
+        "description": description,
+    });
+    let response = client()?
+        .post("https://api.github.com/user/repos")
+        .header("Accept", "application/vnd.github+json")
+        .header("Content-Type", "application/json")
+        .bearer_auth(token)
+        .body(body.to_string())
+        .send()
+        .await
+        .map_err(|error| format!("could not reach GitHub: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("GitHub refused to create the repo: {error}"))?;
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("unexpected create reply: {error}"))?;
+    serde_json::from_str(&body).map_err(|error| format!("unexpected create reply: {error}"))
 }
 
 #[derive(Deserialize)]

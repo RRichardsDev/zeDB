@@ -8361,6 +8361,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "unicode-segmentation",
  "zedb-acp",

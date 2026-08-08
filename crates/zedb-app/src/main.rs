@@ -5,6 +5,7 @@ mod commit;
 mod components;
 mod fleet;
 mod github;
+mod settings_sync;
 mod grid_spike;
 mod rt;
 mod schema_intelligence_ui;
@@ -438,6 +439,7 @@ struct Workspace {
     query_run_id: u64,
     query_resize: Option<(QueryResizeTarget, f32)>,
     preferences: Preferences,
+    settings_sync: settings_sync::SettingsSyncState,
     show_preferences: bool,
     show_about: bool,
 }
@@ -497,6 +499,11 @@ impl Workspace {
             })
             .detach();
         }
+        // Settings sync: one reconcile pass at launch.
+        cx.spawn(async move |this, cx| {
+            this.update(cx, |this, cx| this.settings_sync_tick(cx)).ok();
+        })
+        .detach();
 
         // Coming back to the window re-checks cluster health and
         // updates, debounced so focus flapping stays quiet.
@@ -634,6 +641,7 @@ impl Workspace {
                 query_run_id: 0,
                 query_resize: None,
                 preferences,
+                settings_sync: settings_sync::SettingsSyncState::new(cx),
                 show_preferences: false,
                 show_about: false,
             },
@@ -693,6 +701,7 @@ impl Workspace {
                 query_run_id: 0,
                 query_resize: None,
                 preferences,
+                settings_sync: settings_sync::SettingsSyncState::new(cx),
                 show_preferences: false,
                 show_about: false,
             },
@@ -876,11 +885,13 @@ impl Workspace {
     fn open_preferences(&mut self, cx: &mut Context<Self>) {
         self.form = None;
         self.show_preferences = true;
+        self.settings_sync_probe_existing(cx);
         cx.notify();
     }
 
     fn close_preferences(&mut self, cx: &mut Context<Self>) {
         self.show_preferences = false;
+        self.settings_sync_tick(cx);
         cx.notify();
     }
 
@@ -1237,6 +1248,7 @@ impl Workspace {
                         ),
                 )
                 .child(self.account_section(cx))
+                .child(self.settings_sync_section(cx))
                 .child(
                     div()
                         .flex()
@@ -2045,6 +2057,7 @@ impl Workspace {
         self.pending_delete = None;
         self.form = None;
         self.notice = Some(format!("Deleted {}", connection.name));
+        self.settings_sync_tick(cx);
         cx.notify();
     }
 
@@ -2163,6 +2176,7 @@ impl Workspace {
                     "Duplicated as \"{name}\"; the password is not copied, connecting will ask for it"
                 ));
                 self.notice_warning = false;
+                self.settings_sync_tick(cx);
             }
             Err(error) => {
                 self.connections.pop();
@@ -2332,6 +2346,7 @@ impl Workspace {
             Ok(name) => {
                 self.form = None;
                 self.notice = Some(format!("Saved {name} without testing"));
+                self.settings_sync_tick(cx);
             }
             Err(error) => self.notice = Some(error),
         }
@@ -2487,6 +2502,7 @@ impl Workspace {
                     active_node.name
                 ));
                 this.load_schema_databases(cx);
+                this.settings_sync_tick(cx);
                 cx.notify();
             })
             .ok();
@@ -2499,6 +2515,7 @@ impl Workspace {
     /// so the next query attempt gets the usual connect-first warning.
     /// One quiet health probe plus update check, run on window refocus.
     fn focus_recheck(&mut self, cx: &mut Context<Self>) {
+        self.settings_sync_tick(cx);
         // Update check: same quiet path as the periodic loop.
         let update_handle = rt::tokio().spawn(updates::check());
         cx.spawn(async move |this, cx| {

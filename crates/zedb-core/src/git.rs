@@ -169,6 +169,29 @@ pub fn push(root: &Path) -> Result<String, String> {
     run_git(root, &["push"])
 }
 
+/// Whether `url` is a reachable git remote for this user's own git
+/// auth (ssh keys, credential helpers). Never prompts: batch-mode ssh
+/// and disabled terminal prompts make an auth wall read as "no".
+pub fn remote_exists(url: &str) -> bool {
+    Command::new("git")
+        .args(["ls-remote", "--exit-code", url, "HEAD"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes -oConnectTimeout=5")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// Push, setting the upstream first when the checkout has none (the
+/// first push into a fresh clone of an empty remote).
+pub fn push_setting_upstream(root: &Path) -> Result<String, String> {
+    if has_upstream(root) {
+        push(root)
+    } else {
+        run_git(root, &["push", "-u", "origin", "HEAD"])
+    }
+}
+
 /// Whether the checkout has an upstream ref to pull from. A clone of a
 /// still-empty remote does not, and pulling it would only produce a
 /// scary no-such-ref error for a perfectly normal state.
