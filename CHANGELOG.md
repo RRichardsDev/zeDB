@@ -7,31 +7,47 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.6 - 2026-08-08
 
-- The fresh-install default query surveys the server (largest tables
-  across all databases) instead of assuming a specific database.
-- Optional GitHub sign-in from Preferences (device flow, `read:user`
-  scope only): shows your avatar and name in Preferences and the
-  toolbar, and lays the groundwork for settings sync. The one-time
-  code is auto-copied to the clipboard and presented GitHub-style;
-  the token lives in the macOS Keychain.
-- Settings sync (Preferences): keep preferences, connections, and
-  custom agents in a git repo you own. Pulls on launch and window
-  refocus, pushes on change, and a fresh machine inherits the repo's
-  settings on enable. Passwords never sync. Paste any git URL, or,
-  signed in to GitHub, zeDB spots an existing zedb-settings repo via
-  your own ssh key and prefills it, and can create a private one for
-  you with a one-time approval that is never kept.
-- Command palette on cmd-shift-P: type to filter, arrows and Enter to
-  run; includes Open settings.json, Preferences, new query, fleet and
-  agent panes, vim mode, sync now, and disconnect.
+Identity and settings release: optional GitHub sign-in, settings that
+follow you through a git repo you own, and a command palette.
+
+### GitHub sign-in
+
+- Optional sign-in from Preferences via the OAuth device flow
+  (`read:user` scope only; no client secret ships in the app). The
+  one-time code is auto-copied to the clipboard and presented
+  GitHub-style; the token lives in the macOS Keychain.
+- Your avatar and name appear in Preferences and the title bar; the
+  title-bar avatar is a shortcut back to Preferences.
+
+### Settings sync
+
+- Keep preferences, connections, and custom agents in a git repo you
+  own. zeDB pulls on launch and window refocus, pushes on change,
+  and a fresh machine inherits the repo's settings when it enables
+  sync. Passwords never sync; they stay in this Mac's Keychain.
+- Paste any git URL, or, signed in to GitHub, zeDB spots an existing
+  zedb-settings repo using your own ssh key and prefills its URL,
+  and can create a private one for you with a one-time elevated
+  approval that is used once and never kept.
+
+### Command palette and shortcuts
+
+- cmd-shift-P opens a command palette: type to filter, arrows and
+  Enter to run. Also in the new View menu.
+- cmd-I toggles the agent pane from anywhere. cmd-N in the open pane
+  starts a new thread with the last-used agent, which the empty pane
+  also offers as a button with the agent's logo.
+
+### Housekeeping
+
 - The settings file is now `settings.json` (renamed from
-  `preferences.json`; migrated automatically) and can be opened in
-  your editor from the palette.
-- cmd-N in the open agent pane starts a new thread with the
-  last-used agent (remembered in settings; the picker opens if
-  there's no history yet).
+  `preferences.json`, migrated automatically) and opens in your
+  editor from the palette or the View menu.
+- The fresh-install default query surveys the server's largest
+  tables across all databases instead of assuming a specific
+  database.
 
 ## v0.1.5 - 2026-08-08
 
