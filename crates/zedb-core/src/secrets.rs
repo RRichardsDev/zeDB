@@ -88,6 +88,23 @@ pub fn get_password(connection_name: &str) -> Result<Option<String>, SecretError
     Ok(Some(password))
 }
 
+/// Store a secret as a standard Keychain item without user-presence
+/// protection: for tokens read silently at every launch (e.g. the GitHub
+/// OAuth token), where a biometric prompt would be wrong and where the
+/// protected keychain is unavailable to unprovisioned dev builds.
+pub fn set_plain(name: &str, value: &str) -> Result<(), SecretError> {
+    set_generic_password_options(value.as_bytes(), options(name, false))?;
+    Ok(())
+}
+
+pub fn get_plain(name: &str) -> Result<Option<String>, SecretError> {
+    read(name, false)
+}
+
+pub fn delete_plain(name: &str) -> Result<(), SecretError> {
+    delete(name, false)
+}
+
 pub fn delete_password(connection_name: &str) -> Result<(), SecretError> {
     delete(connection_name, true)?;
     delete(connection_name, false)

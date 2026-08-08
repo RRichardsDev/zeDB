@@ -4,6 +4,7 @@ mod codegen;
 mod commit;
 mod components;
 mod fleet;
+mod github;
 mod grid_spike;
 mod rt;
 mod schema_intelligence_ui;
@@ -132,6 +133,7 @@ impl AssetSource for Assets {
             "icons/close.svg" => Some(include_bytes!("../assets/icons/close.svg")),
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
             "icons/copy.svg" => Some(include_bytes!("../assets/icons/copy.svg")),
+            "icons/github.svg" => Some(include_bytes!("../assets/icons/github.svg")),
             "icons/check-chain.svg" => Some(include_bytes!("../assets/icons/check-chain.svg")),
             "icons/commit.svg" => Some(include_bytes!("../assets/icons/commit.svg")),
             "icons/fleet.svg" => Some(include_bytes!("../assets/icons/fleet.svg")),
@@ -242,6 +244,17 @@ struct ViewObjectDdl {
 #[action(no_json, no_register)]
 struct DeleteConnection {
     index: usize,
+}
+
+/// Optional GitHub identity (docs/PHASE-3.4.md M0).
+enum GithubAuth {
+    SignedOut,
+    /// Waiting for the user to approve the device code in the browser.
+    Authorizing {
+        user_code: String,
+        verification_uri: String,
+    },
+    SignedIn(github::Profile),
 }
 
 struct DatabaseNode {
@@ -418,6 +431,8 @@ struct Workspace {
     rerun_pending: Option<String>,
     /// Last window-refocus health/update check, for debounce.
     last_focus_check: Option<Instant>,
+    github: GithubAuth,
+    github_generation: u64,
     rerun_generation: u64,
     query_error_decision: Option<tokio::sync::oneshot::Sender<bool>>,
     query_run_id: u64,
@@ -468,6 +483,21 @@ impl Workspace {
             Timer::after(Duration::from_secs(300)).await;
         })
         .detach();
+        // A stored GitHub token restores the profile quietly.
+        if let Some(token) = github::stored_token() {
+            let handle = rt::tokio().spawn(async move { github::fetch_profile(&token).await });
+            cx.spawn(async move |this, cx| {
+                if let Ok(Ok(profile)) = handle.await {
+                    this.update(cx, |this, cx| {
+                        this.github = GithubAuth::SignedIn(profile);
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            })
+            .detach();
+        }
+
         // Coming back to the window re-checks cluster health and
         // updates, debounced so focus flapping stays quiet.
         cx.observe_window_activation(window, |this, window, cx| {
@@ -597,6 +627,8 @@ impl Workspace {
                 query_abort: None,
                 rerun_pending: None,
                 last_focus_check: None,
+                github: GithubAuth::SignedOut,
+                github_generation: 0,
                 rerun_generation: 0,
                 query_error_decision: None,
                 query_run_id: 0,
@@ -654,6 +686,8 @@ impl Workspace {
                 query_abort: None,
                 rerun_pending: None,
                 last_focus_check: None,
+                github: GithubAuth::SignedOut,
+                github_generation: 0,
                 rerun_generation: 0,
                 query_error_decision: None,
                 query_run_id: 0,
@@ -731,6 +765,48 @@ impl Workspace {
                         }),
                 )
             })
+                .when_some(
+                    match &self.github {
+                        GithubAuth::SignedIn(profile) => Some(profile.clone()),
+                        _ => None,
+                    },
+                    |toolbar, profile| {
+                        let label = format!("@{} on GitHub", profile.login);
+                        toolbar.child(
+                            div()
+                                .id("toolbar-profile")
+                                .ml_2()
+                                .size(px(28.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .hover(|button| button.cursor_pointer())
+                                .map(|button| match profile.avatar.clone() {
+                                    Some(avatar) => button.child(
+                                        gpui::img(gpui::ImageSource::Resource(
+                                            gpui::Resource::Path(avatar.into()),
+                                        ))
+                                        .size(px(24.))
+                                        .rounded_full(),
+                                    ),
+                                    None => button.child(
+                                        svg()
+                                            .path("icons/github.svg")
+                                            .size(px(18.))
+                                            .text_color(rgb(TEXT_DIM)),
+                                    ),
+                                })
+                                .tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(label.clone())
+                                        .build(window, cx)
+                                })
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.open_preferences(cx)),
+                                ),
+                        )
+                    },
+                )
     }
 
     fn start_update_install(&mut self, cx: &mut Context<Self>) {
@@ -842,6 +918,286 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Start the GitHub device flow: browser opens, code shows in the
+    /// panel, and we poll until approved.
+    fn github_sign_in(&mut self, cx: &mut Context<Self>) {
+        self.github_generation += 1;
+        let generation = self.github_generation;
+        let handle = rt::tokio().spawn(github::start_device_flow());
+        cx.spawn(async move |this, cx| {
+            let device = match handle.await {
+                Ok(Ok(device)) => device,
+                Ok(Err(error)) => {
+                    this.update(cx, |this, cx| this.flash_warning(error, cx))
+                        .ok();
+                    return;
+                }
+                Err(_) => return,
+            };
+            let poll_device = device.clone();
+            let stale = this
+                .update(cx, |this, cx| {
+                    if this.github_generation != generation {
+                        return true;
+                    }
+                    this.github = GithubAuth::Authorizing {
+                        user_code: device.user_code.clone(),
+                        verification_uri: device.verification_uri.clone(),
+                    };
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                        device.user_code.clone(),
+                    ));
+                    cx.open_url(&device.verification_uri);
+                    cx.notify();
+                    false
+                })
+                .unwrap_or(true);
+            if stale {
+                return;
+            }
+            let token = rt::tokio()
+                .spawn(async move { github::poll_for_token(&poll_device).await })
+                .await;
+            let token = match token {
+                Ok(Ok(token)) => token,
+                Ok(Err(error)) => {
+                    this.update(cx, |this, cx| {
+                        if this.github_generation == generation {
+                            this.github = GithubAuth::SignedOut;
+                            this.flash_warning(error, cx);
+                        }
+                    })
+                    .ok();
+                    return;
+                }
+                Err(_) => return,
+            };
+            if let Err(error) = github::store_token(&token) {
+                this.update(cx, |this, cx| {
+                    this.flash_warning(format!("Could not store the token: {error}"), cx)
+                })
+                .ok();
+            }
+            let profile = rt::tokio()
+                .spawn(async move { github::fetch_profile(&token).await })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.github_generation != generation {
+                    return;
+                }
+                match profile {
+                    Ok(Ok(profile)) => {
+                        this.notice = Some(format!("Signed in to GitHub as {}", profile.login));
+                        this.notice_warning = false;
+                        this.github = GithubAuth::SignedIn(profile);
+                    }
+                    Ok(Err(error)) => {
+                        this.github = GithubAuth::SignedOut;
+                        this.flash_warning(error, cx);
+                    }
+                    Err(_) => this.github = GithubAuth::SignedOut,
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn github_sign_out(&mut self, cx: &mut Context<Self>) {
+        github::clear_token();
+        self.github_generation += 1;
+        self.github = GithubAuth::SignedOut;
+        self.notice = Some(
+            "Signed out of GitHub on this Mac; revoke zeDB under GitHub settings, \
+             Applications, if you want the grant gone too"
+                .into(),
+        );
+        self.notice_warning = false;
+        cx.notify();
+    }
+
+    /// The Account section of the preferences panel.
+    fn account_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let row = div().py_3().border_b_1().border_color(rgb(BORDER));
+        match &self.github {
+            GithubAuth::SignedOut => row
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(div().flex().flex_col().gap_1().child("Account").child(
+                    div().text_sm().text_color(rgb(TEXT_DIM)).child(
+                        "Optional: shows your profile and enables settings sync later",
+                    ),
+                ))
+                .child(
+                    div()
+                        .id("github-sign-in")
+                        .px_3()
+                        .py_1()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_color(rgb(TEXT))
+                        .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                        .on_click(cx.listener(|this, _, _, cx| this.github_sign_in(cx)))
+                        .child(
+                            svg()
+                                .path("icons/github.svg")
+                                .size(px(16.))
+                                .text_color(rgb(TEXT)),
+                        )
+                        .child("Sign in with GitHub"),
+                ),
+            GithubAuth::Authorizing {
+                user_code,
+                verification_uri,
+            } => {
+                let code_boxes = div()
+                    .id("github-code")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap_1()
+                    .cursor_pointer()
+                    .hover(|boxes| boxes.opacity(0.85))
+                    .on_click({
+                        let code = user_code.clone();
+                        cx.listener(move |this, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(code.clone()));
+                            this.notice = Some("Code copied to the clipboard".into());
+                            this.notice_warning = false;
+                            cx.notify();
+                        })
+                    })
+                    .children(user_code.chars().map(|character| {
+                        if character == '-' {
+                            div()
+                                .px_1()
+                                .text_color(rgb(TEXT_DIM))
+                                .child("-")
+                                .into_any_element()
+                        } else {
+                            div()
+                                .w(px(38.))
+                                .h(px(46.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .bg(rgb(BG_SIDEBAR))
+                                .text_xl()
+                                .font_family("Menlo")
+                                .text_color(rgb(TEXT))
+                                .child(String::from(character))
+                                .into_any_element()
+                        }
+                    }));
+                row.flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child("Account")
+                            .child(
+                                div()
+                                    .id("github-cancel")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(3.))
+                                    .text_color(rgb(TEXT_DIM))
+                                    .hover(|button| {
+                                        button
+                                            .bg(rgb(BG_SIDEBAR))
+                                            .text_color(rgb(TEXT))
+                                            .cursor_pointer()
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.github_generation += 1;
+                                        this.github = GithubAuth::SignedOut;
+                                        cx.notify();
+                                    }))
+                                    .child("Cancel"),
+                            ),
+                    )
+                    .child(div().text_sm().text_color(rgb(TEXT_DIM)).child(format!(
+                        "Enter this code at {verification_uri} (opened in your browser). \
+                         It's on your clipboard; click the code to copy it again."
+                    )))
+                    .child(code_boxes)
+            }
+            GithubAuth::SignedIn(profile) => {
+                let display = profile.name.clone().unwrap_or_else(|| profile.login.clone());
+                row.flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .when_some(profile.avatar.clone(), |account, avatar| {
+                                account.child(
+                                    gpui::img(gpui::ImageSource::Resource(gpui::Resource::Path(
+                                        avatar.into(),
+                                    )))
+                                    .size(px(36.))
+                                    .rounded_full(),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_0p5()
+                                    .child(div().text_color(rgb(TEXT)).child(display))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .text_sm()
+                                            .text_color(rgb(TEXT_DIM))
+                                            .child(
+                                                svg()
+                                                    .path("icons/github.svg")
+                                                    .size(px(13.))
+                                                    .text_color(rgb(TEXT_DIM)),
+                                            )
+                                            .child(format!("@{}", profile.login)),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("github-sign-out")
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .text_color(rgb(TEXT_DIM))
+                            .hover(|button| {
+                                button
+                                    .bg(rgb(BG_SIDEBAR))
+                                    .text_color(rgb(TEXT))
+                                    .cursor_pointer()
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.github_sign_out(cx)))
+                            .child("Sign out"),
+                    )
+            }
+        }
+    }
+
     fn preferences_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div().size_full().flex().justify_center().child(
             div()
@@ -876,6 +1232,7 @@ impl Workspace {
                                 .child("Done"),
                         ),
                 )
+                .child(self.account_section(cx))
                 .child(
                     div()
                         .flex()

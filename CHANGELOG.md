@@ -11,6 +11,11 @@ GitHub release notes.
 
 - The fresh-install default query surveys the server (largest tables
   across all databases) instead of assuming a specific database.
+- Optional GitHub sign-in from Preferences (device flow, `read:user`
+  scope only): shows your avatar and name in Preferences and the
+  toolbar, and lays the groundwork for settings sync. The one-time
+  code is auto-copied to the clipboard and presented GitHub-style;
+  the token lives in the macOS Keychain.
 
 ## v0.1.5 - 2026-08-08
 
