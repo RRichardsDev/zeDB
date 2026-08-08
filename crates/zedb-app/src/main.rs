@@ -150,6 +150,7 @@ impl AssetSource for Assets {
             "icons/lock.svg" => Some(include_bytes!("../assets/icons/lock.svg")),
             "icons/lock-open.svg" => Some(include_bytes!("../assets/icons/lock-open.svg")),
             "icons/plug.svg" => Some(include_bytes!("../assets/icons/plug.svg")),
+            "icons/plug-off.svg" => Some(include_bytes!("../assets/icons/plug-off.svg")),
             "icons/pull.svg" => Some(include_bytes!("../assets/icons/pull.svg")),
             "icons/query-plus.svg" => Some(include_bytes!("../assets/icons/query-plus.svg")),
             "icons/refresh.svg" => Some(include_bytes!("../assets/icons/refresh.svg")),
@@ -4683,8 +4684,8 @@ impl Workspace {
                                 .border_color(rgb(DANGER))
                                 .child(
                                     svg()
-                                        .path("icons/stop.svg")
-                                        .size(px(12.))
+                                        .path("icons/plug-off.svg")
+                                        .size(px(14.))
                                         .text_color(rgb(DANGER)),
                                 )
                                 .hover(|button| button.bg(rgb(0x3d2528)).cursor_pointer())

@@ -11,6 +11,8 @@ GitHub release notes.
 
 - The connection form's read-only control is the same switch as the
   Vim mode toggle instead of an ON/OFF button.
+- Disconnect is a red broken-plug icon (the connect plug with a line
+  through it) instead of a stop square.
 
 ## v0.1.7 - 2026-08-08
 
