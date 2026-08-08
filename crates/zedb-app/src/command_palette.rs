@@ -142,8 +142,44 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The preference a palette command previews, if any.
+    fn palette_theme_target(command: PaletteCommand) -> Option<&'static str> {
+        match command {
+            PaletteCommand::ThemeDark => Some("dark"),
+            PaletteCommand::ThemeLight => Some("light"),
+            PaletteCommand::ThemeSystem => Some("system"),
+            _ => None,
+        }
+    }
+
+    /// Selecting a theme command previews it immediately; moving off it
+    /// (or closing the palette) falls back to the saved preference.
+    /// Nothing is persisted here.
+    pub(crate) fn palette_theme_preview(&mut self, cx: &mut Context<Self>) {
+        let commands = self.palette_filtered(cx);
+        let selected = self.palette.selected.min(commands.len().saturating_sub(1));
+        let target = commands
+            .get(selected)
+            .copied()
+            .and_then(Self::palette_theme_target);
+        let preference = target
+            .map(str::to_string)
+            .or_else(|| self.preferences.theme.clone());
+        let mode = crate::resolve_theme_mode(preference.as_deref(), cx);
+        if mode.is_dark() != gpui_component::Theme::global(cx).is_dark() {
+            crate::apply_theme_preference(preference.as_deref(), None, cx);
+            cx.notify();
+        }
+    }
+
     pub(crate) fn palette_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette.open = false;
+        // A previewed theme that was never chosen reverts.
+        let preference = self.preferences.theme.clone();
+        let mode = crate::resolve_theme_mode(preference.as_deref(), cx);
+        if mode.is_dark() != gpui_component::Theme::global(cx).is_dark() {
+            crate::apply_theme_preference(preference.as_deref(), None, cx);
+        }
         // Focus must land somewhere live, or the window loses its key
         // dispatch path and every shortcut goes dead. Never focus a
         // maybe-unrendered element; no focus at all is a working state.
@@ -171,6 +207,7 @@ impl Workspace {
         }
         let current = self.palette.selected.min(count - 1) as isize;
         self.palette.selected = (current + delta).rem_euclid(count as isize) as usize;
+        self.palette_theme_preview(cx);
         cx.notify();
     }
 
@@ -250,6 +287,15 @@ impl Workspace {
                                             .hover(|row| {
                                                 row.bg(theme::bg_sidebar()).cursor_pointer()
                                             })
+                                            .on_hover(cx.listener(
+                                                move |this, hovered: &bool, _, cx| {
+                                                    if *hovered && this.palette.selected != index {
+                                                        this.palette.selected = index;
+                                                        this.palette_theme_preview(cx);
+                                                        cx.notify();
+                                                    }
+                                                },
+                                            ))
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.palette_close(window, cx);
                                                 command.run(this, window, cx);

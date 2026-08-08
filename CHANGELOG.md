@@ -32,6 +32,8 @@ GitHub release notes.
 - Modal panels (new migration, commit, delete confirm, about, regen
   checks) block clicks to the view behind them; migration headers can
   no longer be clicked through the authoring window.
+- Moving over a theme command in the palette previews it live;
+  Enter keeps it, dismissing reverts to the saved theme.
 - Light-mode fixes from first use: tier and WRITE badges get light
   tints, primary buttons keep readable text, and the completion popup
   no longer crashes on qualified names (table.x) whose match is

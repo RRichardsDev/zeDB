@@ -586,7 +586,15 @@ impl Workspace {
                                 this.palette_run_selected(window, cx);
                                 cx.stop_propagation();
                             }
-                            _ => {}
+                            _ => {
+                                // The filter text changes after this
+                                // keystroke lands in the input; preview
+                                // once it has.
+                                let handle = cx.entity();
+                                cx.defer(move |cx| {
+                                    handle.update(cx, |this, cx| this.palette_theme_preview(cx));
+                                });
+                            }
                         }
                         return;
                     }
@@ -6637,7 +6645,7 @@ fn zedb_theme_set() -> Vec<std::rc::Rc<gpui_component::ThemeConfig>> {
 }
 
 /// The theme mode a preference string resolves to right now.
-fn resolve_theme_mode(preference: Option<&str>, cx: &App) -> gpui_component::ThemeMode {
+pub(crate) fn resolve_theme_mode(preference: Option<&str>, cx: &App) -> gpui_component::ThemeMode {
     match preference.unwrap_or("dark") {
         "light" => gpui_component::ThemeMode::Light,
         "system" => match cx.window_appearance() {
@@ -6652,7 +6660,11 @@ fn resolve_theme_mode(preference: Option<&str>, cx: &App) -> gpui_component::The
 
 /// Install the zeDB themes and apply the preferred mode. Runs at
 /// startup and again on every switch (mode: the fresh preference).
-fn apply_theme_preference(preference: Option<&str>, window: Option<&mut Window>, cx: &mut App) {
+pub(crate) fn apply_theme_preference(
+    preference: Option<&str>,
+    window: Option<&mut Window>,
+    cx: &mut App,
+) {
     let themes = zedb_theme_set();
     let mode = resolve_theme_mode(preference, cx);
     {
