@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, px, rgb, svg, Action, Context, Entity, Focusable, Window};
+use gpui::{div, prelude::*, px, svg, Action, Context, Entity, Focusable, Window};
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{DropdownMenu, PopupMenu};
@@ -19,10 +19,7 @@ use zedb_acp::{AcpError, AgentConnection, AgentEvent, PermissionOption, Permissi
 
 use crate::author::RollbackChoice;
 use crate::rt;
-use crate::theme::{
-    BG, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, DANGER_HOVER, DISABLED, HOVER, SELECTED, SUCCESS,
-    TEXT, TEXT_DIM, WARNING,
-};
+use crate::theme;
 use crate::Workspace;
 
 #[derive(Clone, PartialEq, Action)]
@@ -1385,8 +1382,8 @@ impl Workspace {
             .flex()
             .flex_col()
             .border_l_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(BG_SIDEBAR))
+            .border_color(theme::border())
+            .bg(theme::bg_sidebar())
             .child(gpui::deferred(
                 div()
                     .id("agent-pane-resize")
@@ -1427,7 +1424,7 @@ impl Workspace {
                 .items_center()
                 .justify_between()
                 .border_b_1()
-                .border_color(rgb(BORDER))
+                .border_color(theme::border())
                 .child(
                     div()
                         .flex()
@@ -1439,11 +1436,12 @@ impl Workspace {
                                 .as_ref()
                                 .map(|thread| thread.agent_icon.clone()),
                             |header, icon| {
-                                header
-                                    .child(svg().path(icon).size(px(14.)).text_color(rgb(TEXT_DIM)))
+                                header.child(
+                                    svg().path(icon).size(px(14.)).text_color(theme::text_dim()),
+                                )
                             },
                         )
-                        .child(div().text_color(rgb(TEXT)).child(title)),
+                        .child(div().text_color(theme::text()).child(title)),
                 )
                 .child(
                     div()
@@ -1490,7 +1488,7 @@ impl Workspace {
                                             |_, _| {
                                                 div()
                                                     .text_xs()
-                                                    .text_color(rgb(TEXT_DIM))
+                                                    .text_color(theme::text_dim())
                                                     .child("External Agents")
                                             },
                                         );
@@ -1517,7 +1515,9 @@ impl Workspace {
                                                                     svg()
                                                                         .path(icon_path.clone())
                                                                         .size(px(19.))
-                                                                        .text_color(rgb(TEXT_DIM)),
+                                                                        .text_color(
+                                                                            theme::text_dim(),
+                                                                        ),
                                                                 )
                                                                 .child(name.clone()),
                                                         )
@@ -1525,7 +1525,7 @@ impl Workspace {
                                                             row.child(
                                                                 div()
                                                                     .text_xs()
-                                                                    .text_color(rgb(TEXT_DIM))
+                                                                    .text_color(theme::text_dim())
                                                                     .child(hint),
                                                             )
                                                         })
@@ -1543,9 +1543,9 @@ impl Workspace {
                                 .px_2()
                                 .py_1()
                                 .rounded(px(3.))
-                                .text_color(rgb(TEXT_DIM))
+                                .text_color(theme::text_dim())
                                 .child("x")
-                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                                .hover(|button| button.bg(theme::hover()).cursor_pointer())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.agent.open = false;
                                     cx.notify();
@@ -1560,22 +1560,22 @@ impl Workspace {
                 .flex_none()
                 .p_2()
                 .border_b_1()
-                .border_color(rgb(BORDER))
+                .border_color(theme::border())
                 .flex()
                 .flex_col()
                 .gap_2()
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(theme::text_dim())
                         .child("Add an ACP-speaking agent (name + command line):"),
                 )
                 .child(
                     div()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(BORDER))
-                        .bg(rgb(BG))
+                        .border_color(theme::border())
+                        .bg(theme::bg())
                         .child(
                             Input::new(&form.name)
                                 .appearance(false)
@@ -1588,8 +1588,8 @@ impl Workspace {
                     div()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(BORDER))
-                        .bg(rgb(BG))
+                        .border_color(theme::border())
+                        .bg(theme::bg())
                         .child(
                             Input::new(&form.command)
                                 .appearance(false)
@@ -1599,7 +1599,12 @@ impl Workspace {
                         ),
                 );
             if let Some(error) = &form.error {
-                card = card.child(div().text_xs().text_color(rgb(DANGER)).child(error.clone()));
+                card = card.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::danger())
+                        .child(error.clone()),
+                );
             }
             // Existing custom agents, removable.
             for (index, custom) in self.preferences.custom_agents.iter().enumerate() {
@@ -1609,7 +1614,7 @@ impl Workspace {
                         .items_center()
                         .justify_between()
                         .text_xs()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(theme::text_dim())
                         .child(format!("{} ({})", custom.name, custom.command))
                         .child(
                             div()
@@ -1617,7 +1622,7 @@ impl Workspace {
                                 .px_2()
                                 .rounded(px(3.))
                                 .child("remove")
-                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                                .hover(|button| button.bg(theme::hover()).cursor_pointer())
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.agent_remove_custom(index, cx);
                                 })),
@@ -1636,10 +1641,10 @@ impl Workspace {
                             .py_1()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(rgb(BORDER))
-                            .text_color(rgb(TEXT))
+                            .border_color(theme::border())
+                            .text_color(theme::text())
                             .child("Add")
-                            .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                            .hover(|button| button.bg(theme::hover()).cursor_pointer())
                             .on_click(cx.listener(|this, _, _, cx| this.agent_save_custom(cx))),
                     )
                     .child(
@@ -1648,9 +1653,9 @@ impl Workspace {
                             .px_3()
                             .py_1()
                             .rounded(px(3.))
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(theme::text_dim())
                             .child("Cancel")
-                            .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                            .hover(|button| button.bg(theme::hover()).cursor_pointer())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.agent.add_form = None;
                                 cx.notify();
@@ -1706,7 +1711,7 @@ impl Workspace {
             if thread.running {
                 transcript = transcript.child(
                     div()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(theme::text_dim())
                         .text_xs()
                         .child("working..."),
                 );
@@ -1715,7 +1720,7 @@ impl Workspace {
             transcript = transcript.child(
                 div()
                     .text_xs()
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(theme::text_dim())
                     .child(format!("{agent_name} thread (read-only)")),
             );
             for (index, (kind, text)) in entries.iter().enumerate() {
@@ -1723,15 +1728,15 @@ impl Workspace {
                     "user" => div()
                         .p_2()
                         .rounded(px(4.))
-                        .bg(rgb(SELECTED))
-                        .text_color(rgb(TEXT_DIM))
+                        .bg(theme::selected())
+                        .text_color(theme::text_dim())
                         .child(
                             TextView::markdown(("agent-restored", index), text.clone(), window, cx)
                                 .selectable(true),
                         )
                         .into_any_element(),
                     "assistant" => div()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(theme::text_dim())
                         .child(
                             TextView::markdown(("agent-restored", index), text.clone(), window, cx)
                                 .selectable(true),
@@ -1739,7 +1744,7 @@ impl Workspace {
                         .into_any_element(),
                     _ => div()
                         .text_xs()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(theme::text_dim())
                         .child(text.clone())
                         .into_any_element(),
                 };
@@ -1757,7 +1762,7 @@ impl Workspace {
                     .flex_col()
                     .items_center()
                     .gap_2()
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(theme::text_dim())
                     .child("Start a thread with the + menu above")
                     .when_some(self.preferences.last_agent.clone(), |hint, last| {
                         let icon = self
@@ -1774,14 +1779,14 @@ impl Workspace {
                                 .py_1()
                                 .rounded(px(3.))
                                 .border_1()
-                                .border_color(rgb(BORDER))
+                                .border_color(theme::border())
                                 .text_xs()
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(svg().path(icon).size(px(13.)).text_color(rgb(TEXT)))
+                                .child(svg().path(icon).size(px(13.)).text_color(theme::text()))
                                 .child(format!("New thread with {last} (cmd-N)"))
-                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                                .hover(|button| button.bg(theme::hover()).cursor_pointer())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.agent_start_last_thread(window, cx)
                                 })),
@@ -1795,10 +1800,10 @@ impl Workspace {
                                 .py_1()
                                 .rounded(px(3.))
                                 .border_1()
-                                .border_color(rgb(BORDER))
+                                .border_color(theme::border())
                                 .text_xs()
                                 .child("Reopen last thread (read-only)")
-                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                                .hover(|button| button.bg(theme::hover()).cursor_pointer())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.agent.restored = load_transcript();
                                     cx.notify();
@@ -1821,11 +1826,11 @@ impl Workspace {
                     .flex_none()
                     .px_3()
                     .py_1()
-                    .bg(rgb(BG_STATUS))
+                    .bg(theme::bg_status())
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(theme::border())
                     .text_xs()
-                    .text_color(rgb(DANGER))
+                    .text_color(theme::danger())
                     .whitespace_nowrap()
                     .overflow_hidden()
                     .child(status),
@@ -1841,7 +1846,7 @@ impl Workspace {
                     .flex_none()
                     .p_2()
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(theme::border())
                     .flex()
                     .items_end()
                     .gap_2()
@@ -1850,8 +1855,8 @@ impl Workspace {
                             .flex_1()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(rgb(BORDER))
-                            .bg(rgb(BG))
+                            .border_color(theme::border())
+                            .bg(theme::bg())
                             .child(
                                 Input::new(&thread.input)
                                     .appearance(false)
@@ -1872,14 +1877,16 @@ impl Workspace {
                                     .justify_center()
                                     .rounded(px(3.))
                                     .border_1()
-                                    .border_color(rgb(DANGER))
+                                    .border_color(theme::danger())
                                     .child(
                                         svg()
                                             .path("icons/stop.svg")
                                             .size(px(12.))
-                                            .text_color(rgb(DANGER)),
+                                            .text_color(theme::danger()),
                                     )
-                                    .hover(|button| button.bg(rgb(DANGER_HOVER)).cursor_pointer())
+                                    .hover(|button| {
+                                        button.bg(theme::danger_hover()).cursor_pointer()
+                                    })
                                     .tooltip(|window, cx| {
                                         gpui_component::tooltip::Tooltip::new("Stop the turn")
                                             .build(window, cx)
@@ -1898,25 +1905,27 @@ impl Workspace {
                                     .justify_center()
                                     .rounded(px(3.))
                                     .border_1()
-                                    .border_color(rgb(BORDER))
+                                    .border_color(theme::border())
                                     .child(
                                         svg()
                                             .path("icons/send.svg")
                                             .size(px(14.))
-                                            .text_color(rgb(if ready {
-                                                TEXT_DIM
+                                            .text_color(if ready {
+                                                theme::text_dim()
                                             } else {
-                                                DISABLED
-                                            }))
+                                                theme::disabled()
+                                            })
                                             .when(ready, |icon| {
                                                 icon.group_hover("agent-send", |icon| {
-                                                    icon.text_color(rgb(TEXT))
+                                                    icon.text_color(theme::text())
                                                 })
                                             }),
                                     )
                                     .when(ready, |button| {
                                         button
-                                            .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                                            .hover(|button| {
+                                                button.bg(theme::hover()).cursor_pointer()
+                                            })
                                             .tooltip(|window, cx| {
                                                 gpui_component::tooltip::Tooltip::new(
                                                     "Send (enter)",
@@ -2005,8 +2014,8 @@ fn render_entry(
         ThreadEntry::User(text) => div()
             .p_2()
             .rounded(px(4.))
-            .bg(rgb(SELECTED))
-            .text_color(rgb(TEXT))
+            .bg(theme::selected())
+            .text_color(theme::text())
             .child(
                 TextView::markdown(("agent-user", index), text.clone(), window, cx)
                     .selectable(true),
@@ -2022,9 +2031,9 @@ fn render_entry(
                     .p_2()
                     .rounded(px(4.))
                     .border_1()
-                    .border_color(rgb(WARNING))
+                    .border_color(theme::warning())
                     .text_xs()
-                    .text_color(rgb(WARNING))
+                    .text_color(theme::warning())
                     .child(
                         TextView::markdown(("agent-notice", index), text.clone(), window, cx)
                             .selectable(true),
@@ -2032,10 +2041,15 @@ fn render_entry(
                     .into_any_element()
             } else {
                 let blocks = fenced_sql_blocks(text);
-                let mut body = div().text_color(rgb(TEXT)).flex().flex_col().gap_1().child(
-                    TextView::markdown(("agent-md", index), text.clone(), window, cx)
-                        .selectable(true),
-                );
+                let mut body = div()
+                    .text_color(theme::text())
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        TextView::markdown(("agent-md", index), text.clone(), window, cx)
+                            .selectable(true),
+                    );
                 for (block_index, block) in blocks.into_iter().enumerate() {
                     let label = if block_index == 0 {
                         "insert into editor".to_string()
@@ -2049,11 +2063,11 @@ fn render_entry(
                             .py_0p5()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(rgb(BORDER))
+                            .border_color(theme::border())
                             .text_xs()
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(theme::text_dim())
                             .child(label)
-                            .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                            .hover(|button| button.bg(theme::hover()).cursor_pointer())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_query_tab_with(&block, window, cx);
                             })),
@@ -2067,16 +2081,16 @@ fn render_entry(
             .items_center()
             .gap_1()
             .text_xs()
-            .text_color(rgb(TEXT_DIM))
+            .text_color(theme::text_dim())
             .child(
                 svg()
                     .path("icons/check-chain.svg")
                     .size(px(11.))
-                    .text_color(rgb(if status == "completed" {
-                        SUCCESS
+                    .text_color(if status == "completed" {
+                        theme::success()
                     } else {
-                        TEXT_DIM
-                    })),
+                        theme::text_dim()
+                    }),
             )
             .child(format!("{title} ({status})"))
             .into_any_element(),
@@ -2090,13 +2104,13 @@ fn render_entry(
                 .p_2()
                 .rounded(px(4.))
                 .border_1()
-                .border_color(rgb(WARNING))
+                .border_color(theme::warning())
                 .flex()
                 .flex_col()
                 .gap_2()
                 .child(
                     div()
-                        .text_color(rgb(WARNING))
+                        .text_color(theme::warning())
                         .text_xs()
                         .child(format!("Permission: {title}")),
                 )
@@ -2105,7 +2119,7 @@ fn render_entry(
                         div()
                             .text_xs()
                             .font_family("Menlo")
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(theme::text_dim())
                             .child(input),
                     )
                 });
@@ -2114,7 +2128,7 @@ fn render_entry(
                     card = card.child(
                         div()
                             .text_xs()
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(theme::text_dim())
                             .child(format!("answered: {choice}")),
                     );
                 }
@@ -2134,11 +2148,11 @@ fn render_entry(
                                 .py_1()
                                 .rounded(px(3.))
                                 .border_1()
-                                .border_color(rgb(BORDER))
-                                .text_color(rgb(TEXT))
+                                .border_color(theme::border())
+                                .text_color(theme::text())
                                 .text_xs()
                                 .child(label)
-                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                                .hover(|button| button.bg(theme::hover()).cursor_pointer())
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.agent_answer_permission(Some(option_id.clone()), cx);
                                 })),
@@ -2151,7 +2165,7 @@ fn render_entry(
         }
         ThreadEntry::Info(text) => div()
             .text_xs()
-            .text_color(rgb(TEXT_DIM))
+            .text_color(theme::text_dim())
             .child(text.clone())
             .into_any_element(),
     }

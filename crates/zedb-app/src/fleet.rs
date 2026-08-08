@@ -19,14 +19,12 @@ use zedb_core::save_preferences;
 
 use crate::components::text_input::TextInput;
 use crate::rt;
-use crate::theme::{
-    BG, BG_INSET, BG_SIDEBAR, BG_STATUS, BORDER, DANGER, HOVER, ROW_HOVER, ROW_STRIPE, SELECTED,
-    SUCCESS, TEXT, TEXT_DIM, WARNING,
-};
+use crate::theme;
 use crate::Workspace;
 
-const ACCENT_PENDING: u32 = WARNING;
-const ACCENT_CUSTOM: u32 = 0x9d7cd8;
+fn accent_custom() -> gpui::Hsla {
+    gpui::rgb(0x9d7cd8).into()
+}
 const ROW_HEIGHT: f32 = 26.0;
 
 /// One matrix row, precomputed from the runner's status data.
@@ -246,15 +244,15 @@ fn fleet_icon_button(
         .justify_center()
         .rounded(px(3.))
         .border_1()
-        .border_color(rgb(BORDER))
+        .border_color(theme::border())
         .child(
             svg()
                 .path(icon)
                 .size(px(14.))
-                .text_color(rgb(TEXT_DIM))
-                .group_hover(id, |icon| icon.text_color(rgb(TEXT))),
+                .text_color(theme::text_dim())
+                .group_hover(id, |icon| icon.text_color(theme::text())),
         )
-        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+        .hover(|button| button.bg(theme::hover()).cursor_pointer())
         .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tooltip).build(window, cx))
         .on_click(on_click)
 }
@@ -262,7 +260,7 @@ fn fleet_icon_button(
 fn action_button(
     id: &'static str,
     label: String,
-    color: u32,
+    color: gpui::Hsla,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     div()
@@ -271,11 +269,11 @@ fn action_button(
         .py_1()
         .rounded(px(3.))
         .border_1()
-        .border_color(rgb(color))
-        .text_color(rgb(color))
+        .border_color(color)
+        .text_color(color)
         .text_center()
         .child(label)
-        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+        .hover(|button| button.bg(theme::hover()).cursor_pointer())
         .on_click(on_click)
 }
 
@@ -1017,9 +1015,9 @@ impl Workspace {
         let drift = self.fleet.drift.get(&database);
         let drift_loading = self.fleet.drift_loading.contains(&database);
 
-        let mut summary: Vec<(String, u32)> = Vec::new();
+        let mut summary: Vec<(String, gpui::Hsla)> = Vec::new();
         if let Some(group) = &row.excluded {
-            summary.push((format!("excluded by group {group}"), TEXT_DIM));
+            summary.push((format!("excluded by group {group}"), theme::text_dim()));
         }
         summary.push((
             format!(
@@ -1028,18 +1026,18 @@ impl Workspace {
                     .map(|head| format!("{head:05}"))
                     .unwrap_or_else(|| "none".into())
             ),
-            TEXT_DIM,
+            theme::text_dim(),
         ));
         if !row.failed.is_empty() {
             let failed: Vec<String> = row.failed.iter().map(|n| format!("{n:05}")).collect();
-            summary.push((format!("failed: {}", failed.join(", ")), DANGER));
+            summary.push((format!("failed: {}", failed.join(", ")), theme::danger()));
         }
         if !row.customised.is_empty() {
             let customised: Vec<String> =
                 row.customised.iter().map(|n| format!("{n:05}")).collect();
             summary.push((
                 format!("customised: {}", customised.join(", ")),
-                ACCENT_CUSTOM,
+                accent_custom(),
             ));
         }
 
@@ -1066,10 +1064,10 @@ impl Workspace {
 
         let drift_section: gpui::Div = match (drift_loading, drift) {
             (true, _) => div()
-                .text_color(rgb(TEXT_DIM))
+                .text_color(theme::text_dim())
                 .child("Verifying against replayed chain state..."),
             (false, Some(info)) if info.findings.is_empty() => {
-                div().text_color(rgb(SUCCESS)).child(format!(
+                div().text_color(theme::success()).child(format!(
                     "verified clean {}s ago",
                     info.checked_at.elapsed().as_secs()
                 ))
@@ -1078,7 +1076,7 @@ impl Workspace {
                 let mut section = div().flex().flex_col().gap_1();
                 section = section.child(
                     div()
-                        .text_color(rgb(DANGER))
+                        .text_color(theme::danger())
                         .child(format!("{} drift finding(s)", info.findings.len())),
                 );
                 for finding in &info.findings {
@@ -1094,7 +1092,9 @@ impl Workspace {
                 }
                 section
             }
-            (false, None) => div().text_color(rgb(TEXT_DIM)).child("Not verified yet"),
+            (false, None) => div()
+                .text_color(theme::text_dim())
+                .child("Not verified yet"),
         };
 
         let mut panel = div()
@@ -1105,8 +1105,8 @@ impl Workspace {
             .flex()
             .flex_col()
             .border_l_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(BG_SIDEBAR))
+            .border_color(theme::border())
+            .bg(theme::bg_sidebar())
             .child(gpui::deferred(
                 div()
                     .id("fleet-detail-resize")
@@ -1133,16 +1133,16 @@ impl Workspace {
                     .items_center()
                     .justify_between()
                     .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .child(div().text_color(rgb(TEXT)).child(database.clone()))
+                    .border_color(theme::border())
+                    .child(div().text_color(theme::text()).child(database.clone()))
                     .child(
                         div()
                             .id("fleet-detail-close")
                             .px_2()
                             .rounded(px(3.))
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(theme::text_dim())
                             .child("✕")
-                            .hover(|button| button.text_color(rgb(TEXT)).cursor_pointer())
+                            .hover(|button| button.text_color(theme::text()).cursor_pointer())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.fleet.selected = None;
                                 cx.notify();
@@ -1160,7 +1160,7 @@ impl Workspace {
             .flex_col()
             .gap_2();
         for (text, color) in summary {
-            body = body.child(div().text_color(rgb(color)).child(text));
+            body = body.child(div().text_color(color).child(text));
         }
         body = body
             .child(
@@ -1173,14 +1173,14 @@ impl Workspace {
                     .text_center()
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(TEXT))
+                    .border_color(theme::border())
+                    .text_color(theme::text())
                     .child(if drift_loading {
                         "Verifying..."
                     } else {
                         "Verify"
                     })
-                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
                     .on_click({
                         let database = database.clone();
                         cx.listener(move |this, _, _, cx| this.fleet_verify(database.clone(), cx))
@@ -1188,7 +1188,7 @@ impl Workspace {
             )
             .child(drift_section);
         if let Some(error) = &self.fleet.drift_error {
-            body = body.child(div().text_color(rgb(DANGER)).child(error.clone()));
+            body = body.child(div().text_color(theme::danger()).child(error.clone()));
         }
 
         if self.fleet.write_unlocked {
@@ -1199,7 +1199,7 @@ impl Workspace {
                 actions = actions.child(action_button(
                     "fleet-act-upgrade",
                     format!("Upgrade {database}"),
-                    ACCENT_PENDING,
+                    theme::warning(),
                     {
                         let database = database.clone();
                         cx.listener(move |this, _, _, cx| {
@@ -1221,7 +1221,7 @@ impl Workspace {
                     actions = actions.child(action_button(
                         "fleet-act-rollback",
                         format!("Roll back {head:05}"),
-                        DANGER,
+                        theme::danger(),
                         {
                             let database = database.clone();
                             cx.listener(move |this, _, _, cx| {
@@ -1252,7 +1252,7 @@ impl Workspace {
                         actions = actions.child(action_button(
                             "fleet-act-remove-targeted",
                             format!("Remove customisation {number:05}"),
-                            DANGER,
+                            theme::danger(),
                             {
                                 let database = database.clone();
                                 cx.listener(move |this, _, _, cx| {
@@ -1271,7 +1271,7 @@ impl Workspace {
                         actions = actions.child(action_button(
                             "fleet-act-apply-targeted",
                             format!("Apply customisation {number:05}"),
-                            ACCENT_CUSTOM,
+                            accent_custom(),
                             {
                                 let database = database.clone();
                                 cx.listener(move |this, _, _, cx| {
@@ -1297,7 +1297,7 @@ impl Workspace {
             body = body.child(
                 div()
                     .mt_2()
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(theme::text_dim())
                     .child("Nothing pending: an upgrade would do no work."),
             );
         }
@@ -1306,7 +1306,7 @@ impl Workspace {
                 .child(
                     div()
                         .mt_2()
-                        .text_color(rgb(ACCENT_PENDING))
+                        .text_color(theme::warning())
                         .child(format!("pending {number:05}: an upgrade would run")),
                 )
                 .child(
@@ -1314,9 +1314,9 @@ impl Workspace {
                         .id(("fleet-sql", number as usize))
                         .p_2()
                         .rounded(px(3.))
-                        .bg(rgb(BG_INSET))
+                        .bg(theme::bg_inset())
                         .border_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(theme::border())
                         .text_xs()
                         .font_family("Menlo")
                         .whitespace_nowrap()
@@ -1462,8 +1462,8 @@ impl Workspace {
             .flex_col()
             .rounded(px(6.))
             .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(BG))
+            .border_color(theme::border())
+            .bg(theme::bg())
             .child(
                 div()
                     .flex_none()
@@ -1492,8 +1492,8 @@ impl Workspace {
                 .p_2()
                 .rounded(px(3.))
                 .border_1()
-                .border_color(rgb(ACCENT_PENDING))
-                .text_color(rgb(ACCENT_PENDING))
+                .border_color(theme::warning())
+                .text_color(theme::warning())
                 .flex()
                 .flex_col()
                 .gap_1()
@@ -1508,7 +1508,11 @@ impl Workspace {
             let applied = self.fleet.action_progress.get(key).copied();
             body = body.child(
                 div()
-                    .text_color(rgb(if applied.is_some() { SUCCESS } else { TEXT_DIM }))
+                    .text_color(if applied.is_some() {
+                        theme::success()
+                    } else {
+                        theme::text_dim()
+                    })
                     .child(match applied {
                         Some(seconds) if seconds < 1.0 => {
                             format!("{label}  [applied {:.0}ms]", seconds * 1000.0)
@@ -1523,9 +1527,9 @@ impl Workspace {
                         .id(gpui::SharedString::from(format!("modal-sql-{label}")))
                         .p_2()
                         .rounded(px(3.))
-                        .bg(rgb(BG_INSET))
+                        .bg(theme::bg_inset())
                         .border_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(theme::border())
                         .text_xs()
                         .font_family("Menlo")
                         .whitespace_nowrap()
@@ -1541,16 +1545,16 @@ impl Workspace {
                     .p_2()
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(rgb(if self.fleet.ack_structural {
-                        SUCCESS
+                    .border_color(if self.fleet.ack_structural {
+                        theme::success()
                     } else {
-                        DANGER
-                    }))
-                    .text_color(rgb(if self.fleet.ack_structural {
-                        SUCCESS
+                        theme::danger()
+                    })
+                    .text_color(if self.fleet.ack_structural {
+                        theme::success()
                     } else {
-                        DANGER
-                    }))
+                        theme::danger()
+                    })
                     .child(if self.fleet.ack_structural {
                         "Acknowledged: schema is restored but newer data may be lost"
                     } else {
@@ -1565,7 +1569,7 @@ impl Workspace {
         }
         if irreversible {
             body =
-                body.child(div().text_color(rgb(DANGER)).child(
+                body.child(div().text_color(theme::danger()).child(
                     "This rollback is IRREVERSIBLE: it does not restore the previous state.",
                 ));
         }
@@ -1573,22 +1577,22 @@ impl Workspace {
             body = body
                 .child(
                     div()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(theme::text_dim())
                         .child(format!("Type \"{phrase}\" to confirm:")),
                 )
                 .child(div().w(px(260.)).child(self.fleet.confirm_input.clone()));
         }
         match &self.fleet.action_result {
             Some(Ok(message)) => {
-                body = body.child(div().text_color(rgb(SUCCESS)).child(message.clone()));
+                body = body.child(div().text_color(theme::success()).child(message.clone()));
             }
             Some(Err(error)) => {
-                body = body.child(div().text_color(rgb(DANGER)).child(error.clone()));
+                body = body.child(div().text_color(theme::danger()).child(error.clone()));
             }
             None => {}
         }
         if running {
-            body = body.child(div().text_color(rgb(TEXT_DIM)).child("Applying..."));
+            body = body.child(div().text_color(theme::text_dim()).child("Applying..."));
         }
         card = card.child(body);
 
@@ -1602,7 +1606,7 @@ impl Workspace {
                 .justify_end()
                 .gap_2()
                 .border_t_1()
-                .border_color(rgb(BORDER))
+                .border_color(theme::border())
                 .child(
                     div()
                         .id("fleet-modal-cancel")
@@ -1610,13 +1614,13 @@ impl Workspace {
                         .py_1()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(theme::border())
                         .child(if self.fleet.action_result.is_some() {
                             "Close"
                         } else {
                             "Cancel"
                         })
-                        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.fleet.pending_action = None;
                             cx.notify();
@@ -1630,8 +1634,16 @@ impl Workspace {
                             .py_1()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(rgb(if confirmable { DANGER } else { BORDER }))
-                            .text_color(rgb(if confirmable { DANGER } else { TEXT_DIM }))
+                            .border_color(if confirmable {
+                                theme::danger()
+                            } else {
+                                theme::border()
+                            })
+                            .text_color(if confirmable {
+                                theme::danger()
+                            } else {
+                                theme::text_dim()
+                            })
                             .child(if running { "Applying..." } else { "Confirm" })
                             .when(confirmable, |button| {
                                 button
@@ -1681,74 +1693,80 @@ impl Workspace {
             .as_ref()
             .map(|row| self.fleet_detail_panel(row, cx).into_any_element());
 
-        let toolbar = div()
-            .flex_none()
-            .px_3()
-            .py_2()
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_b_1()
-            .border_color(rgb(BORDER))
-            .child(div().flex_1().min_w_0().child(self.fleet.repo_path.clone()))
-            .child(
-                div()
-                    .id("fleet-open")
-                    .px_2()
-                    .py_1()
-                    .rounded(px(3.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(TEXT_DIM))
-                    .child(
-                        svg()
-                            .path("icons/folder-open.svg")
-                            .size(px(14.))
-                            .text_color(rgb(TEXT_DIM)),
-                    )
-                    .hover(|button| {
-                        button
-                            .bg(rgb(BG_SIDEBAR))
-                            .text_color(rgb(TEXT))
-                            .cursor_pointer()
-                    })
-                    .tooltip(|window, cx| {
-                        gpui_component::tooltip::Tooltip::new(
-                            "Open the repo: a local checkout path or a git URL to clone",
+        let toolbar =
+            div()
+                .flex_none()
+                .px_3()
+                .py_2()
+                .flex()
+                .items_center()
+                .gap_2()
+                .border_b_1()
+                .border_color(theme::border())
+                .child(div().flex_1().min_w_0().child(self.fleet.repo_path.clone()))
+                .child(
+                    div()
+                        .id("fleet-open")
+                        .px_2()
+                        .py_1()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(theme::border())
+                        .text_color(theme::text_dim())
+                        .child(
+                            svg()
+                                .path("icons/folder-open.svg")
+                                .size(px(14.))
+                                .text_color(theme::text_dim()),
                         )
-                        .build(window, cx)
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| this.fleet_open_repo(cx))),
-            )
-            .child(
-                div()
-                    .id("fleet-refresh")
-                    .px_2()
-                    .py_1()
-                    .rounded(px(3.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(if loading { SUCCESS } else { TEXT_DIM }))
-                    .child(
-                        svg()
-                            .path("icons/refresh.svg")
-                            .size(px(14.))
-                            .text_color(rgb(if loading { SUCCESS } else { TEXT_DIM })),
-                    )
-                    .hover(|button| {
-                        button
-                            .bg(rgb(BG_SIDEBAR))
-                            .text_color(rgb(TEXT))
-                            .cursor_pointer()
-                    })
-                    .tooltip(|window, cx| {
-                        gpui_component::tooltip::Tooltip::new(
-                            "Refresh fleet status from the connected cluster",
-                        )
-                        .build(window, cx)
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| this.fleet_refresh(cx))),
-            );
+                        .hover(|button| {
+                            button
+                                .bg(theme::bg_sidebar())
+                                .text_color(theme::text())
+                                .cursor_pointer()
+                        })
+                        .tooltip(|window, cx| {
+                            gpui_component::tooltip::Tooltip::new(
+                                "Open the repo: a local checkout path or a git URL to clone",
+                            )
+                            .build(window, cx)
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.fleet_open_repo(cx))),
+                )
+                .child(
+                    div()
+                        .id("fleet-refresh")
+                        .px_2()
+                        .py_1()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(theme::border())
+                        .text_color(if loading {
+                            theme::success()
+                        } else {
+                            theme::text_dim()
+                        })
+                        .child(svg().path("icons/refresh.svg").size(px(14.)).text_color(
+                            if loading {
+                                theme::success()
+                            } else {
+                                theme::text_dim()
+                            },
+                        ))
+                        .hover(|button| {
+                            button
+                                .bg(theme::bg_sidebar())
+                                .text_color(theme::text())
+                                .cursor_pointer()
+                        })
+                        .tooltip(|window, cx| {
+                            gpui_component::tooltip::Tooltip::new(
+                                "Refresh fleet status from the connected cluster",
+                            )
+                            .build(window, cx)
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.fleet_refresh(cx))),
+                );
 
         // Second row: matrix controls, kept apart from the repo source.
         let hidden_count = self.fleet.hidden_databases.len();
@@ -1761,7 +1779,7 @@ impl Workspace {
             .items_center()
             .gap_2()
             .border_b_1()
-            .border_color(rgb(BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .id("fleet-db-filter")
@@ -1769,8 +1787,12 @@ impl Workspace {
                     .py_1()
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(if hidden_count > 0 { TEXT } else { TEXT_DIM }))
+                    .border_color(theme::border())
+                    .text_color(if hidden_count > 0 {
+                        theme::text()
+                    } else {
+                        theme::text_dim()
+                    })
                     .flex()
                     .items_center()
                     .gap_1()
@@ -1783,9 +1805,13 @@ impl Workspace {
                         svg()
                             .path("icons/chevron-down.svg")
                             .size(px(12.))
-                            .text_color(rgb(if hidden_count > 0 { TEXT } else { TEXT_DIM })),
+                            .text_color(if hidden_count > 0 {
+                                theme::text()
+                            } else {
+                                theme::text_dim()
+                            }),
                     )
-                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                    .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.fleet.filter_open = !this.fleet.filter_open;
                         this.fleet.cluster_open = false;
@@ -1850,8 +1876,8 @@ impl Workspace {
                         .py_1()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(BORDER))
-                        .text_color(rgb(TEXT_DIM))
+                        .border_color(theme::border())
+                        .text_color(theme::text_dim())
                         .flex()
                         .items_center()
                         .gap_1()
@@ -1863,9 +1889,9 @@ impl Workspace {
                             svg()
                                 .path("icons/chevron-down.svg")
                                 .size(px(12.))
-                                .text_color(rgb(TEXT_DIM)),
+                                .text_color(theme::text_dim()),
                         )
-                        .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                        .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.fleet.cluster_open = !this.fleet.cluster_open;
                             this.fleet.filter_open = false;
@@ -1883,7 +1909,11 @@ impl Workspace {
                     .justify_center()
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(rgb(if unlocked { DANGER } else { BORDER }))
+                    .border_color(if unlocked {
+                        theme::danger()
+                    } else {
+                        theme::border()
+                    })
                     .child(
                         svg()
                             .path(if unlocked {
@@ -1892,19 +1922,23 @@ impl Workspace {
                                 "icons/lock.svg"
                             })
                             .size(px(14.))
-                            .text_color(rgb(if unlocked { DANGER } else { TEXT_DIM }))
+                            .text_color(if unlocked {
+                                theme::danger()
+                            } else {
+                                theme::text_dim()
+                            })
                             .when(!unlocked, |icon| {
                                 icon.group_hover("fleet-write-unlock", |icon| {
-                                    icon.text_color(rgb(SUCCESS))
+                                    icon.text_color(theme::success())
                                 })
                             }),
                     )
                     .hover(|button| {
-                        let button = button.bg(rgb(BG_SIDEBAR)).cursor_pointer();
+                        let button = button.bg(theme::bg_sidebar()).cursor_pointer();
                         if unlocked {
                             button
                         } else {
-                            button.border_color(rgb(SUCCESS))
+                            button.border_color(theme::success())
                         }
                     })
                     .tooltip(move |window, cx| {
@@ -1929,10 +1963,10 @@ impl Workspace {
                         .py_1()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(ACCENT_PENDING))
-                        .text_color(rgb(ACCENT_PENDING))
+                        .border_color(theme::warning())
+                        .text_color(theme::warning())
                         .child("Upgrade all")
-                        .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                        .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.fleet_request_action(FleetAction::UpgradeAll, cx)
                         })),
@@ -1944,10 +1978,10 @@ impl Workspace {
             .h(px(ROW_HEIGHT))
             .flex()
             .items_center()
-            .bg(rgb(BG_SIDEBAR))
+            .bg(theme::bg_sidebar())
             .border_b_1()
-            .border_color(rgb(BORDER))
-            .text_color(rgb(TEXT_DIM))
+            .border_color(theme::border())
+            .text_color(theme::text_dim())
             .child(div().w(px(200.)).flex_none().px_2().child("database"))
             .child(div().w(px(70.)).flex_none().px_1().child("head"));
         for (index, (number, targeted)) in migrations.iter().enumerate() {
@@ -1985,10 +2019,14 @@ impl Workspace {
                     // scannable anyway.
                     .child(
                         div()
-                            .text_color(rgb(if applied_anywhere { TEXT_DIM } else { SUCCESS }))
+                            .text_color(if applied_anywhere {
+                                theme::text_dim()
+                            } else {
+                                theme::success()
+                            })
                             .child(label),
                     )
-                    .hover(|cell| cell.bg(rgb(HOVER)).cursor_pointer())
+                    .hover(|cell| cell.bg(theme::hover()).cursor_pointer())
                     .tooltip(move |window, cx| {
                         gpui_component::tooltip::Tooltip::new(if applied_anywhere {
                             "View migration (applied; read-only)"
@@ -2029,9 +2067,9 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .h(px(ROW_HEIGHT))
-                                .when(index % 2 == 1, |line| line.bg(rgb(ROW_STRIPE)))
-                                .when(is_selected, |line| line.bg(rgb(SELECTED)))
-                                .hover(|line| line.bg(rgb(ROW_HOVER)))
+                                .when(index % 2 == 1, |line| line.bg(theme::row_stripe()))
+                                .when(is_selected, |line| line.bg(theme::selected()))
+                                .hover(|line| line.bg(theme::row_hover()))
                                 .on_click({
                                     let database = row.database.clone();
                                     cx.listener(move |this: &mut Workspace, _, _, cx| {
@@ -2047,7 +2085,7 @@ impl Workspace {
                                         .overflow_hidden()
                                         .whitespace_nowrap()
                                         .when(row.excluded.is_some(), |name| {
-                                            name.text_color(rgb(TEXT_DIM))
+                                            name.text_color(theme::text_dim())
                                         })
                                         .child(row.database.clone()),
                                 )
@@ -2056,7 +2094,7 @@ impl Workspace {
                                         .w(px(70.))
                                         .flex_none()
                                         .px_1()
-                                        .text_color(rgb(TEXT_DIM))
+                                        .text_color(theme::text_dim())
                                         .child(
                                             row.head
                                                 .map(|head| format!("{head:05}"))
@@ -2065,18 +2103,18 @@ impl Workspace {
                                 );
                             for (number, targeted) in &migrations_for_rows {
                                 let (glyph, color) = match cell_for(row, *number, *targeted) {
-                                    Cell::Applied => ("●", SUCCESS),
-                                    Cell::Pending => ("○", ACCENT_PENDING),
-                                    Cell::Failed => ("✕", DANGER),
-                                    Cell::Customised => ("◆", ACCENT_CUSTOM),
-                                    Cell::NotApplicable => ("·", 0x3a3f4b),
+                                    Cell::Applied => ("●", theme::success()),
+                                    Cell::Pending => ("○", theme::warning()),
+                                    Cell::Failed => ("✕", theme::danger()),
+                                    Cell::Customised => ("◆", accent_custom()),
+                                    Cell::NotApplicable => ("·", gpui::rgb(0x3a3f4b).into()),
                                 };
                                 line = line.child(
                                     div()
                                         .w(px(64.))
                                         .flex_none()
                                         .text_center()
-                                        .text_color(rgb(color))
+                                        .text_color(color)
                                         .child(glyph),
                                 );
                             }
@@ -2101,15 +2139,15 @@ impl Workspace {
                                 String::new()
                             };
                             let state_color = if row.excluded.is_some() {
-                                TEXT_DIM
+                                theme::text_dim()
                             } else if !row.failed.is_empty() {
-                                DANGER
+                                theme::danger()
                             } else if matches!(drift, Some(count) if count > 0) {
-                                ACCENT_CUSTOM
+                                accent_custom()
                             } else if !row.pending.is_empty() {
-                                ACCENT_PENDING
+                                theme::warning()
                             } else {
-                                SUCCESS
+                                theme::success()
                             };
                             line.child(
                                 div()
@@ -2117,7 +2155,7 @@ impl Workspace {
                                     .px_2()
                                     .overflow_hidden()
                                     .whitespace_nowrap()
-                                    .text_color(rgb(state_color))
+                                    .text_color(state_color)
                                     .child(SharedString::from(state)),
                             )
                         })
@@ -2129,12 +2167,12 @@ impl Workspace {
         .flex_grow();
 
         let status_line = if let Some(error) = &self.fleet.fetch_error {
-            div().text_color(rgb(DANGER)).child(error.clone())
+            div().text_color(theme::danger()).child(error.clone())
         } else if let Some(error) = &self.fleet.repo_error {
-            div().text_color(rgb(DANGER)).child(error.clone())
+            div().text_color(theme::danger()).child(error.clone())
         } else if loading {
             div()
-                .text_color(rgb(TEXT_DIM))
+                .text_color(theme::text_dim())
                 .child("Loading fleet status...")
         } else if let Some(fetched_at) = self.fleet.fetched_at {
             let up_to_date = rows
@@ -2143,7 +2181,7 @@ impl Workspace {
                     row.excluded.is_none() && row.pending.is_empty() && row.failed.is_empty()
                 })
                 .count();
-            div().text_color(rgb(TEXT_DIM)).child(format!(
+            div().text_color(theme::text_dim()).child(format!(
                 "{} database(s), {} up to date, refreshed {}s ago",
                 rows.len(),
                 up_to_date,
@@ -2151,11 +2189,11 @@ impl Workspace {
             ))
         } else if self.fleet.repo.is_some() {
             div()
-                .text_color(rgb(TEXT_DIM))
+                .text_color(theme::text_dim())
                 .child("Repo open; connect and refresh to load fleet status")
         } else {
             div()
-                .text_color(rgb(TEXT_DIM))
+                .text_color(theme::text_dim())
                 .child("Open a migration repo to see the fleet")
         };
 
@@ -2170,8 +2208,8 @@ impl Workspace {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
+            .bg(theme::bg())
+            .text_color(theme::text())
             .text_sm()
             .child(toolbar)
             .child(controls)
@@ -2192,9 +2230,9 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .bg(rgb(BG_STATUS))
+                    .bg(theme::bg_status())
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(theme::border())
                     .text_xs()
                     .child(status_line)
                     .when_some(repo.as_ref(), |strip, repo| {
@@ -2208,15 +2246,15 @@ impl Workspace {
                                 .when_some(git, |chip, git| {
                                     chip.child(
                                         div()
-                                            .text_color(rgb(if stale {
-                                                ACCENT_PENDING
+                                            .text_color(if stale {
+                                                theme::warning()
                                             } else {
-                                                TEXT_DIM
-                                            }))
+                                                theme::text_dim()
+                                            })
                                             .child(git.summary()),
                                     )
                                 })
-                                .child(div().text_color(rgb(TEXT_DIM)).child(format!(
+                                .child(div().text_color(theme::text_dim()).child(format!(
                                     "{}  |  {} migration(s)  |  ClickHouse {}",
                                     repo.root
                                         .file_name()
@@ -2239,8 +2277,8 @@ impl Workspace {
                     .overflow_y_scroll()
                     .rounded(px(4.))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(BG_SIDEBAR))
+                    .border_color(theme::border())
+                    .bg(theme::bg_sidebar())
                     .p_1()
                     .flex()
                     .flex_col();
@@ -2250,13 +2288,13 @@ impl Workspace {
                         .px_2()
                         .py_1()
                         .rounded(px(3.))
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(theme::text_dim())
                         .child(if hidden_count > 0 {
                             "Show all"
                         } else {
                             "All shown"
                         })
-                        .hover(|item| item.bg(rgb(HOVER)).cursor_pointer())
+                        .hover(|item| item.bg(theme::hover()).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.fleet.hidden_databases.clear();
                             cx.notify();
@@ -2279,15 +2317,19 @@ impl Workspace {
                                     .size(px(12.))
                                     .rounded(px(2.))
                                     .border_1()
-                                    .border_color(rgb(BORDER))
-                                    .when(checked, |tick| tick.bg(rgb(SUCCESS))),
+                                    .border_color(theme::border())
+                                    .when(checked, |tick| tick.bg(theme::success())),
                             )
                             .child(
                                 div()
-                                    .text_color(rgb(if checked { TEXT } else { TEXT_DIM }))
+                                    .text_color(if checked {
+                                        theme::text()
+                                    } else {
+                                        theme::text_dim()
+                                    })
                                     .child(database.clone()),
                             )
-                            .hover(|item| item.bg(rgb(HOVER)).cursor_pointer())
+                            .hover(|item| item.bg(theme::hover()).cursor_pointer())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if !this.fleet.hidden_databases.remove(&database) {
                                     this.fleet.hidden_databases.insert(database.clone());
@@ -2309,8 +2351,8 @@ impl Workspace {
                     .overflow_y_scroll()
                     .rounded(px(4.))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(BG_SIDEBAR))
+                    .border_color(theme::border())
+                    .bg(theme::bg_sidebar())
                     .p_1()
                     .flex()
                     .flex_col();
@@ -2327,10 +2369,14 @@ impl Workspace {
                             .px_2()
                             .py_1()
                             .rounded(px(3.))
-                            .text_color(rgb(if selected { TEXT } else { TEXT_DIM }))
-                            .when(selected, |item| item.bg(rgb(SELECTED)))
+                            .text_color(if selected {
+                                theme::text()
+                            } else {
+                                theme::text_dim()
+                            })
+                            .when(selected, |item| item.bg(theme::selected()))
                             .child(label)
-                            .hover(|item| item.bg(rgb(HOVER)).cursor_pointer())
+                            .hover(|item| item.bg(theme::hover()).cursor_pointer())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.fleet.selected_cluster = option.clone();
                                 this.fleet.cluster_open = false;

@@ -2,6 +2,7 @@
 //! multi-million-row results scroll smoothly with flat memory. Started as
 //! the M2 spike; findings are in docs/devlog.md.
 
+use crate::theme;
 use gpui::Entity;
 use gpui::{
     actions, div, prelude::*, px, rgb, uniform_list, Action, App, ClipboardItem, Context,
@@ -13,11 +14,6 @@ use gpui_component::menu::ContextMenuExt as _;
 use gpui_component::Sizable as _;
 use std::collections::HashMap;
 use zedb_core::{ColumnMeta, Value};
-
-use crate::theme::{
-    BG, BG_SIDEBAR, BG_STATUS, BORDER, DATE_TINT, FILTER_BORDER, FILTER_TINT, HOVER, ROW_HOVER,
-    ROW_STRIPE, SELECTED, SORT_INDICATOR, TEXT, TEXT_DIM,
-};
 
 actions!(grid_spike, [Copy]);
 
@@ -528,13 +524,13 @@ impl GridSpike {
                     .items_center()
                     .gap_1()
                     .border_r_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(theme::border())
                     .when(is_filtered, |cell| {
-                        cell.border_1().border_color(rgb(FILTER_BORDER))
+                        cell.border_1().border_color(theme::filter_border())
                     })
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(theme::text_dim())
                     .cursor_pointer()
-                    .hover(|cell| cell.bg(rgb(ROW_HOVER)))
+                    .hover(|cell| cell.bg(theme::row_hover()))
                     .tooltip({
                         // Only this column's modifiers, with their overall
                         // sort priority preserved.
@@ -565,8 +561,8 @@ impl GridSpike {
                                 let mut card =
                                     div().flex().flex_col().gap_0p5().max_w(px(420.)).text_xs();
                                 if !sort.is_empty() {
-                                    card =
-                                        card.child(div().text_color(rgb(TEXT_DIM)).child("Sort"));
+                                    card = card
+                                        .child(div().text_color(theme::text_dim()).child("Sort"));
                                     for (index, column, ascending) in sort.iter() {
                                         let arrow =
                                             if *ascending { '\u{25b4}' } else { '\u{25be}' };
@@ -578,14 +574,15 @@ impl GridSpike {
                                         card = card.child(
                                             div()
                                                 .pl_2()
-                                                .text_color(rgb(SORT_INDICATOR))
+                                                .text_color(theme::sort_indicator())
                                                 .child(line),
                                         );
                                     }
                                 }
                                 if !filters.is_empty() {
-                                    card = card
-                                        .child(div().text_color(rgb(TEXT_DIM)).child("Filters"));
+                                    card = card.child(
+                                        div().text_color(theme::text_dim()).child("Filters"),
+                                    );
                                     for (_, conjunct) in &filters {
                                         card = card.child(
                                             // Wrap: the whole filter must
@@ -594,7 +591,7 @@ impl GridSpike {
                                             div()
                                                 .pl_2()
                                                 .max_w(px(400.))
-                                                .text_color(rgb(FILTER_TINT))
+                                                .text_color(theme::filter_tint())
                                                 .child(conjunct.clone()),
                                         );
                                     }
@@ -691,7 +688,7 @@ impl GridSpike {
                                 .flex_none()
                                 // Clear the resize handle on the right edge.
                                 .pr(px(6.))
-                                .text_color(rgb(SORT_INDICATOR))
+                                .text_color(theme::sort_indicator())
                                 .child(indicator),
                         )
                     })
@@ -748,9 +745,9 @@ impl GridSpike {
             .h(px(ROW_HEIGHT))
             .relative()
             .overflow_hidden()
-            .bg(rgb(BG_SIDEBAR))
+            .bg(theme::bg_sidebar())
             .border_b_1()
-            .border_color(rgb(BORDER))
+            .border_color(theme::border())
             .child(
                 div()
                     .flex()
@@ -769,8 +766,8 @@ impl GridSpike {
                         .flex()
                         .items_center()
                         .px_2()
-                        .bg(rgb(BG_SIDEBAR))
-                        .text_color(rgb(TEXT_DIM))
+                        .bg(theme::bg_sidebar())
+                        .text_color(theme::text_dim())
                         .child("running\u{2026}"),
                 )
             })
@@ -847,8 +844,8 @@ impl Render for GridSpike {
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .border_r_1()
-                                    .border_color(rgb(BORDER))
-                                    .when(is_null, |d| d.text_color(rgb(TEXT_DIM)).italic())
+                                    .border_color(theme::border())
+                                    .when(is_null, |d| d.text_color(theme::text_dim()).italic())
                                     .when(is_selected, |d| d.bg(rgb(0x2f5f8f)))
                                     .on_click(cx.listener(move |this: &mut GridSpike, _, _, cx| {
                                         this.selected = Some((row, col));
@@ -861,14 +858,14 @@ impl Render for GridSpike {
                                             .child(
                                                 div()
                                                     .flex_none()
-                                                    .text_color(rgb(DATE_TINT))
+                                                    .text_color(theme::date_tint())
                                                     .child(date),
                                             )
                                             .when(!time.is_empty(), |d| {
                                                 d.child(
                                                     div()
                                                         .flex_none()
-                                                        .text_color(rgb(TEXT_DIM))
+                                                        .text_color(theme::text_dim())
                                                         .child(time),
                                                 )
                                             }),
@@ -881,11 +878,11 @@ impl Render for GridSpike {
                             .h(px(ROW_HEIGHT))
                             .items_center()
                             .w(px(this.total_width()))
-                            .when(row % 2 == 1, |d| d.bg(rgb(ROW_STRIPE)))
+                            .when(row % 2 == 1, |d| d.bg(theme::row_stripe()))
                             .when(row + 1 == rows, |d| {
-                                d.border_b_1().border_color(rgb(BORDER))
+                                d.border_b_1().border_color(theme::border())
                             })
-                            .hover(|d| d.bg(rgb(ROW_HOVER)))
+                            .hover(|d| d.bg(theme::row_hover()))
                             .children(cells)
                     })
                     .collect()
@@ -914,11 +911,11 @@ impl Render for GridSpike {
             .flex()
             .items_center()
             .gap_3()
-            .bg(rgb(BG_STATUS))
+            .bg(theme::bg_status())
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(theme::border())
             .text_xs()
-            .text_color(rgb(TEXT_DIM))
+            .text_color(theme::text_dim())
             .child(fetch_status)
             .child(match self.selected {
                 Some((r, c)) => format!("selected {r}:{c} (cmd-c copies)"),
@@ -966,23 +963,23 @@ impl Render for GridSpike {
                 .flex_col()
                 .gap_1()
                 .rounded(px(4.))
-                .bg(rgb(BG_SIDEBAR))
+                .bg(theme::bg_sidebar())
                 .border_1()
-                .border_color(rgb(BORDER))
+                .border_color(theme::border())
                 .text_xs()
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .justify_between()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(theme::text_dim())
                         .child(format!("Filter {}", panel.column))
                         .child(
                             div()
                                 .id("filter-close")
                                 .px_1()
                                 .rounded(px(3.))
-                                .hover(|close| close.bg(rgb(HOVER)).cursor_pointer())
+                                .hover(|close| close.bg(theme::hover()).cursor_pointer())
                                 .child("\u{00d7}")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.filter_panel = None;
@@ -995,7 +992,7 @@ impl Render for GridSpike {
                     body = body.child(
                         div()
                             .py_1()
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(theme::text_dim())
                             .child("checking distinct values\u{2026}"),
                     );
                 }
@@ -1019,7 +1016,7 @@ impl Render for GridSpike {
                                 .px_1()
                                 .rounded(px(3.))
                                 .cursor_pointer()
-                                .hover(|row| row.bg(rgb(ROW_HOVER)))
+                                .hover(|row| row.bg(theme::row_hover()))
                                 .child(div().flex_none().child(glyph))
                                 .child(
                                     div()
@@ -1028,7 +1025,7 @@ impl Render for GridSpike {
                                         .overflow_hidden()
                                         .whitespace_nowrap()
                                         .when(is_null_row, |label| {
-                                            label.italic().text_color(rgb(TEXT_DIM))
+                                            label.italic().text_color(theme::text_dim())
                                         })
                                         .child(value),
                                 )
@@ -1067,9 +1064,12 @@ impl Render for GridSpike {
                             .px_2()
                             .py_0p5()
                             .rounded(px(3.))
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(theme::text_dim())
                             .hover(|button| {
-                                button.bg(rgb(HOVER)).text_color(rgb(TEXT)).cursor_pointer()
+                                button
+                                    .bg(theme::hover())
+                                    .text_color(theme::text())
+                                    .cursor_pointer()
                             })
                             .child("Clear")
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1089,8 +1089,8 @@ impl Render for GridSpike {
                             .px_2()
                             .py_0p5()
                             .rounded(px(3.))
-                            .bg(rgb(SELECTED))
-                            .text_color(rgb(TEXT))
+                            .bg(theme::selected())
+                            .text_color(theme::text())
                             .hover(|button| button.bg(rgb(0x37485f)).cursor_pointer())
                             .child("Apply")
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1105,8 +1105,8 @@ impl Render for GridSpike {
             .flex()
             .flex_col()
             .relative()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
+            .bg(theme::bg())
+            .text_color(theme::text())
             .text_sm()
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::copy_selected))

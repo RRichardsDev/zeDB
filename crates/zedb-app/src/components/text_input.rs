@@ -9,8 +9,6 @@ use gpui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::theme::{BG_STATUS, BORDER, TEXT, TEXT_DIM};
-
 actions!(
     text_input,
     [
@@ -461,7 +459,7 @@ impl Element for TextElement {
         let cursor_offset = input.cursor_offset();
         let style = window.text_style();
         let (text, color) = if input.content.is_empty() {
-            (input.placeholder.clone(), gpui::rgb(TEXT_DIM).into())
+            (input.placeholder.clone(), crate::theme::text_dim())
         } else if input.secret {
             ("*".repeat(input.content.len()).into(), style.color)
         } else {
@@ -592,10 +590,10 @@ impl Render for TextInput {
             .flex()
             .items_center()
             .overflow_hidden()
-            .bg(gpui::rgb(BG_STATUS))
+            .bg(crate::theme::bg_status())
             .border_1()
-            .border_color(gpui::rgb(BORDER))
-            .text_color(gpui::rgb(TEXT))
+            .border_color(crate::theme::border())
+            .text_color(crate::theme::text())
             .text_sm()
             .line_height(px(18.))
             .on_action(cx.listener(Self::backspace))

@@ -1,0 +1,54 @@
+{
+  "name": "zeDB",
+  "author": "zeDB",
+  "themes": [
+    {
+      "name": "zeDB Dark",
+      "mode": "dark",
+      "font.family": "Menlo",
+      "font.size": 14,
+      "mono_font.family": "Menlo",
+      "mono_font.size": 14,
+      "colors": {
+        "background": "#1e2227",
+        "foreground": "#aab2bd",
+        "border": "#33383f",
+        "input.border": "#33383f",
+        "sidebar.background": "#23272e",
+        "sidebar.border": "#33383f",
+        "sidebar.foreground": "#aab2bd",
+        "title_bar.background": "#23272e",
+        "title_bar.border": "#33383f",
+        "popover.background": "#23272e",
+        "popover.foreground": "#6b7380",
+        "accent.background": "#303640",
+        "accent.foreground": "#aab2bd",
+        "secondary.foreground": "#6b7380",
+        "muted.background": "#23272e",
+        "muted.foreground": "#6b7380",
+        "caret": "#9bb8d1",
+        "selection.background": "#3b5063",
+        "ring": "#6f8fac",
+        "list.hover.background": "#2a2f37",
+        "list.active.background": "#2c3a4d",
+        "list.even.background": "#21252b",
+        "table.hover.background": "#2a2f37",
+        "table.even.background": "#21252b",
+        "primary.background": "#2f6f9f",
+        "primary.hover.background": "#3884bd",
+        "danger.background": "#c4737b",
+        "success.background": "#76a981",
+        "warning.background": "#d7a65f"
+      }
+    },
+    {
+      "name": "zeDB Light",
+      "mode": "light",
+      "font.family": "Menlo",
+      "font.size": 14,
+      "mono_font.family": "Menlo",
+      "mono_font.size": 14,
+      "colors": {}
+    }
+  ]
+}

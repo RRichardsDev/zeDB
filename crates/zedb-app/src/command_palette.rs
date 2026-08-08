@@ -2,10 +2,10 @@
 //! Enter to run. Commands are a fixed list gated on current state, so
 //! the palette always tells the truth about what zeDB can do right now.
 
-use gpui::{div, prelude::*, px, rgb, Context, Entity, Focusable, Window};
+use gpui::{div, prelude::*, px, Context, Entity, Focusable, Window};
 
 use crate::components::text_input::TextInput;
-use crate::theme::{BG, BG_SIDEBAR, BORDER, SELECTED, TEXT, TEXT_DIM};
+use crate::theme;
 use crate::Workspace;
 
 pub struct PaletteState {
@@ -41,6 +41,9 @@ pub enum PaletteCommand {
     SyncSettingsNow,
     Disconnect,
     CheckForUpdates,
+    ThemeDark,
+    ThemeLight,
+    ThemeSystem,
 }
 
 const ALL_COMMANDS: &[PaletteCommand] = &[
@@ -53,6 +56,9 @@ const ALL_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand::SyncSettingsNow,
     PaletteCommand::Disconnect,
     PaletteCommand::CheckForUpdates,
+    PaletteCommand::ThemeDark,
+    PaletteCommand::ThemeLight,
+    PaletteCommand::ThemeSystem,
 ];
 
 impl PaletteCommand {
@@ -67,6 +73,9 @@ impl PaletteCommand {
             Self::SyncSettingsNow => "Sync settings now",
             Self::Disconnect => "Disconnect",
             Self::CheckForUpdates => "Check for updates",
+            Self::ThemeDark => "Theme: Dark",
+            Self::ThemeLight => "Theme: Light",
+            Self::ThemeSystem => "Theme: System",
         }
     }
 
@@ -89,6 +98,9 @@ impl PaletteCommand {
             Self::SyncSettingsNow => workspace.settings_sync_tick(cx),
             Self::Disconnect => workspace.disconnect(cx),
             Self::CheckForUpdates => workspace.check_for_updates_now(cx),
+            Self::ThemeDark => workspace.set_theme_preference("dark", window, cx),
+            Self::ThemeLight => workspace.set_theme_preference("light", window, cx),
+            Self::ThemeSystem => workspace.set_theme_preference("system", window, cx),
         }
     }
 }
@@ -208,8 +220,8 @@ impl Workspace {
                                 .flex_col()
                                 .rounded(px(6.))
                                 .border_1()
-                                .border_color(rgb(BORDER))
-                                .bg(rgb(BG))
+                                .border_color(theme::border())
+                                .bg(theme::bg())
                                 .shadow_lg()
                                 .on_mouse_down(
                                     gpui::MouseButton::Left,
@@ -219,7 +231,7 @@ impl Workspace {
                                     div()
                                         .p_2()
                                         .border_b_1()
-                                        .border_color(rgb(BORDER))
+                                        .border_color(theme::border())
                                         .child(self.palette.input.clone()),
                                 )
                                 .child(div().flex_1().min_h_0().overflow_hidden().children(
@@ -231,9 +243,13 @@ impl Workspace {
                                             .py_1p5()
                                             .flex()
                                             .items_center()
-                                            .text_color(rgb(TEXT))
-                                            .when(index == selected, |row| row.bg(rgb(SELECTED)))
-                                            .hover(|row| row.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                                            .text_color(theme::text())
+                                            .when(index == selected, |row| {
+                                                row.bg(theme::selected())
+                                            })
+                                            .hover(|row| {
+                                                row.bg(theme::bg_sidebar()).cursor_pointer()
+                                            })
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.palette_close(window, cx);
                                                 command.run(this, window, cx);
@@ -247,7 +263,7 @@ impl Workspace {
                                             .px_3()
                                             .py_2()
                                             .text_sm()
-                                            .text_color(rgb(TEXT_DIM))
+                                            .text_color(theme::text_dim())
                                             .child("No matching commands"),
                                     )
                                 }),

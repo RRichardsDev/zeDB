@@ -25,6 +25,10 @@ GitHub release notes.
 - system.* and INFORMATION_SCHEMA references no longer squiggle as
   unknown; the built-in databases exist everywhere even though the
   schema cache skips them.
+- Theme switching: Dark (unchanged), a first-draft Light, or System
+  (follows macOS appearance). Switch from Preferences or the command
+  palette; the choice lives in settings and syncs. Built on Zed-style
+  JSON theme configs, so custom themes become possible later.
 
 ## v0.1.9 - 2026-08-08
 

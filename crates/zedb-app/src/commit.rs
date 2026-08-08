@@ -8,11 +8,11 @@
 //! rewrites history; the user's normal git workflow is the escape
 //! hatch.
 
-use gpui::{div, prelude::*, px, rgb, Context, Entity, Window};
+use gpui::{div, prelude::*, px, Context, Entity, Window};
 use gpui_component::input::{Input, InputState};
 
 use crate::rt;
-use crate::theme::{BG, BG_SIDEBAR, BORDER, DANGER, HOVER, SUCCESS, TEXT, TEXT_DIM};
+use crate::theme;
 use crate::Workspace;
 
 /// Checkout paths a migration repo owns; only these are ever staged.
@@ -178,7 +178,7 @@ impl Workspace {
         if commit.include.is_empty() && committed.is_none() {
             body = body.child(
                 div()
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(theme::text_dim())
                     .child("No repo-owned changes to commit."),
             );
         } else if committed.is_none() {
@@ -186,25 +186,25 @@ impl Workspace {
                 .p_2()
                 .rounded(px(3.))
                 .border_1()
-                .border_color(rgb(BORDER))
+                .border_color(theme::border())
                 .text_xs()
                 .font_family("Menlo")
                 .flex()
                 .flex_col()
                 .gap_1();
             for path in &commit.include {
-                list = list.child(div().text_color(rgb(TEXT)).child(path.clone()));
+                list = list.child(div().text_color(theme::text()).child(path.clone()));
             }
             body = body
-                .child(div().text_color(rgb(TEXT_DIM)).child("Will commit:"))
+                .child(div().text_color(theme::text_dim()).child("Will commit:"))
                 .child(list)
                 .child(
                     div()
                         .flex_none()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(BORDER))
-                        .bg(rgb(BG))
+                        .border_color(theme::border())
+                        .bg(theme::bg())
                         .child(
                             Input::new(&commit.message)
                                 .appearance(false)
@@ -215,7 +215,7 @@ impl Workspace {
                 );
         }
         if !commit.others.is_empty() {
-            body = body.child(div().text_color(rgb(TEXT_DIM)).text_xs().child(format!(
+            body = body.child(div().text_color(theme::text_dim()).text_xs().child(format!(
                 "{} other changed path(s) in the checkout stay untouched: {}",
                 commit.others.len(),
                 commit.others.join(", ")
@@ -224,16 +224,16 @@ impl Workspace {
         if let Some(hash) = &committed {
             body = body.child(
                 div()
-                    .text_color(rgb(SUCCESS))
+                    .text_color(theme::success())
                     .child(format!("Committed {hash}. Push when ready.")),
             );
         }
         if let Some(error) = &commit.error {
-            body = body.child(div().text_color(rgb(DANGER)).child(error.clone()));
+            body = body.child(div().text_color(theme::danger()).child(error.clone()));
         }
         match &commit.push_result {
             Some(Ok(output)) => {
-                body = body.child(div().text_color(rgb(SUCCESS)).child(output.clone()));
+                body = body.child(div().text_color(theme::success()).child(output.clone()));
             }
             Some(Err(error)) => {
                 body = body.child(
@@ -241,8 +241,8 @@ impl Workspace {
                         .p_2()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(DANGER))
-                        .text_color(rgb(DANGER))
+                        .border_color(theme::danger())
+                        .text_color(theme::danger())
                         .text_xs()
                         .font_family("Menlo")
                         .child(error.clone()),
@@ -256,7 +256,7 @@ impl Workspace {
             .px_3()
             .py_2()
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(theme::border())
             .flex()
             .items_center()
             .gap_2()
@@ -268,10 +268,10 @@ impl Workspace {
                         .py_1()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(SUCCESS))
-                        .text_color(rgb(SUCCESS))
+                        .border_color(theme::success())
+                        .text_color(theme::success())
                         .child("Commit")
-                        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| this.commit_run(cx))),
                 )
             })
@@ -283,10 +283,18 @@ impl Workspace {
                         .py_1()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(if pushing { BORDER } else { SUCCESS }))
-                        .text_color(rgb(if pushing { TEXT_DIM } else { SUCCESS }))
+                        .border_color(if pushing {
+                            theme::border()
+                        } else {
+                            theme::success()
+                        })
+                        .text_color(if pushing {
+                            theme::text_dim()
+                        } else {
+                            theme::success()
+                        })
                         .child(if pushing { "Pushing..." } else { "Push" })
-                        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| this.commit_push(cx))),
                 )
             })
@@ -297,9 +305,9 @@ impl Workspace {
                     .px_3()
                     .py_1()
                     .rounded(px(3.))
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(theme::text_dim())
                     .child("Close")
-                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.commit = None;
                         cx.notify();
@@ -322,15 +330,15 @@ impl Workspace {
                         .flex_col()
                         .rounded(px(6.))
                         .border_1()
-                        .border_color(rgb(BORDER))
-                        .bg(rgb(BG_SIDEBAR))
+                        .border_color(theme::border())
+                        .bg(theme::bg_sidebar())
                         .child(
                             div()
                                 .flex_none()
                                 .px_3()
                                 .py_2()
                                 .border_b_1()
-                                .border_color(rgb(BORDER))
+                                .border_color(theme::border())
                                 .child("Commit and push"),
                         )
                         .child(body)

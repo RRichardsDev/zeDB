@@ -10,11 +10,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, px, rgb, Context};
+use gpui::{div, prelude::*, px, Context};
 use zedb_core::repo::MigrationRepo;
 
 use crate::rt;
-use crate::theme::{BG_SIDEBAR, BORDER, DANGER, HOVER, SUCCESS, TEXT, TEXT_DIM};
+use crate::theme;
 use crate::Workspace;
 
 /// One chain check's lifecycle in the modal.
@@ -237,22 +237,22 @@ impl Workspace {
             if regen.running {
                 body = body.child(
                     div()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(theme::text_dim())
                         .child("Replaying the chain through the pinned server..."),
                 );
             }
             if let Some(error) = &regen.error {
-                body = body.child(div().text_color(rgb(DANGER)).child(error.clone()));
+                body = body.child(div().text_color(theme::danger()).child(error.clone()));
             }
             if let Some((files, diff)) = &regen.result {
                 if diff.is_empty() {
-                    body = body.child(div().text_color(rgb(SUCCESS)).child(format!(
+                    body = body.child(div().text_color(theme::success()).child(format!(
                         "current-state is in sync ({} generated files); nothing to write",
                         files.len()
                     )));
                 } else {
                     writable = true;
-                    body = body.child(div().text_color(rgb(TEXT)).child(format!(
+                    body = body.child(div().text_color(theme::text()).child(format!(
                         "Writing would change {} of {} generated file(s):",
                         diff.len(),
                         files.len()
@@ -261,14 +261,14 @@ impl Workspace {
                         .p_2()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(theme::border())
                         .text_xs()
                         .font_family("Menlo")
                         .flex()
                         .flex_col()
                         .gap_1();
                     for line in diff {
-                        list = list.child(div().text_color(rgb(TEXT_DIM)).child(line.clone()));
+                        list = list.child(div().text_color(theme::text_dim()).child(line.clone()));
                     }
                     body = body.child(list);
                 }
@@ -280,12 +280,12 @@ impl Workspace {
                 let row = match slot {
                     CheckSlot::Running => row.child(
                         div()
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(theme::text_dim())
                             .child(format!("{name}: running...")),
                     ),
                     CheckSlot::Pass(summary) => row.child(
                         div()
-                            .text_color(rgb(SUCCESS))
+                            .text_color(theme::success())
                             .child(format!("{name}: {summary}")),
                     ),
                     CheckSlot::Fail(errors) => {
@@ -293,8 +293,8 @@ impl Workspace {
                             .p_2()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(rgb(DANGER))
-                            .text_color(rgb(DANGER))
+                            .border_color(theme::danger())
+                            .text_color(theme::danger())
                             .text_xs()
                             .font_family("Menlo")
                             .flex()
@@ -305,7 +305,7 @@ impl Workspace {
                         }
                         row.child(
                             div()
-                                .text_color(rgb(DANGER))
+                                .text_color(theme::danger())
                                 .child(format!("{name}: failed")),
                         )
                         .child(list)
@@ -320,7 +320,7 @@ impl Workspace {
             .px_3()
             .py_2()
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(theme::border())
             .flex()
             .items_center()
             .gap_2()
@@ -332,10 +332,10 @@ impl Workspace {
                         .py_1()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(SUCCESS))
-                        .text_color(rgb(SUCCESS))
+                        .border_color(theme::success())
+                        .text_color(theme::success())
                         .child("Write current-state")
-                        .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
                         .on_click(cx.listener(|this, _, _, cx| this.codegen_write(cx))),
                 )
             })
@@ -346,9 +346,9 @@ impl Workspace {
                     .px_3()
                     .py_1()
                     .rounded(px(3.))
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(theme::text_dim())
                     .child("Close")
-                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.regen = None;
                         this.checks = None;
@@ -372,15 +372,15 @@ impl Workspace {
                         .flex_col()
                         .rounded(px(6.))
                         .border_1()
-                        .border_color(rgb(BORDER))
-                        .bg(rgb(BG_SIDEBAR))
+                        .border_color(theme::border())
+                        .bg(theme::bg_sidebar())
                         .child(
                             div()
                                 .flex_none()
                                 .px_3()
                                 .py_2()
                                 .border_b_1()
-                                .border_color(rgb(BORDER))
+                                .border_color(theme::border())
                                 .child(title),
                         )
                         .child(body)

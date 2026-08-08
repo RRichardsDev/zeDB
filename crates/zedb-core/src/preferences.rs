@@ -23,6 +23,8 @@ pub struct Preferences {
     /// The most recently started agent (by display name); cmd-n in the
     /// agent pane reuses it.
     pub last_agent: Option<String>,
+    /// "dark" (default), "light", or "system".
+    pub theme: Option<String>,
     /// Settings-sync remote URL (Phase 3.4 M1). Machine-local: it is
     /// stripped from the sync payload itself.
     pub settings_sync_url: Option<String>,
@@ -115,6 +117,7 @@ mod tests {
             agent_always_allow: vec!["Claude Code|mcp__zedb__drift".into()],
             agent_pane_width: Some(480.0),
             last_agent: Some("Claude Code".into()),
+            theme: Some("dark".into()),
             settings_sync_url: Some("git@example.com:me/settings.git".into()),
             settings_sync_repo: Some("/tmp/sync".into()),
         };

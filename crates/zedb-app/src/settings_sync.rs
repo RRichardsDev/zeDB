@@ -8,13 +8,13 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui::{div, prelude::*, px, rgb, svg, Context, Entity};
+use gpui::{div, prelude::*, px, svg, Context, Entity};
 use zedb_core::{git, sync};
 
 use crate::components::text_input::TextInput;
 use crate::github;
 use crate::rt;
-use crate::theme::{BG_SIDEBAR, BORDER, DANGER, TEXT, TEXT_DIM};
+use crate::theme;
 use crate::Workspace;
 
 pub struct SettingsSyncState {
@@ -684,12 +684,12 @@ impl Workspace {
         let section = div()
             .py_3()
             .border_b_1()
-            .border_color(rgb(BORDER))
+            .border_color(theme::border())
             .flex()
             .flex_col()
             .gap_1()
             .child("Settings sync")
-            .child(div().text_sm().text_color(rgb(TEXT_DIM)).child(
+            .child(div().text_sm().text_color(theme::text_dim()).child(
                 "Preferences, connections, and custom agents in a git repo you own. \
                  Passwords never sync; they stay in this Mac's Keychain.",
             ));
@@ -697,7 +697,11 @@ impl Workspace {
             Some((status, warning)) => section.child(
                 div()
                     .text_sm()
-                    .text_color(rgb(if *warning { DANGER } else { TEXT_DIM }))
+                    .text_color(if *warning {
+                        theme::danger()
+                    } else {
+                        theme::text_dim()
+                    })
                     .child(status.clone()),
             ),
             None => section,
@@ -719,7 +723,7 @@ impl Workspace {
                             .flex_1()
                             .min_w_0()
                             .text_sm()
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(theme::text_dim())
                             .font_family("Menlo")
                             .child(url),
                     )
@@ -730,9 +734,9 @@ impl Workspace {
                             .py_1()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(rgb(BORDER))
-                            .text_color(rgb(TEXT))
-                            .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                            .border_color(theme::border())
+                            .text_color(theme::text())
+                            .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
                             .on_click(cx.listener(|this, _, _, cx| this.settings_sync_tick(cx)))
                             .child("Sync now"),
                     )
@@ -743,12 +747,12 @@ impl Workspace {
                             .py_1()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(rgb(BORDER))
-                            .text_color(rgb(TEXT_DIM))
+                            .border_color(theme::border())
+                            .text_color(theme::text_dim())
                             .hover(|button| {
                                 button
-                                    .bg(rgb(BG_SIDEBAR))
-                                    .text_color(rgb(TEXT))
+                                    .bg(theme::bg_sidebar())
+                                    .text_color(theme::text())
                                     .cursor_pointer()
                             })
                             .on_click(cx.listener(|this, _, _, cx| this.settings_sync_disable(cx)))
@@ -774,9 +778,9 @@ impl Workspace {
                             .py_1()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(rgb(BORDER))
-                            .text_color(rgb(TEXT))
-                            .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                            .border_color(theme::border())
+                            .text_color(theme::text())
+                            .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
                             .on_click(cx.listener(|this, _, _, cx| this.settings_sync_enable(cx)))
                             .child("Enable"),
                     )
@@ -790,15 +794,15 @@ impl Workspace {
                                     .py_1()
                                     .rounded(px(3.))
                                     .border_1()
-                                    .border_color(rgb(BORDER))
+                                    .border_color(theme::border())
                                     .flex()
                                     .items_center()
                                     .gap_2()
-                                    .text_color(rgb(TEXT_DIM))
+                                    .text_color(theme::text_dim())
                                     .hover(|button| {
                                         button
-                                            .bg(rgb(BG_SIDEBAR))
-                                            .text_color(rgb(TEXT))
+                                            .bg(theme::bg_sidebar())
+                                            .text_color(theme::text())
                                             .cursor_pointer()
                                     })
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -809,7 +813,7 @@ impl Workspace {
                                         svg()
                                             .path(provider.icon())
                                             .size(px(14.))
-                                            .text_color(rgb(TEXT)),
+                                            .text_color(theme::text()),
                                     )
                                     .child(provider.name()),
                             )
@@ -826,7 +830,7 @@ impl Workspace {
                             .gap_2()
                             .mt_2()
                             .text_sm()
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(theme::text_dim())
                             .child(
                                 div()
                                     .flex_1()
@@ -840,9 +844,9 @@ impl Workspace {
                                     .py_1()
                                     .rounded(px(3.))
                                     .border_1()
-                                    .border_color(rgb(BORDER))
-                                    .text_color(rgb(TEXT))
-                                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                                    .border_color(theme::border())
+                                    .text_color(theme::text())
+                                    .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.settings_sync_enable_url(switch_url.clone(), cx);
                                     }))
@@ -854,11 +858,11 @@ impl Workspace {
                                     .px_2()
                                     .py_0p5()
                                     .rounded(px(3.))
-                                    .text_color(rgb(TEXT_DIM))
+                                    .text_color(theme::text_dim())
                                     .hover(|button| {
                                         button
-                                            .bg(rgb(BG_SIDEBAR))
-                                            .text_color(rgb(TEXT))
+                                            .bg(theme::bg_sidebar())
+                                            .text_color(theme::text())
                                             .cursor_pointer()
                                     })
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -885,7 +889,7 @@ impl Workspace {
                                     .flex_1()
                                     .min_w_0()
                                     .text_sm()
-                                    .text_color(rgb(TEXT_DIM))
+                                    .text_color(theme::text_dim())
                                     .child(
                                         "Approve the temporary repo access at \
                                      https://github.com/login/device (opened in your browser). \
@@ -900,11 +904,11 @@ impl Workspace {
                                     .px_2()
                                     .py_1()
                                     .rounded(px(3.))
-                                    .text_color(rgb(TEXT_DIM))
+                                    .text_color(theme::text_dim())
                                     .hover(|button| {
                                         button
-                                            .bg(rgb(BG_SIDEBAR))
-                                            .text_color(rgb(TEXT))
+                                            .bg(theme::bg_sidebar())
+                                            .text_color(theme::text())
                                             .cursor_pointer()
                                     })
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -922,7 +926,7 @@ impl Workspace {
                     div()
                         .mt_2()
                         .text_sm()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(theme::text_dim())
                         .child(message.clone()),
                 ),
                 Some(Bootstrap::OfferLink { ssh_url }) => {
@@ -934,7 +938,7 @@ impl Workspace {
                             .gap_2()
                             .mt_2()
                             .text_sm()
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(theme::text_dim())
                             .child(div().flex_1().min_w_0().child(format!(
                                 "Looks like you already have zedb-settings ({ssh_url})."
                             )))
@@ -945,9 +949,9 @@ impl Workspace {
                                     .py_1()
                                     .rounded(px(3.))
                                     .border_1()
-                                    .border_color(rgb(BORDER))
-                                    .text_color(rgb(TEXT))
-                                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                                    .border_color(theme::border())
+                                    .text_color(theme::text())
+                                    .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.settings_sync.bootstrap = None;
                                         this.settings_sync_enable_url(link_url.clone(), cx);
@@ -960,11 +964,11 @@ impl Workspace {
                                     .px_2()
                                     .py_0p5()
                                     .rounded(px(3.))
-                                    .text_color(rgb(TEXT_DIM))
+                                    .text_color(theme::text_dim())
                                     .hover(|button| {
                                         button
-                                            .bg(rgb(BG_SIDEBAR))
-                                            .text_color(rgb(TEXT))
+                                            .bg(theme::bg_sidebar())
+                                            .text_color(theme::text())
                                             .cursor_pointer()
                                     })
                                     .on_click(cx.listener(|this, _, _, cx| {

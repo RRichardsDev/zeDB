@@ -9,15 +9,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, px, rgb, Context, Entity, Window};
+use gpui::{div, prelude::*, px, Context, Entity, Window};
 use gpui_component::input::{Input, InputState};
 use zedb_core::repo::{scaffold_migration, MigrationRepo, ScaffoldOptions};
 
 use crate::rt;
-use crate::theme::{BG, BG_SIDEBAR, BORDER, DANGER, HOVER, SUCCESS, TEXT, TEXT_DIM, WARNING};
+use crate::theme;
 use crate::Workspace;
-
-const WARN: u32 = WARNING;
 
 /// The rollback story a draft declares; NoFile means irreversible by
 /// omission (no rollback.sql at all).
@@ -456,12 +454,20 @@ impl Workspace {
                     .py_1()
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(rgb(if selected { TEXT } else { BORDER }))
-                    .text_color(rgb(if selected { TEXT } else { TEXT_DIM }))
+                    .border_color(if selected {
+                        theme::text()
+                    } else {
+                        theme::border()
+                    })
+                    .text_color(if selected {
+                        theme::text()
+                    } else {
+                        theme::text_dim()
+                    })
                     .child(option.label())
                     .when(!readonly, |button| {
                         button
-                            .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                            .hover(|button| button.bg(theme::hover()).cursor_pointer())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.author_set_rollback_choice(option, window, cx);
                             }))
@@ -475,14 +481,14 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_color(rgb(TEXT_DIM)).text_xs().child(label))
+                .child(div().text_color(theme::text_dim()).text_xs().child(label))
                 .child(
                     div()
                         .h(px(height))
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(BORDER))
-                        .bg(rgb(BG))
+                        .border_color(theme::border())
+                        .bg(theme::bg())
                         .child(
                             Input::new(state)
                                 .appearance(false)
@@ -509,10 +515,10 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().text_color(rgb(TEXT_DIM)).child("rollback:"))
+                    .child(div().text_color(theme::text_dim()).child("rollback:"))
                     .child(classes)
-                    .child(div().w(px(1.)).h(px(18.)).bg(rgb(BORDER)).mx_2())
-                    .child(div().text_color(rgb(TEXT_DIM)).child("scope:"))
+                    .child(div().w(px(1.)).h(px(18.)).bg(theme::border()).mx_2())
+                    .child(div().text_color(theme::text_dim()).child("scope:"))
                     .child(
                         div()
                             .id("author-targeted")
@@ -520,8 +526,16 @@ impl Workspace {
                             .py_1()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(rgb(if targeted { TEXT } else { BORDER }))
-                            .text_color(rgb(if targeted { TEXT } else { TEXT_DIM }))
+                            .border_color(if targeted {
+                                theme::text()
+                            } else {
+                                theme::border()
+                            })
+                            .text_color(if targeted {
+                                theme::text()
+                            } else {
+                                theme::text_dim()
+                            })
                             .child(if targeted {
                                 "targeted (opt-in)"
                             } else {
@@ -529,7 +543,7 @@ impl Workspace {
                             })
                             .when(!readonly, |button| {
                                 button
-                                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if let Some(author) = &mut this.author {
                                             author.targeted = !author.targeted;
@@ -540,7 +554,7 @@ impl Workspace {
                     ),
             )
             .when(editing_existing && !readonly && !status_known, |body| {
-                body.child(div().text_color(rgb(WARN)).text_xs().child(
+                body.child(div().text_color(theme::warning()).text_xs().child(
                     "No fleet status loaded; confirm this migration has never been \
                      applied anywhere before editing it.",
                 ))
@@ -551,7 +565,7 @@ impl Workspace {
         }
         if let Some(errors) = &check_errors {
             if errors.is_empty() {
-                body = body.child(div().text_color(rgb(SUCCESS)).child(if stale_check {
+                body = body.child(div().text_color(theme::success()).child(if stale_check {
                     "Checks passed, but the draft changed since; check again."
                 } else {
                     "Checks passed against the pinned server."
@@ -561,8 +575,8 @@ impl Workspace {
                     .p_2()
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(rgb(DANGER))
-                    .text_color(rgb(DANGER))
+                    .border_color(theme::danger())
+                    .text_color(theme::danger())
                     .text_xs()
                     .font_family("Menlo")
                     .flex()
@@ -580,7 +594,7 @@ impl Workspace {
             .px_3()
             .py_2()
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(theme::border())
             .flex()
             .items_center()
             .gap_2()
@@ -591,10 +605,10 @@ impl Workspace {
                     .py_1()
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(if checking { TEXT_DIM } else { TEXT }))
+                    .border_color(theme::border())
+                    .text_color(if checking { theme::text_dim() } else { theme::text() })
                     .child(if checking { "Checking..." } else { "Check" })
-                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| this.author_check(cx))),
             )
             .when(!readonly, |footer| {
@@ -605,12 +619,12 @@ impl Workspace {
                         .py_1()
                         .rounded(px(3.))
                         .border_1()
-                        .border_color(rgb(if saveable { SUCCESS } else { BORDER }))
-                        .text_color(rgb(if saveable { SUCCESS } else { TEXT_DIM }))
+                        .border_color(if saveable { theme::success() } else { theme::border() })
+                        .text_color(if saveable { theme::success() } else { theme::text_dim() })
                         .child("Save to repo")
                         .when(saveable, |button| {
                             button
-                                .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                                .hover(|button| button.bg(theme::hover()).cursor_pointer())
                                 .on_click(cx.listener(|this, _, _, cx| this.author_save(cx)))
                         })
                         .when(!saveable, |button| {
@@ -630,7 +644,7 @@ impl Workspace {
                     .px_3()
                     .py_1()
                     .rounded(px(3.))
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(theme::text_dim())
                     .child(if readonly {
                         "Close"
                     } else if editing_existing {
@@ -638,7 +652,7 @@ impl Workspace {
                     } else {
                         "Discard draft"
                     })
-                    .hover(|button| button.bg(rgb(HOVER)).cursor_pointer())
+                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.author = None;
                         cx.notify();
@@ -661,15 +675,15 @@ impl Workspace {
                         .flex_col()
                         .rounded(px(6.))
                         .border_1()
-                        .border_color(rgb(BORDER))
-                        .bg(rgb(BG_SIDEBAR))
+                        .border_color(theme::border())
+                        .bg(theme::bg_sidebar())
                         .child(
                             div()
                                 .flex_none()
                                 .px_3()
                                 .py_2()
                                 .border_b_1()
-                                .border_color(rgb(BORDER))
+                                .border_color(theme::border())
                                 .flex()
                                 .items_center()
                                 .justify_between()
@@ -680,7 +694,7 @@ impl Workspace {
                                 } else {
                                     format!("New migration {number:05}")
                                 })
-                                .child(div().text_color(rgb(WARN)).text_xs().child(if readonly {
+                                .child(div().text_color(theme::warning()).text_xs().child(if readonly {
                                     format!(
                                         "Applied on {applied_on} database(s); history is \
                                          immutable, so this is read-only"
