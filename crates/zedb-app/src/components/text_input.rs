@@ -175,6 +175,13 @@ impl TextInput {
     }
 
     fn on_mouse_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        // Double-click selects everything; these are short single-value
+        // fields where that beats word selection.
+        if event.click_count >= 2 {
+            self.move_to(0, cx);
+            self.select_to(self.content.len(), cx);
+            return;
+        }
         self.is_selecting = true;
         let index = self.index_for_mouse_position(event.position);
         if event.modifiers.shift {

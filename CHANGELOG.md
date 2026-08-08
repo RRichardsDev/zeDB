@@ -10,9 +10,12 @@ GitHub release notes.
 ## Unreleased
 
 - GitLab sign-in alongside GitHub: same device flow, ssh probe for an
-  existing zedb-settings project, and one-time elevated create. (The
-  GitLab OAuth app registration is pending; the button says so until
-  then.)
+  existing zedb-settings project, and one-time elevated create.
+  Switching providers unlinks a synced repo into the URL field and
+  offers a one-click switch when the new account has its own
+  zedb-settings.
+- Connection form fixes: Tab and shift-Tab move between the fields,
+  and double-clicking a field selects its whole value.
 
 ## v0.1.6 - 2026-08-08
 

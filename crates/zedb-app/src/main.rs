@@ -589,6 +589,16 @@ impl Workspace {
                         cx.stop_propagation();
                         return;
                     }
+                    // Tab cycles the connection form's fields.
+                    if event.keystroke.key == "tab"
+                        && this.form.is_some()
+                        && !event.keystroke.modifiers.platform
+                        && !event.keystroke.modifiers.control
+                    {
+                        this.form_tab(event.keystroke.modifiers.shift, window, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
                     // cmd-n with the agent pane open: new thread with the
                     // last-used agent.
                     if event.keystroke.modifiers.platform
@@ -2164,6 +2174,40 @@ impl Workspace {
         self.form = None;
         self.notice = Some(format!("Deleted {}", connection.name));
         self.settings_sync_tick(cx);
+        cx.notify();
+    }
+
+    /// The connection form's inputs in visual order, for tab cycling.
+    fn form_focus_order(&self) -> Vec<Entity<components::text_input::TextInput>> {
+        let Some(form) = &self.form else {
+            return Vec::new();
+        };
+        let mut order = vec![form.name.clone()];
+        for node in &form.nodes {
+            order.push(node.name.clone());
+            order.push(node.endpoint.clone());
+        }
+        order.push(form.user.clone());
+        order.push(form.database.clone());
+        order.push(form.password.clone());
+        order
+    }
+
+    /// Tab / shift-tab moves focus between the form's fields.
+    fn form_tab(&mut self, backwards: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let order = self.form_focus_order();
+        if order.is_empty() {
+            return;
+        }
+        let focused = order
+            .iter()
+            .position(|input| input.read(cx).focus_handle(cx).is_focused(window));
+        let next = match focused {
+            Some(index) if backwards => (index + order.len() - 1) % order.len(),
+            Some(index) => (index + 1) % order.len(),
+            None => 0,
+        };
+        window.focus(&order[next].read(cx).focus_handle(cx));
         cx.notify();
     }
 
