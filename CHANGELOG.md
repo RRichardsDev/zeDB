@@ -22,6 +22,9 @@ GitHub release notes.
   enable_http_compression=0 driver setting to opt a cluster out.
 - Schema sidebar tables show their on-disk size (B/KB/MB), small and
   right-aligned; refreshes with the schema cache.
+- system.* and INFORMATION_SCHEMA references no longer squiggle as
+  unknown; the built-in databases exist everywhere even though the
+  schema cache skips them.
 
 ## v0.1.9 - 2026-08-08
 

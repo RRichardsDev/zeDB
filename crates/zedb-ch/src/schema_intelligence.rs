@@ -575,6 +575,16 @@ fn resolve_bindings(
         let resolved_database =
             database.or_else(|| unique_object(snapshot, &object).map(|hit| hit.0.to_string()));
         if let Some(database) = &resolved_database {
+            // Built-in databases are excluded from the cache sweep, so
+            // the linter can't see inside them; they are real all the
+            // same and must never squiggle.
+            if matches!(
+                database.to_ascii_lowercase().as_str(),
+                "system" | "information_schema"
+            ) {
+                index = end;
+                continue;
+            }
             match snapshot.database(database) {
                 Some(cached_database) => {
                     if let Some(database_token) = database_token {
@@ -815,6 +825,20 @@ mod tests {
                 comment: "Primary event id".into(),
             },
         )])
+    }
+
+    #[test]
+    fn built_in_databases_never_squiggle() {
+        // The cache sweep excludes system and INFORMATION_SCHEMA, but
+        // they exist on every server.
+        let snapshot = snapshot(Some(columns()));
+        let issues = analyze_sql(
+            &snapshot,
+            Some("analytics"),
+            "SELECT database, name FROM system.tables \
+             JOIN INFORMATION_SCHEMA.tables i ON i.table_name = name",
+        );
+        assert!(issues.is_empty(), "{issues:?}");
     }
 
     #[test]
