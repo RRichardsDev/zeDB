@@ -120,10 +120,7 @@ jobs:
             notes="$notes Ad-hoc signed: Gatekeeper will block it on other machines until Developer ID signing secrets are configured."
           fi
           if [[ -n "$changelog" ]]; then
-            notes="$changelog
-
----
-$notes"
+            notes="$(printf '%s\n\n---\n%s' "$changelog" "$notes")"
           fi
           gh release create "$GITHUB_REF_NAME" \
             --title "zeDB $GITHUB_REF_NAME" \
