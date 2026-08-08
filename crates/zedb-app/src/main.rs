@@ -1079,6 +1079,7 @@ impl Workspace {
                         ));
                         this.notice_warning = false;
                         this.github = GithubAuth::SignedIn(profile);
+                        this.settings_sync_identity_changed(cx);
                     }
                     Ok(Err(error)) => {
                         this.github = GithubAuth::SignedOut;
@@ -1101,6 +1102,7 @@ impl Workspace {
         github::clear_token(provider);
         self.github_generation += 1;
         self.github = GithubAuth::SignedOut;
+        self.settings_sync_identity_changed(cx);
         self.notice = Some(format!(
             "Signed out of {} on this Mac; revoke zeDB under the {} application \
              settings if you want the grant gone too",

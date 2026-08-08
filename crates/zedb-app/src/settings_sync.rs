@@ -28,6 +28,9 @@ pub struct SettingsSyncState {
     pub bootstrap_generation: u64,
     /// Whether the one-shot probe for an existing zedb-settings repo ran.
     pub probed: bool,
+    /// The URL the probe prefilled, so an identity change can clear it
+    /// without touching anything the user typed themselves.
+    pub probed_url: Option<String>,
 }
 
 /// Where the repo bootstrap is. The elevated `repo`-scoped token lives
@@ -54,6 +57,7 @@ impl SettingsSyncState {
             bootstrap: None,
             bootstrap_generation: 0,
             probed: false,
+            probed_url: None,
         }
     }
 }
@@ -399,12 +403,28 @@ impl Workspace {
                     input.update(cx, |input, cx| input.set_text(url.clone(), cx));
                     this.settings_sync.status =
                         Some((format!("Found {url}; press Enable to link it"), false));
+                    this.settings_sync.probed_url = Some(url.clone());
                     cx.notify();
                 }
             })
             .ok();
         })
         .detach();
+    }
+
+    /// The signed-in identity changed (sign-in, sign-out, provider
+    /// switch): forget the old probe, clear a URL only if the probe put
+    /// it there, and probe again for the new identity.
+    pub(crate) fn settings_sync_identity_changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(prefilled) = self.settings_sync.probed_url.take() {
+            let input = self.settings_sync.url_input.clone();
+            if input.read(cx).text().trim() == prefilled {
+                input.update(cx, |input, cx| input.set_text("", cx));
+                self.settings_sync.status = None;
+            }
+        }
+        self.settings_sync.probed = false;
+        self.settings_sync_probe_existing(cx);
     }
 
     /// One-click GitHub bootstrap: a second device-flow approval grants
