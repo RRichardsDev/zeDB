@@ -699,16 +699,18 @@ impl Workspace {
                     .child(
                         div()
                             .flex()
-                            .items_center()
-                            .justify_between()
+                            .items_start()
+                            .gap_2()
                             .mt_2()
-                            .child(div().text_sm().text_color(rgb(TEXT_DIM)).child(
-                                "Approve the temporary repo access at \
-                                 https://github.com/login/device (opened in your browser). \
-                                 It's on your clipboard; click the code to copy it again. \
-                                 The access is used once to find or create the repo and \
-                                 is never kept.",
-                            ))
+                            .child(
+                                div().flex_1().min_w_0().text_sm().text_color(rgb(TEXT_DIM)).child(
+                                    "Approve the temporary repo access at \
+                                     https://github.com/login/device (opened in your browser). \
+                                     It's on your clipboard; click the code to copy it again. \
+                                     The access is used once to find or create the repo and \
+                                     is never kept.",
+                                ),
+                            )
                             .child(
                                 div()
                                     .id("bootstrap-cancel")
