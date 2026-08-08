@@ -746,6 +746,7 @@ mod tests {
         let cache = SchemaCache::open(&path).unwrap();
         cache
             .publish_tables(vec![TableRecord {
+                total_bytes: None,
                 database: "analytics".into(),
                 name: "events".into(),
                 engine: "MergeTree".into(),

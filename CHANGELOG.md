@@ -20,6 +20,8 @@ GitHub release notes.
 - Query results transfer compressed (zstd/gzip negotiated over HTTP),
   typically several times less data on large result sets. Add an
   enable_http_compression=0 driver setting to opt a cluster out.
+- Schema sidebar tables show their on-disk size (B/KB/MB), small and
+  right-aligned; refreshes with the schema cache.
 
 ## v0.1.9 - 2026-08-08
 

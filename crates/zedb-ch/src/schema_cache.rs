@@ -58,6 +58,8 @@ pub struct CachedObject {
     pub engine: String,
     pub kind: CachedObjectKind,
     pub total_rows: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub comment: String,
     /// `None` means columns have not been fetched, not that the object has no
@@ -124,6 +126,7 @@ pub struct TableRecord {
     pub engine: String,
     pub kind: CachedObjectKind,
     pub total_rows: Option<u64>,
+    pub total_bytes: Option<u64>,
     pub comment: String,
 }
 
@@ -226,6 +229,7 @@ impl SchemaCache {
                     engine: record.engine,
                     kind: record.kind,
                     total_rows: record.total_rows,
+                    total_bytes: record.total_bytes,
                     comment: record.comment,
                     columns: old_object.and_then(|object| object.columns.clone()),
                 },
@@ -393,6 +397,7 @@ mod tests {
         (0..databases)
             .flat_map(|database| {
                 (0..objects).map(move |object| TableRecord {
+                    total_bytes: None,
                     database: format!("db_{database:04}"),
                     name: format!("table_{object:03}"),
                     engine: "MergeTree".into(),

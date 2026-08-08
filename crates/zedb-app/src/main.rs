@@ -314,7 +314,7 @@ fn schema_object_from_cache(object: &zedb_ch::schema_cache::CachedObject) -> Sch
             CachedObjectKind::Dictionary => SchemaObjectKind::Dictionary,
         },
         total_rows: object.total_rows,
-        total_bytes: None,
+        total_bytes: object.total_bytes,
     }
 }
 
@@ -1887,6 +1887,15 @@ impl Workspace {
                                     .text_color(rgb(TEXT))
                                     .child(object.name),
                             )
+                            .when_some(object.total_bytes, |row, bytes| {
+                                row.child(
+                                    div()
+                                        .flex_none()
+                                        .text_xs()
+                                        .text_color(rgb(TEXT_DIM))
+                                        .child(Self::format_bytes(bytes)),
+                                )
+                            })
                     })
                     .collect::<Vec<_>>();
 

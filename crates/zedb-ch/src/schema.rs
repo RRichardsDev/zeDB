@@ -63,7 +63,7 @@ impl ChClient {
                     multiIf(engine = 'View', 'view', \
                             engine = 'MaterializedView', 'materialized_view', \
                             engine = 'Dictionary', 'dictionary', 'table') AS kind, \
-                    total_rows, comment \
+                    total_rows, total_bytes, comment \
                  FROM system.tables \
                  WHERE database NOT IN ('INFORMATION_SCHEMA', 'information_schema', 'system') \
                  ORDER BY database, name",
@@ -167,7 +167,8 @@ fn parse_cache_tables(result: QueryResult) -> Result<Vec<TableRecord>> {
                 engine: string_at(&row, 2, "schema object engine")?,
                 kind,
                 total_rows: optional_u64_at(&row, 4, "schema object row count")?,
-                comment: string_at(&row, 5, "schema object comment")?,
+                total_bytes: optional_u64_at(&row, 5, "schema object byte count")?,
+                comment: string_at(&row, 6, "schema object comment")?,
             })
         })
         .collect()

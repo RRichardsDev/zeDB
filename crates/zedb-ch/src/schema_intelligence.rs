@@ -791,6 +791,7 @@ mod tests {
                 objects: HashMap::from([(
                     "events".into(),
                     CachedObject {
+                        total_bytes: None,
                         name: "events".into(),
                         engine: "MergeTree".into(),
                         kind: CachedObjectKind::Table,
