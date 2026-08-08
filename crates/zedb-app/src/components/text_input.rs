@@ -558,8 +558,12 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
+        // Selection is a focus artifact: an unfocused box showing a stale
+        // highlight reads as two selections at once.
         if let Some(selection) = state.selection.take() {
-            window.paint_quad(selection);
+            if focus.is_focused(window) {
+                window.paint_quad(selection);
+            }
         }
         let line = state.line.take().expect("text line");
         line.paint(bounds.origin, window.line_height(), window, cx)
