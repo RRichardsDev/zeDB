@@ -415,6 +415,8 @@ struct Workspace {
     query_abort: Option<AbortHandle>,
     /// The latest header-driven rewrite awaiting its debounced re-run.
     rerun_pending: Option<String>,
+    /// Last window-refocus health/update check, for debounce.
+    last_focus_check: Option<Instant>,
     rerun_generation: u64,
     query_error_decision: Option<tokio::sync::oneshot::Sender<bool>>,
     query_run_id: u64,
@@ -463,6 +465,23 @@ impl Workspace {
                 .ok();
             }
             Timer::after(Duration::from_secs(300)).await;
+        })
+        .detach();
+        // Coming back to the window re-checks cluster health and
+        // updates, debounced so focus flapping stays quiet.
+        cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() {
+                return;
+            }
+            let now = Instant::now();
+            if this
+                .last_focus_check
+                .is_some_and(|last| now.duration_since(last) < Duration::from_secs(30))
+            {
+                return;
+            }
+            this.last_focus_check = Some(now);
+            this.focus_recheck(cx);
         })
         .detach();
         let schema_filter = Self::input("", "Filter schema", false, cx);
@@ -576,6 +595,7 @@ impl Workspace {
                 health_poll_generation: 0,
                 query_abort: None,
                 rerun_pending: None,
+                last_focus_check: None,
                 rerun_generation: 0,
                 query_error_decision: None,
                 query_run_id: 0,
@@ -632,6 +652,7 @@ impl Workspace {
                 health_poll_generation: 0,
                 query_abort: None,
                 rerun_pending: None,
+                last_focus_check: None,
                 rerun_generation: 0,
                 query_error_decision: None,
                 query_run_id: 0,
@@ -2114,6 +2135,87 @@ impl Workspace {
     /// Health poll: every five minutes run SELECT 1 through the active
     /// node; on failure flip to disconnected and mark the node unhealthy,
     /// so the next query attempt gets the usual connect-first warning.
+    /// One quiet health probe plus update check, run on window refocus.
+    fn focus_recheck(&mut self, cx: &mut Context<Self>) {
+        // Update check: same quiet path as the periodic loop.
+        let update_handle = rt::tokio().spawn(updates::check());
+        cx.spawn(async move |this, cx| {
+            let update = update_handle.await.ok().flatten();
+            if let Some(update) = update {
+                this.update(cx, |this, cx| {
+                    let fresh = this
+                        .update_available
+                        .as_ref()
+                        .map(|current| current.version != update.version)
+                        .unwrap_or(true);
+                    if fresh && this.update_phase == UpdatePhase::Available {
+                        this.update_available = Some(update);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
+
+        // Health probe: one shot of the poll's body; a dead connection
+        // disconnects exactly like the poll would.
+        let Some(connected) = &self.connected else {
+            return;
+        };
+        let config = connected.client_config.clone();
+        let name = connected.name.clone();
+        let node_index = connected.active_node;
+        let schema_cache = self.schema_cache.clone();
+        let generation = self.health_poll_generation;
+        cx.spawn(async move |this, cx| {
+            let healthy = rt::tokio()
+                .spawn(async move {
+                    let client = ChClient::new(config);
+                    if client.query("SELECT 1").await.is_err() {
+                        return false;
+                    }
+                    if let Some(cache) = schema_cache {
+                        let _ = cache.refresh_tables(&client).await;
+                    }
+                    true
+                })
+                .await
+                .unwrap_or(false);
+            if healthy {
+                return;
+            }
+            this.update(cx, |this, cx| {
+                if this.health_poll_generation != generation {
+                    return;
+                }
+                let still_here = this
+                    .connected
+                    .as_ref()
+                    .is_some_and(|connected| connected.name == name);
+                if !still_here {
+                    return;
+                }
+                this.connected = None;
+                this.schema_cache = None;
+                this.schema_provider.set_context(None, None);
+                this.fleet.write_unlocked = false;
+                if let Some(health) = this.endpoint_health.get_mut(&name) {
+                    if let Some(node) = health.iter_mut().find(|node| node.node_index == node_index)
+                    {
+                        node.reachable = false;
+                    }
+                }
+                this.flash_warning(
+                    format!("Lost connection to {name}; the node stopped answering"),
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn start_health_poll(&mut self, cx: &mut Context<Self>) {
         self.health_poll_generation += 1;
         let generation = self.health_poll_generation;
