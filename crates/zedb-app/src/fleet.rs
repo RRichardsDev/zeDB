@@ -1663,6 +1663,7 @@ impl Workspace {
             .items_center()
             .justify_center()
             .bg(gpui::rgba(0x000000aa))
+            .occlude()
             .child(card)
             .into_any_element()
     }

@@ -322,6 +322,7 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .bg(gpui::rgba(0x00000088))
+                .occlude()
                 .child(
                     div()
                         .w(px(600.))

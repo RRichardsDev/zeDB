@@ -29,6 +29,9 @@ GitHub release notes.
   (follows macOS appearance). Switch from Preferences or the command
   palette; the choice lives in settings and syncs. Built on Zed-style
   JSON theme configs, so custom themes become possible later.
+- Modal panels (new migration, commit, delete confirm, about, regen
+  checks) block clicks to the view behind them; migration headers can
+  no longer be clicked through the authoring window.
 - Light-mode fixes from first use: tier and WRITE badges get light
   tints, primary buttons keep readable text, and the completion popup
   no longer crashes on qualified names (table.x) whose match is
