@@ -116,6 +116,35 @@ impl ChClient {
         parse_schema_objects(result)
     }
 
+    /// Summed size and rows of a sharded table: one replica per shard
+    /// via the cluster() table function. Distributed tables report no
+    /// storage of their own; this is the honest fleet-wide number.
+    pub async fn distributed_totals(
+        &self,
+        cluster: &str,
+        database: &str,
+        table: &str,
+    ) -> Result<(Option<u64>, Option<u64>)> {
+        let cluster = escape_string(cluster);
+        let database = escape_string(database);
+        let table = escape_string(table);
+        let result = self
+            .query(&format!(
+                "SELECT sum(total_bytes), sum(total_rows)                  FROM cluster('{cluster}', system.tables)                  WHERE database = '{database}' AND name = '{table}'"
+            ))
+            .await?;
+        let number = |value: Option<&Value>| match value {
+            Some(Value::UInt(number)) => Some(*number),
+            Some(Value::Int(number)) => Some(*number as u64),
+            _ => None,
+        };
+        let row = result.rows.first();
+        Ok((
+            number(row.and_then(|row| row.first())),
+            number(row.and_then(|row| row.get(1))),
+        ))
+    }
+
     pub async fn list_columns(&self, database: &str, object: &str) -> Result<Vec<ColumnInfo>> {
         let database = escape_string(database);
         let object = escape_string(object);
@@ -298,10 +327,9 @@ fn optional_u64_at(row: &[Value], index: usize, label: &str) -> Result<Option<u6
     }
 }
 
-/// The sharding expression of a Distributed engine definition:
-/// `Distributed(cluster, database, table[, sharding_key[, policy]])`.
-/// Returns `None` for non-Distributed engines or the 3-argument form.
-pub fn distributed_sharding_key(engine_full: &str) -> Option<String> {
+/// The comma-split top-level arguments of a Distributed engine
+/// definition: `Distributed(cluster, database, table[, key[, policy]])`.
+fn distributed_args(engine_full: &str) -> Option<Vec<String>> {
     let start = engine_full.find("Distributed(")? + "Distributed(".len();
     let rest = &engine_full[start..];
     let mut depth = 0usize;
@@ -321,10 +349,7 @@ pub fn distributed_sharding_key(engine_full: &str) -> Option<String> {
             ')' if !in_string => {
                 if depth == 0 {
                     args.push(current.trim().to_string());
-                    let key = args.get(3)?.clone();
-                    // A quoted fourth argument is a storage policy, not
-                    // a sharding expression.
-                    return (!key.is_empty() && !key.starts_with('\'')).then_some(key);
+                    return Some(args);
                 }
                 depth -= 1;
                 current.push(ch);
@@ -337,6 +362,30 @@ pub fn distributed_sharding_key(engine_full: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn unquote(argument: &str) -> String {
+    argument.trim().trim_matches('\'').to_string()
+}
+
+/// The sharding expression of a Distributed engine definition.
+/// Returns `None` for non-Distributed engines or the 3-argument form.
+pub fn distributed_sharding_key(engine_full: &str) -> Option<String> {
+    let args = distributed_args(engine_full)?;
+    let key = args.get(3)?.clone();
+    // A quoted fourth argument is a storage policy, not a sharding
+    // expression.
+    (!key.is_empty() && !key.starts_with('\'')).then_some(key)
+}
+
+/// The (cluster, database, local table) a Distributed engine scatters
+/// over.
+pub fn distributed_target(engine_full: &str) -> Option<(String, String, String)> {
+    let args = distributed_args(engine_full)?;
+    if args.len() < 3 {
+        return None;
+    }
+    Some((unquote(&args[0]), unquote(&args[1]), unquote(&args[2])))
 }
 
 #[cfg(test)]

@@ -19,6 +19,11 @@ GitHub release notes.
 - Distributed tables show their sharding key in the object overview,
   parsed from the engine definition, and wear a DT glyph in the
   schema sidebar (alongside T/V/MV/D).
+- Distributed tables get a real size and row count: the local table
+  summed across shards (one replica per shard via the cluster()
+  function), shown in parentheses with a "virtual" tooltip since the
+  number is derived, not stored. Plain views stay sizeless; a
+  materialized view's data belongs to its target table.
 
 ## v0.1.11 - 2026-08-08
 

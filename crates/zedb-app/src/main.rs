@@ -1946,6 +1946,7 @@ impl Workspace {
                             selected == Some((database_name.as_str(), object.name.as_str()));
                         let row_database = database_name.clone();
                         let row_object = object.clone();
+                        let size_id = database_index.saturating_mul(100_000) + object_index;
                         div()
                             .id((
                                 "schema-object",
@@ -1999,13 +2000,32 @@ impl Workspace {
                                     .child(object.name),
                             )
                             .when_some(object.total_bytes, |row, bytes| {
-                                row.child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(px(9.))
-                                        .text_color(theme::text_dim())
-                                        .child(Self::format_bytes(bytes)),
-                                )
+                                // Parentheses mark a derived number: a
+                                // Distributed table's size is its local
+                                // table summed across shards.
+                                let distributed = object.engine == "Distributed";
+                                let text = if distributed {
+                                    format!("({})", Self::format_bytes(bytes))
+                                } else {
+                                    Self::format_bytes(bytes)
+                                };
+                                let size = div()
+                                    .flex_none()
+                                    .text_size(px(9.))
+                                    .text_color(theme::text_dim())
+                                    .child(text);
+                                row.child(if distributed {
+                                    size.id(("schema-object-size", size_id))
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(
+                                                "Virtual: the local table summed across shards",
+                                            )
+                                            .build(window, cx)
+                                        })
+                                        .into_any_element()
+                                } else {
+                                    size.into_any_element()
+                                })
                             })
                     })
                     .collect::<Vec<_>>();
@@ -5692,17 +5712,29 @@ impl Workspace {
                                 )
                             })
                             .when_some(selected.object.total_bytes, |row, bytes| {
-                                row.child(
-                                    div()
-                                        .flex()
-                                        .gap_1()
-                                        .child(div().text_color(theme::text()).child("Size:"))
-                                        .child(
-                                            div()
-                                                .text_color(theme::text_dim())
-                                                .child(Self::format_bytes(bytes)),
-                                        ),
-                                )
+                                let distributed = selected.object.engine == "Distributed";
+                                let text = if distributed {
+                                    format!("({})", Self::format_bytes(bytes))
+                                } else {
+                                    Self::format_bytes(bytes)
+                                };
+                                let size = div()
+                                    .flex()
+                                    .gap_1()
+                                    .child(div().text_color(theme::text()).child("Size:"))
+                                    .child(div().text_color(theme::text_dim()).child(text));
+                                row.child(if distributed {
+                                    size.id("object-size-virtual")
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(
+                                                "Virtual: the local table summed across shards",
+                                            )
+                                            .build(window, cx)
+                                        })
+                                        .into_any_element()
+                                } else {
+                                    size.into_any_element()
+                                })
                             }),
                     ),
             )

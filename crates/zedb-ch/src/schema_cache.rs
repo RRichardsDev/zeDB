@@ -298,7 +298,38 @@ impl SchemaCache {
     }
 
     pub async fn refresh_tables(&self, client: &ChClient) -> Result<()> {
-        let records = client.list_schema_cache_tables().await?;
+        let mut records = client.list_schema_cache_tables().await?;
+        // Distributed tables report no storage of their own; sum the
+        // underlying local table across shards (best effort: a partly
+        // unreachable cluster just leaves the totals empty).
+        let distributed: Vec<(String, String)> = records
+            .iter()
+            .filter(|record| record.engine == "Distributed")
+            .map(|record| (record.database.clone(), record.name.clone()))
+            .collect();
+        for (database, name) in distributed {
+            let Ok(details) = client.object_details(&database, &name).await else {
+                continue;
+            };
+            let Some((cluster, local_db, local_table)) =
+                crate::schema::distributed_target(&details.engine_full)
+            else {
+                continue;
+            };
+            let Ok((bytes, rows)) = client
+                .distributed_totals(&cluster, &local_db, &local_table)
+                .await
+            else {
+                continue;
+            };
+            if let Some(record) = records
+                .iter_mut()
+                .find(|record| record.database == database && record.name == name)
+            {
+                record.total_bytes = bytes;
+                record.total_rows = rows;
+            }
+        }
         self.publish_tables(records)
             .map_err(|error| ChError::Decode(format!("could not persist schema cache: {error}")))?;
         Ok(())
