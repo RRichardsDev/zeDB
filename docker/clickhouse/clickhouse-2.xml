@@ -7,6 +7,23 @@
                 <replica><host>clickhouse-2</host><port>9000</port></replica>
             </shard>
         </zedb_cluster>
+        <!-- Same two nodes as two shards of one replica each: the
+             Phase 5 sharding-awareness dev target. Both clusters
+             coexist; Replicated tables keep using zedb_cluster. -->
+        <zedb_sharded>
+            <shard>
+                <replica>
+                    <host>clickhouse-1</host><port>9000</port>
+                    <user>zedb</user><password>zedb</password>
+                </replica>
+            </shard>
+            <shard>
+                <replica>
+                    <host>clickhouse-2</host><port>9000</port>
+                    <user>zedb</user><password>zedb</password>
+                </replica>
+            </shard>
+        </zedb_sharded>
     </remote_servers>
     <zookeeper>
         <node index="1"><host>keeper-1</host><port>9181</port></node>
