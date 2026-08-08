@@ -135,11 +135,11 @@ impl Workspace {
     pub(crate) fn palette_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette.open = false;
         // Focus must land somewhere live, or the window loses its key
-        // dispatch path and every shortcut goes dead.
-        if let Some(previous) = self.palette.previous_focus.take() {
-            window.focus(&previous);
-        } else if let Some(tab) = self.query_tabs.get(self.active_query_tab) {
-            window.focus(&tab.editor.read(cx).focus_handle(cx));
+        // dispatch path and every shortcut goes dead. Never focus a
+        // maybe-unrendered element; no focus at all is a working state.
+        match self.palette.previous_focus.take() {
+            Some(previous) => window.focus(&previous),
+            None => window.blur(),
         }
         cx.notify();
     }

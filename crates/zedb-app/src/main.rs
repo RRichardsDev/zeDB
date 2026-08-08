@@ -541,6 +541,18 @@ impl Workspace {
         cx.intercept_keystrokes(move |event, window, cx| {
             if let Some(workspace) = workspace.upgrade() {
                 workspace.update(cx, |this, cx| {
+                    // The palette chord is handled here, not via action
+                    // dispatch: key equivalents die whenever the window
+                    // has no live focus path, and this interceptor is the
+                    // one place that provably sees every keystroke.
+                    if event.keystroke.modifiers.platform
+                        && event.keystroke.modifiers.shift
+                        && event.keystroke.key == "p"
+                    {
+                        this.palette_toggle(window, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
                     // Palette keys come first: it floats above everything
                     // and its input must not feed vim or the editors.
                     if this.palette.open {
@@ -6219,7 +6231,6 @@ fn main() {
             KeyBinding::new("cmd-enter", RunQuery, None),
             KeyBinding::new("ctrl-x", RunSelection, None),
             KeyBinding::new("cmd-,", OpenPreferences, None),
-            KeyBinding::new("cmd-shift-p", OpenCommandPalette, None),
             KeyBinding::new("cmd-i", ToggleAgentPane, None),
             // In multi-line inputs the composer sends on plain enter;
             // shift-enter keeps inserting a newline via the secondary
