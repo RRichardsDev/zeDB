@@ -1029,6 +1029,58 @@ impl Workspace {
         cx.notify();
     }
 
+    /// GitHub-style per-character boxes for a device code; clicking
+    /// re-copies the code to the clipboard.
+    pub(crate) fn device_code_boxes(
+        &self,
+        user_code: String,
+        id: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .cursor_pointer()
+            .hover(|boxes| boxes.opacity(0.85))
+            .on_click({
+                let code = user_code.clone();
+                cx.listener(move |this, _, _, cx| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(code.clone()));
+                    this.notice = Some("Code copied to the clipboard".into());
+                    this.notice_warning = false;
+                    cx.notify();
+                })
+            })
+            .children(user_code.chars().map(|character| {
+                if character == '-' {
+                    div()
+                        .px_1()
+                        .text_color(rgb(TEXT_DIM))
+                        .child("-")
+                        .into_any_element()
+                } else {
+                    div()
+                        .w(px(38.))
+                        .h(px(46.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .bg(rgb(BG_SIDEBAR))
+                        .text_xl()
+                        .font_family("Menlo")
+                        .text_color(rgb(TEXT))
+                        .child(String::from(character))
+                        .into_any_element()
+                }
+            }))
+    }
+
     /// The Account section of the preferences panel.
     fn account_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let row = div().py_3().border_b_1().border_color(rgb(BORDER));
@@ -1071,48 +1123,7 @@ impl Workspace {
                 user_code,
                 verification_uri,
             } => {
-                let code_boxes = div()
-                    .id("github-code")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap_1()
-                    .cursor_pointer()
-                    .hover(|boxes| boxes.opacity(0.85))
-                    .on_click({
-                        let code = user_code.clone();
-                        cx.listener(move |this, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(code.clone()));
-                            this.notice = Some("Code copied to the clipboard".into());
-                            this.notice_warning = false;
-                            cx.notify();
-                        })
-                    })
-                    .children(user_code.chars().map(|character| {
-                        if character == '-' {
-                            div()
-                                .px_1()
-                                .text_color(rgb(TEXT_DIM))
-                                .child("-")
-                                .into_any_element()
-                        } else {
-                            div()
-                                .w(px(38.))
-                                .h(px(46.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(6.))
-                                .border_1()
-                                .border_color(rgb(BORDER))
-                                .bg(rgb(BG_SIDEBAR))
-                                .text_xl()
-                                .font_family("Menlo")
-                                .text_color(rgb(TEXT))
-                                .child(String::from(character))
-                                .into_any_element()
-                        }
-                    }));
+                let code_boxes = self.device_code_boxes(user_code.clone(), "github-code", cx);
                 row.flex()
                     .flex_col()
                     .gap_3()

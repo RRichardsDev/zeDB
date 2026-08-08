@@ -695,47 +695,46 @@ impl Workspace {
             );
             match &self.settings_sync.bootstrap {
                 None => section,
-                Some(Bootstrap::Authorizing { user_code }) => section.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .mt_2()
-                        .text_sm()
-                        .text_color(rgb(TEXT_DIM))
-                        .child("Approve the one-time repo access on GitHub with code")
-                        .child(
-                            div()
-                                .px_2()
-                                .py_0p5()
-                                .rounded(px(3.))
-                                .border_1()
-                                .border_color(rgb(BORDER))
-                                .font_family("Menlo")
-                                .text_color(rgb(TEXT))
-                                .child(user_code.clone()),
-                        )
-                        .child("(copied); it is used once and not kept")
-                        .child(div().flex_1())
-                        .child(
-                            div()
-                                .id("bootstrap-cancel")
-                                .px_2()
-                                .py_0p5()
-                                .rounded(px(3.))
-                                .text_color(rgb(TEXT_DIM))
-                                .hover(|button| {
-                                    button
-                                        .bg(rgb(BG_SIDEBAR))
-                                        .text_color(rgb(TEXT))
-                                        .cursor_pointer()
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.settings_sync_bootstrap_cancel(cx)
-                                }))
-                                .child("Cancel"),
-                        ),
-                ),
+                Some(Bootstrap::Authorizing { user_code }) => section
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .mt_2()
+                            .child(div().text_sm().text_color(rgb(TEXT_DIM)).child(
+                                "Approve the temporary repo access at \
+                                 https://github.com/login/device (opened in your browser). \
+                                 It's on your clipboard; click the code to copy it again. \
+                                 The access is used once to find or create the repo and \
+                                 is never kept.",
+                            ))
+                            .child(
+                                div()
+                                    .id("bootstrap-cancel")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(3.))
+                                    .text_color(rgb(TEXT_DIM))
+                                    .hover(|button| {
+                                        button
+                                            .bg(rgb(BG_SIDEBAR))
+                                            .text_color(rgb(TEXT))
+                                            .cursor_pointer()
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.settings_sync_bootstrap_cancel(cx)
+                                    }))
+                                    .child("Cancel"),
+                            ),
+                    )
+                    .child(
+                        div().mt_2().child(self.device_code_boxes(
+                            user_code.clone(),
+                            "bootstrap-code",
+                            cx,
+                        )),
+                    ),
                 Some(Bootstrap::Working(message)) => section.child(
                     div()
                         .mt_2()
