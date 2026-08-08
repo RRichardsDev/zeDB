@@ -1,0 +1,13 @@
+# Git hooks via lefthook (https://lefthook.dev). One-time setup per
+# clone: `lefthook install`.
+
+pre-commit:
+  jobs:
+    - name: rustfmt
+      run: cargo fmt --all -- --check
+      glob: "*.rs"
+
+pre-push:
+  jobs:
+    - name: clippy
+      run: cargo clippy --workspace --all-targets -- -D warnings
