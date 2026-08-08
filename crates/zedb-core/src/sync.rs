@@ -125,7 +125,10 @@ pub fn save_state(state: &SyncState) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(path, serde_json::to_string_pretty(state).expect("serializable"));
+    let _ = std::fs::write(
+        path,
+        serde_json::to_string_pretty(state).expect("serializable"),
+    );
 }
 
 /// What a sync tick should do, decided from the three hashes.
@@ -205,17 +208,34 @@ mod tests {
         preferences.settings_sync_url = Some("git@example.com:me/settings.git".into());
         preferences.settings_sync_repo = Some("/local/sync".into());
 
-        let payload = build_payload(&preferences, &sample_connections(), 1_700_000_000, "mac".into());
+        let payload = build_payload(
+            &preferences,
+            &sample_connections(),
+            1_700_000_000,
+            "mac".into(),
+        );
         write_payload(directory.path(), &payload).unwrap();
 
         let raw = std::fs::read_to_string(directory.path().join(PAYLOAD_FILE)).unwrap();
-        assert!(!raw.contains("password"), "payload must never carry secrets");
-        assert!(!raw.contains("/local/checkout"), "machine-local paths stay home");
-        assert!(!raw.contains("settings.git"), "sync config itself never syncs");
+        assert!(
+            !raw.contains("password"),
+            "payload must never carry secrets"
+        );
+        assert!(
+            !raw.contains("/local/checkout"),
+            "machine-local paths stay home"
+        );
+        assert!(
+            !raw.contains("settings.git"),
+            "sync config itself never syncs"
+        );
 
         let read = read_payload(directory.path()).unwrap().unwrap();
         assert_eq!(read, payload);
-        assert_eq!(read_payload(&directory.path().join("missing")).unwrap(), None);
+        assert_eq!(
+            read_payload(&directory.path().join("missing")).unwrap(),
+            None
+        );
     }
 
     #[test]

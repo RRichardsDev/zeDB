@@ -1,15 +1,15 @@
 mod agent_pane;
-mod command_palette;
 mod author;
 mod codegen;
+mod command_palette;
 mod commit;
 mod components;
 mod fleet;
 mod github;
-mod settings_sync;
 mod grid_spike;
 mod rt;
 mod schema_intelligence_ui;
+mod settings_sync;
 mod theme;
 mod updates;
 mod vim;
@@ -837,49 +837,47 @@ impl Workspace {
                         }),
                 )
             })
-                .when_some(
-                    match &self.github {
-                        GithubAuth::SignedIn(profile) => Some(profile.clone()),
-                        _ => None,
-                    },
-                    |toolbar, profile| {
-                        let label = format!("@{} on GitHub", profile.login);
-                        toolbar.child(
-                            div()
-                                .id("toolbar-profile")
-                                .ml_2()
-                                .mt(px(3.))
-                                .size(px(28.))
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .map(|button| match profile.avatar.clone() {
-                                    Some(avatar) => button.child(
-                                        gpui::img(gpui::ImageSource::Resource(
-                                            gpui::Resource::Path(avatar.into()),
-                                        ))
-                                        .size(px(24.))
-                                        .rounded_full(),
-                                    ),
-                                    None => button.child(
-                                        svg()
-                                            .path("icons/github.svg")
-                                            .size(px(18.))
-                                            .text_color(rgb(TEXT_DIM)),
-                                    ),
-                                })
-                                .tooltip(move |window, cx| {
-                                    gpui_component::tooltip::Tooltip::new(label.clone())
-                                        .build(window, cx)
-                                })
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.open_preferences(cx)),
+            .when_some(
+                match &self.github {
+                    GithubAuth::SignedIn(profile) => Some(profile.clone()),
+                    _ => None,
+                },
+                |toolbar, profile| {
+                    let label = format!("@{} on GitHub", profile.login);
+                    toolbar.child(
+                        div()
+                            .id("toolbar-profile")
+                            .ml_2()
+                            .mt(px(3.))
+                            .size(px(28.))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .map(|button| match profile.avatar.clone() {
+                                Some(avatar) => button.child(
+                                    gpui::img(gpui::ImageSource::Resource(gpui::Resource::Path(
+                                        avatar.into(),
+                                    )))
+                                    .size(px(24.))
+                                    .rounded_full(),
                                 ),
-                        )
-                    },
-                )
+                                None => button.child(
+                                    svg()
+                                        .path("icons/github.svg")
+                                        .size(px(18.))
+                                        .text_color(rgb(TEXT_DIM)),
+                                ),
+                            })
+                            .tooltip(move |window, cx| {
+                                gpui_component::tooltip::Tooltip::new(label.clone())
+                                    .build(window, cx)
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.open_preferences(cx))),
+                    )
+                },
+            )
     }
 
     fn start_update_install(&mut self, cx: &mut Context<Self>) {
@@ -1153,9 +1151,12 @@ impl Workspace {
                 .flex_col()
                 .gap_1()
                 .child("Account")
-                .child(div().text_sm().text_color(rgb(TEXT_DIM)).child(
-                    "Optional: shows your profile and enables settings sync later",
-                ))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(TEXT_DIM))
+                        .child("Optional: shows your profile and enables settings sync later"),
+                )
                 .child(
                     // One provider today; this row is where GitLab and
                     // friends land later.
@@ -1224,7 +1225,10 @@ impl Workspace {
                     .child(code_boxes)
             }
             GithubAuth::SignedIn(profile) => {
-                let display = profile.name.clone().unwrap_or_else(|| profile.login.clone());
+                let display = profile
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| profile.login.clone());
                 row.flex()
                     .items_center()
                     .justify_between()
@@ -5828,7 +5832,9 @@ impl Render for Workspace {
                     this.query_resize = None;
                 }),
             )
-            .when(self.palette.open, |root| root.child(self.command_palette_overlay(cx)))
+            .when(self.palette.open, |root| {
+                root.child(self.command_palette_overlay(cx))
+            })
             .child(self.title_bar(cx))
             .child(
                 div()
@@ -6261,26 +6267,29 @@ fn main() {
                 Some("Input"),
             ),
         ]);
-        cx.set_menus(vec![Menu {
-            name: "zeDB".into(),
-            items: vec![
-                MenuItem::action("About zeDB", OpenAbout),
-                MenuItem::action("Check for Updates…", CheckForUpdates),
-                MenuItem::separator(),
-                MenuItem::action("Preferences…", OpenPreferences),
-                MenuItem::separator(),
-                MenuItem::os_submenu("Services", SystemMenuType::Services),
-                MenuItem::separator(),
-                MenuItem::action("Quit zeDB", QuitZeDb),
-            ],
-        }, Menu {
-            name: "View".into(),
-            items: vec![
-                MenuItem::action("Command Palette…", OpenCommandPalette),
-                MenuItem::separator(),
-                MenuItem::action("Open settings.json", OpenSettingsFile),
-            ],
-        }]);
+        cx.set_menus(vec![
+            Menu {
+                name: "zeDB".into(),
+                items: vec![
+                    MenuItem::action("About zeDB", OpenAbout),
+                    MenuItem::action("Check for Updates…", CheckForUpdates),
+                    MenuItem::separator(),
+                    MenuItem::action("Preferences…", OpenPreferences),
+                    MenuItem::separator(),
+                    MenuItem::os_submenu("Services", SystemMenuType::Services),
+                    MenuItem::separator(),
+                    MenuItem::action("Quit zeDB", QuitZeDb),
+                ],
+            },
+            Menu {
+                name: "View".into(),
+                items: vec![
+                    MenuItem::action("Command Palette…", OpenCommandPalette),
+                    MenuItem::separator(),
+                    MenuItem::action("Open settings.json", OpenSettingsFile),
+                ],
+            },
+        ]);
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
             WindowOptions {

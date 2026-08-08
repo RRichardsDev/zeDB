@@ -8,9 +8,9 @@ mod preferences;
 pub mod repo;
 #[cfg(target_vendor = "apple")]
 pub mod secrets;
-pub mod sync;
 mod session;
 mod store;
+pub mod sync;
 mod value;
 
 pub use connection::{ConnectionConfig, ConnectionNode, EnvTier};

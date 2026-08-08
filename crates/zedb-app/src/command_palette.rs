@@ -73,9 +73,7 @@ impl PaletteCommand {
     fn available(self, workspace: &Workspace) -> bool {
         match self {
             Self::SyncSettingsNow => workspace.preferences.settings_sync_url.is_some(),
-            Self::Disconnect | Self::NewQuery | Self::ToggleFleet => {
-                workspace.connected.is_some()
-            }
+            Self::Disconnect | Self::NewQuery | Self::ToggleFleet => workspace.connected.is_some(),
             _ => true,
         }
     }
@@ -150,9 +148,7 @@ impl Workspace {
             .iter()
             .copied()
             .filter(|command| command.available(self))
-            .filter(|command| {
-                query.is_empty() || command.label().to_lowercase().contains(&query)
-            })
+            .filter(|command| query.is_empty() || command.label().to_lowercase().contains(&query))
             .collect()
     }
 
@@ -168,7 +164,9 @@ impl Workspace {
 
     pub(crate) fn palette_run_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let commands = self.palette_filtered(cx);
-        let Some(command) = commands.get(self.palette.selected.min(commands.len().saturating_sub(1))).copied()
+        let Some(command) = commands
+            .get(self.palette.selected.min(commands.len().saturating_sub(1)))
+            .copied()
         else {
             return;
         };
@@ -224,33 +222,25 @@ impl Workspace {
                                         .border_color(rgb(BORDER))
                                         .child(self.palette.input.clone()),
                                 )
-                                .child(
-                                    div().flex_1().min_h_0().overflow_hidden().children(
-                                        commands.iter().enumerate().map(|(index, command)| {
-                                            let command = *command;
-                                            div()
-                                                .id(command.label())
-                                                .px_3()
-                                                .py_1p5()
-                                                .flex()
-                                                .items_center()
-                                                .text_color(rgb(TEXT))
-                                                .when(index == selected, |row| {
-                                                    row.bg(rgb(0x2c3a4d))
-                                                })
-                                                .hover(|row| {
-                                                    row.bg(rgb(BG_SIDEBAR)).cursor_pointer()
-                                                })
-                                                .on_click(cx.listener(
-                                                    move |this, _, window, cx| {
-                                                        this.palette_close(window, cx);
-                                                        command.run(this, window, cx);
-                                                    },
-                                                ))
-                                                .child(command.label())
-                                        }),
-                                    ),
-                                )
+                                .child(div().flex_1().min_h_0().overflow_hidden().children(
+                                    commands.iter().enumerate().map(|(index, command)| {
+                                        let command = *command;
+                                        div()
+                                            .id(command.label())
+                                            .px_3()
+                                            .py_1p5()
+                                            .flex()
+                                            .items_center()
+                                            .text_color(rgb(TEXT))
+                                            .when(index == selected, |row| row.bg(rgb(0x2c3a4d)))
+                                            .hover(|row| row.bg(rgb(BG_SIDEBAR)).cursor_pointer())
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.palette_close(window, cx);
+                                                command.run(this, window, cx);
+                                            }))
+                                            .child(command.label())
+                                    }),
+                                ))
                                 .when(commands.is_empty(), |panel| {
                                     panel.child(
                                         div()

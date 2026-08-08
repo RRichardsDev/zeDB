@@ -305,7 +305,12 @@ impl Workspace {
             .preferences
             .last_agent
             .as_deref()
-            .and_then(|name| self.agent.agents.iter().position(|agent| agent.name == name))
+            .and_then(|name| {
+                self.agent
+                    .agents
+                    .iter()
+                    .position(|agent| agent.name == name)
+            })
             .or_else(|| (self.agent.agents.len() == 1).then_some(0));
         match remembered {
             Some(index) => self.agent_start_thread(index, window, cx),

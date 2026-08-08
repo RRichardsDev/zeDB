@@ -64,7 +64,9 @@ enum TickResult {
     Applied(Box<sync::Payload>, String),
     /// Local settings were committed and pushed; true when both sides
     /// had changed and local won.
-    Pushed { conflicted: bool },
+    Pushed {
+        conflicted: bool,
+    },
     Failed(String),
 }
 
@@ -127,14 +129,12 @@ fn run_tick(
             if pull_failed {
                 return TickResult::Failed("could not pull the sync repo; push postponed".into());
             }
-            let payload =
-                sync::build_payload(preferences, connections, unix_now(), hostname());
+            let payload = sync::build_payload(preferences, connections, unix_now(), hostname());
             if let Err(error) = sync::write_payload(root, &payload) {
                 return TickResult::Failed(error);
             }
             let message = format!("settings: update from {}", payload.updated_by);
-            if let Err(error) =
-                git::commit_paths(root, &[sync::PAYLOAD_FILE.to_string()], &message)
+            if let Err(error) = git::commit_paths(root, &[sync::PAYLOAD_FILE.to_string()], &message)
             {
                 return TickResult::Failed(format!("commit failed: {error}"));
             }
@@ -179,8 +179,7 @@ impl Workspace {
         let generation = self.settings_sync.generation;
         let preferences = self.preferences.clone();
         let connections = self.connections.clone();
-        let handle =
-            rt::tokio().spawn(async move { run_tick(&root, &preferences, &connections) });
+        let handle = rt::tokio().spawn(async move { run_tick(&root, &preferences, &connections) });
         cx.spawn(async move |this, cx| {
             let result = handle.await;
             this.update(cx, |this, cx| {
@@ -218,7 +217,12 @@ impl Workspace {
         .detach();
     }
 
-    fn settings_sync_apply(&mut self, payload: sync::Payload, hash: String, cx: &mut Context<Self>) {
+    fn settings_sync_apply(
+        &mut self,
+        payload: sync::Payload,
+        hash: String,
+        cx: &mut Context<Self>,
+    ) {
         let vim_was_on = self.preferences.vim_mode;
         self.preferences = sync::apply_preferences(&self.preferences, &payload.preferences);
         if self.preferences.vim_mode && !vim_was_on {
@@ -271,7 +275,13 @@ impl Workspace {
     }
 
     fn settings_sync_enable(&mut self, cx: &mut Context<Self>) {
-        let url = self.settings_sync.url_input.read(cx).text().trim().to_string();
+        let url = self
+            .settings_sync
+            .url_input
+            .read(cx)
+            .text()
+            .trim()
+            .to_string();
         if url.is_empty() {
             self.flash_warning("Paste a git URL (or a local repo path) first", cx);
             return;
@@ -301,9 +311,11 @@ impl Workspace {
             return;
         }
 
-        let Some(dest) = dirs::data_local_dir()
-            .map(|dir| dir.join("zedb").join("settings-sync").join(git::clone_directory_name(&url)))
-        else {
+        let Some(dest) = dirs::data_local_dir().map(|dir| {
+            dir.join("zedb")
+                .join("settings-sync")
+                .join(git::clone_directory_name(&url))
+        }) else {
             self.flash_warning("Could not determine a local data directory", cx);
             return;
         };
@@ -385,10 +397,8 @@ impl Workspace {
                 let still_empty = input.read(cx).text().trim().is_empty();
                 if still_empty {
                     input.update(cx, |input, cx| input.set_text(url.clone(), cx));
-                    this.settings_sync.status = Some((
-                        format!("Found {url}; press Enable to link it"),
-                        false,
-                    ));
+                    this.settings_sync.status =
+                        Some((format!("Found {url}; press Enable to link it"), false));
                     cx.notify();
                 }
             })
@@ -415,7 +425,8 @@ impl Workspace {
             let device = match handle.await {
                 Ok(Ok(device)) => device,
                 Ok(Err(error)) => {
-                    this.update(cx, |this, cx| this.flash_warning(error, cx)).ok();
+                    this.update(cx, |this, cx| this.flash_warning(error, cx))
+                        .ok();
                     return;
                 }
                 Err(_) => return,
@@ -687,9 +698,9 @@ impl Workspace {
                                         .text_color(rgb(TEXT))
                                         .cursor_pointer()
                                 })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.settings_sync_bootstrap(cx)
-                                }))
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.settings_sync_bootstrap(cx)),
+                                )
                                 .child("Create repo for me"),
                         )
                     }),
@@ -704,13 +715,18 @@ impl Workspace {
                             .gap_2()
                             .mt_2()
                             .child(
-                                div().flex_1().min_w_0().text_sm().text_color(rgb(TEXT_DIM)).child(
-                                    "Approve the temporary repo access at \
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .text_color(rgb(TEXT_DIM))
+                                    .child(
+                                        "Approve the temporary repo access at \
                                      https://github.com/login/device (opened in your browser). \
                                      It's on your clipboard; click the code to copy it again. \
                                      The access is used once to find or create the repo and \
                                      is never kept.",
-                                ),
+                                    ),
                             )
                             .child(
                                 div()
@@ -731,13 +747,11 @@ impl Workspace {
                                     .child("Cancel"),
                             ),
                     )
-                    .child(
-                        div().mt_2().child(self.device_code_boxes(
-                            user_code.clone(),
-                            "bootstrap-code",
-                            cx,
-                        )),
-                    ),
+                    .child(div().mt_2().child(self.device_code_boxes(
+                        user_code.clone(),
+                        "bootstrap-code",
+                        cx,
+                    ))),
                 Some(Bootstrap::Working(message)) => section.child(
                     div()
                         .mt_2()
@@ -767,9 +781,7 @@ impl Workspace {
                                     .border_1()
                                     .border_color(rgb(BORDER))
                                     .text_color(rgb(TEXT))
-                                    .hover(|button| {
-                                        button.bg(rgb(BG_SIDEBAR)).cursor_pointer()
-                                    })
+                                    .hover(|button| button.bg(rgb(BG_SIDEBAR)).cursor_pointer())
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.settings_sync.bootstrap = None;
                                         this.settings_sync_enable_url(link_url.clone(), cx);
