@@ -480,6 +480,19 @@ impl Workspace {
         cx.intercept_keystrokes(move |event, window, cx| {
             if let Some(workspace) = workspace.upgrade() {
                 workspace.update(cx, |this, cx| {
+                    // Escape closes an open filter popover regardless of
+                    // where focus sits (checkbox panels hold none).
+                    if event.keystroke.key == "escape" {
+                        if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                            let closed = tab
+                                .result_grid
+                                .update(cx, |grid, cx| grid.close_filter_panel(cx));
+                            if closed {
+                                cx.stop_propagation();
+                                return;
+                            }
+                        }
+                    }
                     this.vim_keystroke(&event.keystroke, window, cx)
                 });
             }

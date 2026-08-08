@@ -199,6 +199,16 @@ impl GridSpike {
         }
     }
 
+    /// Close the filter popover if one is open; true when it was.
+    pub fn close_filter_panel(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.filter_panel.take().is_some() {
+            cx.notify();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Set the filter indicators to what the executed SQL actually says.
     pub fn set_filters(&mut self, filters: Vec<(String, String)>, cx: &mut Context<Self>) {
         self.filters = filters;
