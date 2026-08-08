@@ -51,6 +51,10 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Shared with the release workflow so tag builds reuse the
+          # dependency cache CI populates on main.
+          shared-key: zedb-macos
       - name: Install Metal toolchain
         run: |
           if ! xcrun -f metal >/dev/null 2>&1; then

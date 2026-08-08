@@ -21,6 +21,12 @@ jobs:
           fetch-depth: 0 # bundle script derives the build number from history
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Restores the cache CI saves on main (tag runs may read
+          # default-branch caches; the default per-job key never
+          # matched). Saving under a tag ref would be unrestorable.
+          shared-key: zedb-macos
+          save-if: false
       - name: Install Metal toolchain
         run: |
           if ! xcrun -f metal >/dev/null 2>&1; then
