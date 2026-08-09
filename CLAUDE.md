@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **zeDB** (2899 symbols, 8559 relationships, 252 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **zeDB** (2969 symbols, 8809 relationships, 258 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
@@ -47,6 +47,10 @@ This project is indexed by GitNexus as **zeDB** (2899 symbols, 8559 relationship
 
 - Before changing the user interface, read and follow `docs/UI-DESIGN.md`.
 - Reuse or extend existing UI primitives before introducing one-off controls.
+- `vendor/gpui-component` carries local patches, each marked with a
+  `zeDB patch` comment and cataloged in `docs/VENDOR-PATCHES.md`.
+  Keep both in sync when patching the vendor; read that file before
+  any vendor rebase.
 
 ## Changelog
 
