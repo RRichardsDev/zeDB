@@ -6178,35 +6178,6 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(
-                                div()
-                                    .id("toggle-history")
-                                    .size(px(24.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(3.))
-                                    .when(self.show_history, |button| button.bg(theme::hover()))
-                                    .child(
-                                        svg().path("icons/history.svg").size(px(14.)).text_color(
-                                            if self.show_history {
-                                                theme::text()
-                                            } else {
-                                                theme::text_dim()
-                                            },
-                                        ),
-                                    )
-                                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
-                                    .tooltip(|window, cx| {
-                                        gpui_component::tooltip::Tooltip::new(
-                                            "Query history and saved queries",
-                                        )
-                                        .build(window, cx)
-                                    })
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.history_toggle(cx)),
-                                    ),
-                            )
                             .child(self.max_rows_selector(running, cx))
                             .child(
                                 div()
@@ -6266,6 +6237,35 @@ impl Workspace {
                                                 this.run_query(window, cx)
                                             }))
                                     }),
+                            )
+                            .child(
+                                div()
+                                    .id("toggle-history")
+                                    .size(px(24.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(3.))
+                                    .when(self.show_history, |button| button.bg(theme::hover()))
+                                    .child(
+                                        svg().path("icons/history.svg").size(px(14.)).text_color(
+                                            if self.show_history {
+                                                theme::text()
+                                            } else {
+                                                theme::text_dim()
+                                            },
+                                        ),
+                                    )
+                                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                    .tooltip(|window, cx| {
+                                        gpui_component::tooltip::Tooltip::new(
+                                            "Query history and saved queries",
+                                        )
+                                        .build(window, cx)
+                                    })
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.history_toggle(cx)),
+                                    ),
                             ),
                     ),
             )

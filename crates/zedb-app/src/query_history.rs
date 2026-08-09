@@ -288,34 +288,36 @@ impl Workspace {
                             }))
                             .child(tab.label())
                     })),
-            )
-            .child(
-                div()
-                    .id("history-close")
-                    .flex_none()
-                    .px_1()
-                    .rounded(px(3.))
-                    .text_color(theme::text_dim())
-                    .child("\u{00d7}")
-                    .hover(|close| {
-                        close
-                            .bg(theme::hover())
-                            .text_color(theme::text())
-                            .cursor_pointer()
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.show_history = false;
-                        cx.notify();
-                    })),
             );
 
         let header = div()
             .flex_none()
             .px_3()
-            .pt_2()
+            .pt_1()
             .flex()
             .flex_col()
             .gap_1()
+            .child(
+                div().flex().justify_end().child(
+                    div()
+                        .id("history-close")
+                        .flex_none()
+                        .px_1()
+                        .rounded(px(3.))
+                        .text_color(theme::text_dim())
+                        .child("\u{00d7}")
+                        .hover(|close| {
+                            close
+                                .bg(theme::hover())
+                                .text_color(theme::text())
+                                .cursor_pointer()
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_history = false;
+                            cx.notify();
+                        })),
+                ),
+            )
             // Explicit width: the input's own w_full does not resolve
             // against this container reliably.
             .child(
