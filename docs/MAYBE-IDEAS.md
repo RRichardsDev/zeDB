@@ -25,6 +25,20 @@ doc; delete freely.
   pane, the error-bar Ask button, and the cmd+N/cmd+I agent shortcuts
   don't exist at all, rather than each one behaviorally hiding when no
   agent is configured.
+- Stale-preference nudge (pairs with the opt-in above). A user who
+  said "no" to agents at onboarding may have taken one up since; the
+  old click shouldn't trap them into thinking zeDB can't help. When
+  the AI-off rule is set AND an agent CLI is actually detected AND we
+  are at a moment it would have helped (an error), occasionally flash
+  a neutral status-bar line: "AI-off rule enforced; agents detected"
+  with Enable / Ignore. This is NOT an upsell (see
+  docs/PRODUCT-PRINCIPLES.md): it never fires without a real agent
+  present, states a fact about the user's own rule rather than
+  selling, and MUST be self-silencing: rare to begin with, each
+  Ignore ratchets frequency down, and a few Ignores stop it for good
+  (a repeated no is a reaffirmed no; continuing past it is the nag the
+  spine forbids). Cadence to settle: user floated ~1-in-5-to-10
+  eligible moments before the first ratchet.
 - When a query runs past ~30s, quietly suggest the explain ("still
   running… see why: Explain query"), triggering the palette
   command's action directly.
