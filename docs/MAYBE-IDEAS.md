@@ -18,6 +18,13 @@ doc; delete freely.
   ALREADY has (their own installed Claude Code / Codex CLI) inside
   zeDB; if they don't use those, it stays hidden and unmentioned.
   Opt-in, off by default, never nagged.
+  This opt-in is also the STRUCTURAL enforcement of the product spine
+  (docs/PRODUCT-PRINCIPLES.md): the test "no agent in front of someone
+  who didn't summon it" becomes a single upstream gate instead of
+  each surface checking for itself. Without the opt-in flag, the agent
+  pane, the error-bar Ask button, and the cmd+N/cmd+I agent shortcuts
+  don't exist at all, rather than each one behaviorally hiding when no
+  agent is configured.
 - When a query runs past ~30s, quietly suggest the explain ("still
   running… see why: Explain query"), triggering the palette
   command's action directly.
