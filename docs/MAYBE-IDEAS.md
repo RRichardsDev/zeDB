@@ -12,6 +12,26 @@ doc; delete freely.
   inside the card, not just the SQL.
 - cmd+click a fully-formed URL in a data-table cell to open it in the
   browser (detect http(s):// values, underline on cmd-hover).
+- Auto-update, but ONLY if it captures every single state before it
+  quits. The asymmetry is the whole point: an update takes seconds,
+  redoing lost work takes hours, so a single dropped in-flight edit
+  makes the feature a net negative. It is a state-capture feature
+  that happens to update, not an updater.
+  There is already a partial base: zedb_core session.json
+  (save_session / take_session) persists open query tabs' SQL and the
+  active tab. "Every single state" means extending that to the full
+  working set: per-tab cursor/selection, unsaved editor buffers
+  (already the SQL, keep it exact), which view was showing
+  (editor/ops/fleet) and its sub-state (ops tab+scope, history drawer
+  open), the connected connection to auto-reconnect, pane sizes
+  (already persisted), and any half-written migration in the author
+  overlay.
+  The honest caveat: some states can't be frozen and resumed, only
+  waited out -- an in-flight agent turn, a running export, a
+  streaming query. For those, DEFER the auto-update until idle rather
+  than interrupting; never trade a running operation for a version
+  bump. Rule of thumb: auto-update may cost seconds of waiting, never
+  a byte of the user's work.
 - Onboarding step to opt into the bigger surfaces: fleet view, ops
   view, AI agent threads. Framing matters: this is NOT an AI upsell.
   The agent-thread option is only about surfacing a workflow the user
