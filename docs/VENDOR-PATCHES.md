@@ -1,12 +1,32 @@
-# Vendored gpui-component patches
+# Vendored crate patches
 
-`vendor/gpui-component` is gpui-component **0.5.1** (upstream repo
-`longbridge/gpui-component`, crate source `crates/ui`, commit
-`0f0ab35233212f8f3277028995caf0c41e13ee6c`) with local patches. Every
-patch site is marked with a `zeDB patch` comment, so
-`grep -rn "zeDB patch" vendor/gpui-component/src` is always the
-authoritative list; this file explains each one for the day the
-vendor gets rebased.
+Two crates are vendored with local patches, wired up via
+`[patch.crates-io]` in the workspace Cargo.toml. Every patch site is
+marked with a `zeDB patch` comment, so
+`grep -rn "zeDB patch" vendor/` is always the authoritative list;
+this file explains each one for the day a vendor gets rebased.
+
+## vendor/gpui
+
+gpui **0.2.2** exactly as published on crates.io, plus one backport:
+
+### G1. Key-status deadlock fix (upstream zed#51035)
+
+- `src/platform/mac/window.rs` (`window_did_change_key_status`)
+- The spurious-becomeKey workaround sent `resignKeyWindow` while
+  holding the window-state lock; macOS delivers `windowDidResignKey`
+  synchronously, the function re-enters, and the main thread
+  deadlocks (hard app freeze; hit 2026-08-09, diagnosed via
+  `sample`). Backport of upstream commit `d7d8fcd` (merged
+  2026-03-17): hoist the window pointer, drop the lock, then send.
+- Drop this vendor entirely once a crates.io gpui release newer than
+  0.2.2 ships with the fix (verify the function first).
+
+## vendor/gpui-component
+
+gpui-component **0.5.1** (upstream repo `longbridge/gpui-component`,
+crate source `crates/ui`, commit
+`0f0ab35233212f8f3277028995caf0c41e13ee6c`) with the patches below.
 
 When rebasing: re-apply each patch (or verify upstream absorbed an
 equivalent), then run the pinning tests listed below and click

@@ -25,6 +25,17 @@ GitHub release notes.
   star/rename/delete actions beneath (favorites pin to the top and
   keep their star lit). Saved queries live in settings.json and sync
   to your other machines; history stays local.
+- EXPLAIN, visualized: "Explain query" in the command palette draws
+  the plan for the statement under the cursor as a colored tree in
+  the results pane, and every MergeTree read shows its index pruning
+  (selected vs initial parts and granules per index stage) with a
+  utilization bar: green when the index prunes hard, red on a full
+  scan. Works on servers back to at least 25.8.
+- Fixed a rare hard freeze of the whole app on macOS when a popup
+  (tooltip, hover card) was open during a window activation change:
+  an upstream gpui deadlock (zed#51035), fix backported.
+- The connection list's posture and tier pills shrank to tag size,
+  giving the connection names the room.
 
 ## v0.1.14 - 2026-08-09
 

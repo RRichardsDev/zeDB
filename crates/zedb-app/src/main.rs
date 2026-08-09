@@ -4,6 +4,7 @@ mod codegen;
 mod command_palette;
 mod commit;
 mod components;
+mod explain_ui;
 mod fleet;
 mod github;
 mod grid_spike;
@@ -382,6 +383,8 @@ struct QueryTab {
     vim_command_line: Option<CommandLineSnapshot>,
     vim_recording: Option<char>,
     schema_analysis_generation: u64,
+    /// An EXPLAIN plan shown in place of the results grid.
+    explain: Option<zedb_ch::explain::ExplainNode>,
     /// The last successfully executed statement, i.e. the one whose
     /// result the grid is showing; header sorts rewrite and re-run it.
     displayed_statement: Option<String>,
@@ -1602,15 +1605,43 @@ impl Workspace {
             .child(tier.label().to_uppercase())
     }
 
+    /// Half-scale badge for the dense connections list.
+    fn tier_badge_small(tier: EnvTier) -> impl IntoElement {
+        let (background, foreground) = Self::tier_colors(tier);
+        div()
+            .px(px(4.5))
+            .py(px(1.))
+            .rounded(px(2.))
+            .border_1()
+            .border_color(rgb(foreground))
+            .bg(rgb(background))
+            .text_color(rgb(foreground))
+            .text_size(px(8.))
+            .child(tier.label().to_uppercase())
+    }
+
     /// The connection's write posture, worn next to the tier: quiet
     /// when read-only (the safe default), loud when writes are open.
-    fn write_badge(read_only: bool) -> impl IntoElement {
+    /// Small posture badge for the dense connections list (its only
+    /// current wearer; pass small=false for a full-size one).
+    fn write_badge_small(read_only: bool) -> impl IntoElement {
+        Self::write_badge_sized(read_only, true)
+    }
+
+    fn write_badge_sized(read_only: bool, small: bool) -> impl IntoElement {
         div()
-            .px_2()
-            .py(px(2.))
-            .rounded(px(3.))
+            .map(|badge| {
+                if small {
+                    badge
+                        .px(px(4.5))
+                        .py(px(1.))
+                        .rounded(px(2.))
+                        .text_size(px(8.))
+                } else {
+                    badge.px_2().py(px(2.)).rounded(px(3.)).text_xs()
+                }
+            })
             .border_1()
-            .text_xs()
             .map(|badge| {
                 if read_only {
                     badge
@@ -1683,8 +1714,8 @@ impl Workspace {
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .child(Self::write_badge(connection.read_only))
-                                    .child(Self::tier_badge(connection.tier)),
+                                    .child(Self::write_badge_small(connection.read_only))
+                                    .child(Self::tier_badge_small(connection.tier)),
                             ),
                     )
                     .child(
@@ -3929,6 +3960,7 @@ impl Workspace {
             vim_command_line: None,
             vim_recording: None,
             schema_analysis_generation: 0,
+            explain: None,
             displayed_statement: None,
             displayed_statement_offset: None,
             running_query_id: None,
@@ -4314,19 +4346,7 @@ impl Workspace {
         if self.query_abort.is_some() {
             self.cancel_query(cx);
         }
-        let sql = self.selected_text(window, cx).unwrap_or_else(|| {
-            self.query_tabs
-                .get(self.active_query_tab)
-                .map(|tab| {
-                    tab.editor.update(cx, |editor, _| {
-                        let text = editor.value().to_string();
-                        statement_at_cursor(&text, editor.cursor())
-                            .map(str::to_string)
-                            .unwrap_or_default()
-                    })
-                })
-                .unwrap_or_default()
-        });
+        let sql = self.run_target_sql(window, cx);
         let offset = self.query_tabs.get(self.active_query_tab).and_then(|tab| {
             let editor = tab.editor.read(cx);
             nearest_occurrence(editor.value().as_ref(), sql.trim(), editor.cursor())
@@ -4591,6 +4611,7 @@ impl Workspace {
 
         let tab_id = tab.id;
         tab.outcome = QueryOutcome::Running;
+        tab.explain = None;
         tab.result_columns = 0;
         tab.result_rows = 0;
         // has_result stays as it was: an already-displayed result keeps
@@ -6078,7 +6099,7 @@ impl Workspace {
             QueryOutcome::Running | QueryOutcome::StatementError { .. }
         );
         let statement_failed = matches!(active.outcome, QueryOutcome::StatementError { .. });
-        let has_result = active.has_result;
+        let has_result = active.has_result || active.explain.is_some();
         let result_capped = active.result_capped;
         let editor_height = active.editor_height;
         let status_height = active.status_height;
@@ -6310,7 +6331,10 @@ impl Workspace {
                         .min_h_0()
                         .border_t_1()
                         .border_color(theme::border())
-                        .child(result_grid),
+                        .map(|pane| match active.explain.as_ref() {
+                            Some(plan) => pane.child(self.explain_panel(plan, cx)),
+                            None => pane.child(result_grid),
+                        }),
                 )
             })
             .child(self.query_resize_handle(

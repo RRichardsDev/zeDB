@@ -12,6 +12,7 @@ pub mod checks;
 mod client;
 pub mod ephemeral;
 mod error;
+pub mod explain;
 pub mod lifecycle;
 pub mod mcp;
 pub mod pin;

@@ -46,6 +46,7 @@ pub enum PaletteCommand {
     ThemeSystem,
     ToggleOps,
     ToggleQueryHistory,
+    ExplainQuery,
 }
 
 const ALL_COMMANDS: &[PaletteCommand] = &[
@@ -63,6 +64,7 @@ const ALL_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand::ThemeSystem,
     PaletteCommand::ToggleOps,
     PaletteCommand::ToggleQueryHistory,
+    PaletteCommand::ExplainQuery,
 ];
 
 impl PaletteCommand {
@@ -82,15 +84,18 @@ impl PaletteCommand {
             Self::ThemeSystem => "Theme: System",
             Self::ToggleOps => "Ops view",
             Self::ToggleQueryHistory => "Query history and saved queries",
+            Self::ExplainQuery => "Explain query (plan and index pruning)",
         }
     }
 
     fn available(self, workspace: &Workspace) -> bool {
         match self {
             Self::SyncSettingsNow => workspace.preferences.settings_sync_url.is_some(),
-            Self::Disconnect | Self::NewQuery | Self::ToggleFleet | Self::ToggleOps => {
-                workspace.connected.is_some()
-            }
+            Self::Disconnect
+            | Self::NewQuery
+            | Self::ToggleFleet
+            | Self::ToggleOps
+            | Self::ExplainQuery => workspace.connected.is_some(),
             _ => true,
         }
     }
@@ -111,6 +116,7 @@ impl PaletteCommand {
             Self::ThemeSystem => workspace.set_theme_preference("system", window, cx),
             Self::ToggleOps => workspace.ops_toggle(cx),
             Self::ToggleQueryHistory => workspace.history_toggle(cx),
+            Self::ExplainQuery => workspace.explain_query(window, cx),
         }
     }
 }
