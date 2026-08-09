@@ -12,6 +12,12 @@ doc; delete freely.
   inside the card, not just the SQL.
 - cmd+click a fully-formed URL in a data-table cell to open it in the
   browser (detect http(s):// values, underline on cmd-hover).
+- Onboarding step to opt into the bigger surfaces: fleet view, ops
+  view, AI agent threads. Framing matters: this is NOT an AI upsell.
+  The agent-thread option is only about surfacing a workflow the user
+  ALREADY has (their own installed Claude Code / Codex CLI) inside
+  zeDB; if they don't use those, it stays hidden and unmentioned.
+  Opt-in, off by default, never nagged.
 - When a query runs past ~30s, quietly suggest the explain ("still
   running… see why: Explain query"), triggering the palette
   command's action directly.
