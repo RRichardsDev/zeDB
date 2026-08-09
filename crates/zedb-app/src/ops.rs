@@ -23,6 +23,12 @@ pub struct OpsProcess {
     pub total_rows: u64,
     pub memory_bytes: u64,
     pub query: String,
+    /// Where the client connects from, port stripped.
+    pub address: String,
+    /// client_name (native) or http_user_agent (HTTP), whichever is set.
+    pub client: String,
+    pub os_user: String,
+    pub initial_user: String,
 }
 
 #[derive(Default)]
@@ -35,6 +41,8 @@ pub struct OpsState {
     pub fetch_in_flight: bool,
     /// query_id currently being killed (disables its button).
     pub killing: Option<String>,
+    /// Open-connection counters from system.metrics, label + count.
+    pub connections: Vec<(String, u64)>,
 }
 
 fn number(value: Option<&Value>) -> u64 {
@@ -133,41 +141,90 @@ impl Workspace {
         let config = connected.client_config.clone();
         let handle = rt::tokio().spawn(async move {
             let client = zedb_ch::ChClient::new(config);
-            client
+            let processes = client
                 .query(
                     "SELECT query_id, user, elapsed, read_rows, read_bytes, \
-                        total_rows_approx, memory_usage, query \
+                        total_rows_approx, memory_usage, query, \
+                        toString(address), client_name, http_user_agent, \
+                        os_user, initial_user \
                      FROM system.processes \
                      WHERE query NOT LIKE '%system.processes%' \
                      ORDER BY elapsed DESC \
                      LIMIT 50",
                 )
-                .await
+                .await;
+            // Aggregate open-connection counters; ClickHouse has no
+            // session table (HTTP is stateless), so counts are the
+            // whole truth here.
+            let connections = client
+                .query(
+                    "SELECT metric, value FROM system.metrics \
+                     WHERE metric IN ('HTTPConnection', 'TCPConnection', \
+                        'MySQLConnection', 'PostgreSQLConnection', \
+                        'InterserverConnection') \
+                     ORDER BY metric",
+                )
+                .await;
+            (processes, connections)
         });
         cx.spawn(async move |this, cx| {
             let result = handle.await;
             this.update(cx, |this, cx| {
                 this.ops.fetch_in_flight = false;
                 match result {
-                    Ok(Ok(result)) => {
+                    Ok((Ok(result), connections)) => {
                         this.ops.processes = result
                             .rows
                             .iter()
-                            .map(|row| OpsProcess {
-                                query_id: text(row.first()),
-                                user: text(row.get(1)),
-                                elapsed_secs: float(row.get(2)),
-                                read_rows: number(row.get(3)),
-                                read_bytes: number(row.get(4)),
-                                total_rows: number(row.get(5)),
-                                memory_bytes: number(row.get(6)),
-                                query: text(row.get(7)),
+                            .map(|row| {
+                                let client_name = text(row.get(9));
+                                let user_agent = text(row.get(10));
+                                let address = text(row.get(8));
+                                OpsProcess {
+                                    query_id: text(row.first()),
+                                    user: text(row.get(1)),
+                                    elapsed_secs: float(row.get(2)),
+                                    read_rows: number(row.get(3)),
+                                    read_bytes: number(row.get(4)),
+                                    total_rows: number(row.get(5)),
+                                    memory_bytes: number(row.get(6)),
+                                    query: text(row.get(7)),
+                                    address: address
+                                        .rsplit_once(':')
+                                        .map(|(host, _)| host.to_string())
+                                        .unwrap_or(address),
+                                    client: if client_name.is_empty() {
+                                        user_agent
+                                    } else {
+                                        client_name
+                                    },
+                                    os_user: text(row.get(11)),
+                                    initial_user: text(row.get(12)),
+                                }
                             })
                             .collect();
+                        if let Ok(connections) = connections {
+                            this.ops.connections = connections
+                                .rows
+                                .iter()
+                                .map(|row| {
+                                    let label = match text(row.first()).as_str() {
+                                        "HTTPConnection" => "http".to_string(),
+                                        "TCPConnection" => "tcp".to_string(),
+                                        "MySQLConnection" => "mysql".to_string(),
+                                        "PostgreSQLConnection" => "postgres".to_string(),
+                                        "InterserverConnection" => "interserver".to_string(),
+                                        other => other.to_string(),
+                                    };
+                                    (label, number(row.get(1)))
+                                })
+                                .filter(|(_, count)| *count > 0)
+                                .collect();
+                        }
                         this.ops.as_of = Some(chrono::Local::now());
                         this.ops.error = None;
                     }
-                    Ok(Err(error)) => this.ops.error = Some(error.to_string()),
+                    Ok((Err(error), _)) => this.ops.error = Some(error.to_string()),
                     Err(_) => {}
                 }
                 cx.notify();
@@ -235,6 +292,21 @@ impl Workspace {
             .child(div().text_sm().text_color(theme::text_dim()).child(format!(
                 "queries now \u{b7} {as_of} \u{b7} refreshes every {POLL_SECS}s"
             )))
+            .when(!self.ops.connections.is_empty(), |header| {
+                let summary = self
+                    .ops
+                    .connections
+                    .iter()
+                    .map(|(label, count)| format!("{count} {label}"))
+                    .collect::<Vec<_>>()
+                    .join(" \u{b7} ");
+                header.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::text_dim())
+                        .child(format!("connections: {summary}")),
+                )
+            })
             .when_some(self.ops.error.clone(), |header, error| {
                 header.child(div().text_sm().text_color(theme::danger()).child(error))
             });
@@ -250,7 +322,7 @@ impl Workspace {
             .text_xs()
             .text_color(theme::text_dim())
             .child(div().w(px(80.)).flex_none().child("ELAPSED"))
-            .child(div().w(px(110.)).flex_none().child("USER"))
+            .child(div().w(px(150.)).flex_none().child("USER / CLIENT"))
             .child(div().w(px(90.)).flex_none().child("MEMORY"))
             .child(div().w(px(150.)).flex_none().child("READ"))
             .child(div().flex_1().min_w_0().child("QUERY"))
@@ -303,15 +375,48 @@ impl Workspace {
                                 .text_color(theme::warning())
                                 .child(format_elapsed(process.elapsed_secs)),
                         )
-                        .child(
+                        .child({
+                            let mut identity = process.client.clone();
+                            if !process.address.is_empty() {
+                                if !identity.is_empty() {
+                                    identity.push_str(" \u{b7} ");
+                                }
+                                identity.push_str(&process.address);
+                            }
+                            if !process.os_user.is_empty() {
+                                identity.push_str(" \u{b7} ");
+                                identity.push_str(&process.os_user);
+                            }
+                            let mut user = process.user.clone();
+                            if !process.initial_user.is_empty()
+                                && process.initial_user != process.user
+                            {
+                                user.push_str(" (as ");
+                                user.push_str(&process.initial_user);
+                                user.push(')');
+                            }
                             div()
-                                .w(px(110.))
+                                .w(px(150.))
                                 .flex_none()
+                                .flex()
+                                .flex_col()
                                 .overflow_hidden()
-                                .whitespace_nowrap()
-                                .text_color(theme::text())
-                                .child(process.user.clone()),
-                        )
+                                .child(
+                                    div()
+                                        .whitespace_nowrap()
+                                        .overflow_hidden()
+                                        .text_color(theme::text())
+                                        .child(user),
+                                )
+                                .child(
+                                    div()
+                                        .whitespace_nowrap()
+                                        .overflow_hidden()
+                                        .text_size(px(9.))
+                                        .text_color(theme::text_dim())
+                                        .child(identity),
+                                )
+                        })
                         .child(
                             div()
                                 .w(px(90.))

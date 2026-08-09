@@ -13,7 +13,11 @@ GitHub release notes.
   query running on the cluster right now (elapsed, user, memory, read
   progress, the query itself), refreshed every 2 seconds while
   visible. KILL QUERY sits one click away on write connections and
-  is honestly disabled on read-only ones.
+  is honestly disabled on read-only ones. Each row carries the
+  client's identity (tool, address, OS user, and the initial user
+  when it differs), and the header counts open connections by
+  protocol; ClickHouse has no session table, so that is the whole
+  truth about "who is on the cluster".
 
 ## v0.1.12 - 2026-08-08
 
