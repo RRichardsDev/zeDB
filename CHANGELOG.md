@@ -7,6 +7,14 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- The ops view (docs/PHASE-6.md M1): a new toolbar view showing every
+  query running on the cluster right now (elapsed, user, memory, read
+  progress, the query itself), refreshed every 2 seconds while
+  visible. KILL QUERY sits one click away on write connections and
+  is honestly disabled on read-only ones.
+
 ## v0.1.12 - 2026-08-08
 
 Sharding awareness (docs/PHASE-5.md, complete). zeDB reads a

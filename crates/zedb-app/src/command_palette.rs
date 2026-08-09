@@ -44,6 +44,7 @@ pub enum PaletteCommand {
     ThemeDark,
     ThemeLight,
     ThemeSystem,
+    ToggleOps,
 }
 
 const ALL_COMMANDS: &[PaletteCommand] = &[
@@ -59,6 +60,7 @@ const ALL_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand::ThemeDark,
     PaletteCommand::ThemeLight,
     PaletteCommand::ThemeSystem,
+    PaletteCommand::ToggleOps,
 ];
 
 impl PaletteCommand {
@@ -76,13 +78,16 @@ impl PaletteCommand {
             Self::ThemeDark => "Theme: Dark",
             Self::ThemeLight => "Theme: Light",
             Self::ThemeSystem => "Theme: System",
+            Self::ToggleOps => "Ops view",
         }
     }
 
     fn available(self, workspace: &Workspace) -> bool {
         match self {
             Self::SyncSettingsNow => workspace.preferences.settings_sync_url.is_some(),
-            Self::Disconnect | Self::NewQuery | Self::ToggleFleet => workspace.connected.is_some(),
+            Self::Disconnect | Self::NewQuery | Self::ToggleFleet | Self::ToggleOps => {
+                workspace.connected.is_some()
+            }
             _ => true,
         }
     }
@@ -101,6 +106,7 @@ impl PaletteCommand {
             Self::ThemeDark => workspace.set_theme_preference("dark", window, cx),
             Self::ThemeLight => workspace.set_theme_preference("light", window, cx),
             Self::ThemeSystem => workspace.set_theme_preference("system", window, cx),
+            Self::ToggleOps => workspace.ops_toggle(cx),
         }
     }
 }

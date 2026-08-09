@@ -7,6 +7,7 @@ mod components;
 mod fleet;
 mod github;
 mod grid_spike;
+mod ops;
 mod rt;
 mod schema_intelligence_ui;
 mod settings_sync;
@@ -138,6 +139,7 @@ impl AssetSource for Assets {
             "icons/copy.svg" => Some(include_bytes!("../assets/icons/copy.svg")),
             "icons/github.svg" => Some(include_bytes!("../assets/icons/github.svg")),
             "icons/gitlab.svg" => Some(include_bytes!("../assets/icons/gitlab.svg")),
+            "icons/ops.svg" => Some(include_bytes!("../assets/icons/ops.svg")),
             "icons/check-chain.svg" => Some(include_bytes!("../assets/icons/check-chain.svg")),
             "icons/commit.svg" => Some(include_bytes!("../assets/icons/commit.svg")),
             "icons/fleet.svg" => Some(include_bytes!("../assets/icons/fleet.svg")),
@@ -426,6 +428,8 @@ struct Workspace {
     checks: Option<codegen::ChecksState>,
     commit: Option<commit::CommitState>,
     show_fleet: bool,
+    show_ops: bool,
+    ops: ops::OpsState,
     health_poll_generation: u64,
     connections: Vec<ConnectionConfig>,
     selected: Option<usize>,
@@ -732,6 +736,8 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
+                show_ops: false,
+                ops: ops::OpsState::default(),
                 agent: agent_pane::AgentPaneState::new(
                     preferences.agent_pane_width.unwrap_or(420.0),
                 ),
@@ -793,6 +799,8 @@ impl Workspace {
                     cx,
                 ),
                 show_fleet: false,
+                show_ops: false,
+                ops: ops::OpsState::default(),
                 agent: agent_pane::AgentPaneState::new(
                     preferences.agent_pane_width.unwrap_or(420.0),
                 ),
@@ -1010,6 +1018,7 @@ impl Workspace {
         self.show_fleet = !self.show_fleet;
         if self.show_fleet {
             self.show_query_editor = false;
+            self.show_ops = false;
             if self.fleet.repo.is_none() && !self.fleet.repo_path.read(cx).text().trim().is_empty()
             {
                 self.fleet_open_repo(cx);
@@ -1605,9 +1614,11 @@ impl Workspace {
                         // A second click on the already-selected row
                         // brings up its Cluster connection screen (the
                         // only route back to it while connected).
-                        if this.selected == Some(index) && this.show_query_editor {
+                        if this.selected == Some(index) && (this.show_query_editor || this.show_ops)
+                        {
                             this.show_query_editor = false;
                             this.show_fleet = false;
+                            this.show_ops = false;
                         }
                         this.selected = Some(index);
                         this.pending_delete = None;
@@ -3771,6 +3782,7 @@ impl Workspace {
     fn open_query_editor(&mut self, cx: &mut Context<Self>) {
         self.show_query_editor = true;
         self.show_fleet = false;
+        self.show_ops = false;
         cx.notify();
     }
 
@@ -5019,6 +5031,60 @@ impl Workspace {
                                         .on_click(
                                             cx.listener(|this, _, _, cx| this.toggle_fleet(cx)),
                                         )
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("open-ops")
+                            .group("btn-ops")
+                            .size(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(3.))
+                            .border_1()
+                            .map(|button| {
+                                if self.connected.is_none() {
+                                    button
+                                        .border_color(theme::disabled_border())
+                                        .child(
+                                            svg()
+                                                .path("icons/ops.svg")
+                                                .size(px(14.))
+                                                .text_color(theme::disabled()),
+                                        )
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(
+                                                "Connect to a cluster first",
+                                            )
+                                            .build(window, cx)
+                                        })
+                                } else {
+                                    button
+                                        .border_color(theme::border())
+                                        .when(self.show_ops, |button| button.bg(theme::selected()))
+                                        .child(
+                                            svg()
+                                                .path("icons/ops.svg")
+                                                .size(px(14.))
+                                                .text_color(if self.show_ops {
+                                                    theme::text()
+                                                } else {
+                                                    theme::text_dim()
+                                                })
+                                                .group_hover("btn-ops", |icon| {
+                                                    icon.text_color(theme::text())
+                                                }),
+                                        )
+                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(
+                                                "Ops: what the cluster is doing right now",
+                                            )
+                                            .build(window, cx)
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| this.ops_toggle(cx)))
                                 }
                             }),
                     )
@@ -6547,15 +6613,22 @@ impl Render for Workspace {
                                     div()
                                         .flex_1()
                                         .min_h_0()
-                                        .when(self.show_query_editor, |content| {
+                                        .when(self.show_ops, |content| {
+                                            content.child(self.ops_panel(cx))
+                                        })
+                                        .when(!self.show_ops && self.show_query_editor, |content| {
                                             content.child(self.query_editor_panel(cx))
                                         })
                                         .when(
-                                            !self.show_query_editor && self.show_fleet,
+                                            !self.show_ops
+                                                && !self.show_query_editor
+                                                && self.show_fleet,
                                             |content| content.child(self.fleet_panel(cx)),
                                         )
                                         .when(
-                                            !self.show_query_editor && !self.show_fleet,
+                                            !self.show_ops
+                                                && !self.show_query_editor
+                                                && !self.show_fleet,
                                             |content| {
                                                 content
                                                     .when(

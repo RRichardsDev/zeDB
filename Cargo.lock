@@ -8360,6 +8360,7 @@ name = "zedb-app"
 version = "0.1.12"
 dependencies = [
  "anyhow",
+ "chrono",
  "dirs 6.0.0",
  "gpui",
  "gpui-component",
