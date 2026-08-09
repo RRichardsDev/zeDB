@@ -103,11 +103,18 @@ impl Workspace {
         editor.update(cx, |editor, cx| {
             let text = editor.value().to_string();
             let cursor = editor.cursor();
-            // Land on its own line: newline before when mid-line, after
-            // when something follows.
+            // Land on its own paragraph: a blank line before (unless
+            // at the buffer start), and its own line after.
             let mut insert = String::new();
-            if cursor > 0 && !text[..cursor].ends_with('\n') {
-                insert.push('\n');
+            if cursor > 0 {
+                let before = &text[..cursor];
+                if before.ends_with("\n\n") {
+                    // Already a blank line.
+                } else if before.ends_with('\n') {
+                    insert.push('\n');
+                } else {
+                    insert.push_str("\n\n");
+                }
             }
             insert.push_str(sql);
             if !sql.ends_with(';') {
@@ -456,7 +463,14 @@ impl Workspace {
                     .iter()
                     .enumerate()
                     .map(|(index, saved)| {
-                        let sql = saved.sql.clone();
+                        // A human-given name inserts with a provenance
+                        // comment; the auto-derived default is not
+                        // worth repeating above its own text.
+                        let sql = if saved.name != default_name(&saved.sql) {
+                            format!("-- Saved: {}\n{}", saved.name, saved.sql)
+                        } else {
+                            saved.sql.clone()
+                        };
                         let name = saved.name.clone();
                         let hover_sql = saved.sql.clone();
                         let delete_name = saved.name.clone();

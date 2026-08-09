@@ -17,7 +17,9 @@ GitHub release notes.
   consecutive re-runs collapse into one entry, the newest 1000 are
   kept locally, and Clear history sits in a gutter behind an
   are-you-sure. Hovering any row shows the full statement,
-  syntax-colored; clicking inserts it at the editor cursor.
+  syntax-colored; clicking inserts it at the editor cursor as its
+  own paragraph, and a renamed saved query inserts with a
+  "-- Saved: name" comment above it.
 - Bookmarking a history entry saves it instantly, named from the
   query's first line; saved queries show as full-width cards with
   star/rename/delete actions beneath (favorites pin to the top and
