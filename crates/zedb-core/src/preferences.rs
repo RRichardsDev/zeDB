@@ -30,6 +30,18 @@ pub struct Preferences {
     pub settings_sync_url: Option<String>,
     /// Local checkout path of the settings-sync repo. Machine-local.
     pub settings_sync_repo: Option<String>,
+    /// Named query snippets; these sync (query HISTORY stays local).
+    pub saved_queries: Vec<SavedQuery>,
+}
+
+/// A named query snippet in the history drawer's Saved tab.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedQuery {
+    pub name: String,
+    pub sql: String,
+    /// Favorites sort to the top of the Saved tab.
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 /// A user-configured ACP-speaking agent: a name and a command line.
@@ -120,6 +132,11 @@ mod tests {
             theme: Some("dark".into()),
             settings_sync_url: Some("git@example.com:me/settings.git".into()),
             settings_sync_repo: Some("/tmp/sync".into()),
+            saved_queries: vec![SavedQuery {
+                name: "top tables".into(),
+                sql: "SELECT 1".into(),
+                favorite: true,
+            }],
         };
         save_preferences(&preferences).unwrap();
         assert_eq!(load_preferences().unwrap(), preferences);

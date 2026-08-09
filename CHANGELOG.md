@@ -7,6 +7,23 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Query history and saved queries: a resizable drawer beside the
+  query editor (toolbar clock icon or the command palette) with
+  History and Saved tabs and a search box filtering both. Every run
+  is recorded automatically with its connection, time, duration, and
+  row count (failed single statements record their error, in red);
+  consecutive re-runs collapse into one entry, the newest 1000 are
+  kept locally, and Clear history sits in a gutter behind an
+  are-you-sure. Hovering any row shows the full statement,
+  syntax-colored; clicking inserts it at the editor cursor.
+- Bookmarking a history entry saves it instantly, named from the
+  query's first line; saved queries show as full-width cards with
+  star/rename/delete actions beneath (favorites pin to the top and
+  keep their star lit). Saved queries live in settings.json and sync
+  to your other machines; history stays local.
+
 ## v0.1.14 - 2026-08-09
 
 Complex data grows up in the results grid, and the long-standing

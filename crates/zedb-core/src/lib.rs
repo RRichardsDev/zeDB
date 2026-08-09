@@ -4,6 +4,7 @@
 
 mod connection;
 pub mod git;
+mod history;
 mod preferences;
 pub mod repo;
 #[cfg(target_vendor = "apple")]
@@ -14,8 +15,9 @@ pub mod sync;
 mod value;
 
 pub use connection::{ConnectionConfig, ConnectionNode, DriverConfig, DriverSetting, EnvTier};
+pub use history::{load_history, push_entry, save_history, HistoryEntry, HISTORY_CAP};
 pub use preferences::{
-    load_preferences, save_preferences, settings_file_path, CustomAgent, Preferences,
+    load_preferences, save_preferences, settings_file_path, CustomAgent, Preferences, SavedQuery,
 };
 pub use session::{save_session, take_session, SavedQueryTab, SavedSession};
 pub use store::{load_connections, save_connections, StoreError};

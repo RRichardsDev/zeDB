@@ -45,6 +45,7 @@ pub enum PaletteCommand {
     ThemeLight,
     ThemeSystem,
     ToggleOps,
+    ToggleQueryHistory,
 }
 
 const ALL_COMMANDS: &[PaletteCommand] = &[
@@ -61,6 +62,7 @@ const ALL_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand::ThemeLight,
     PaletteCommand::ThemeSystem,
     PaletteCommand::ToggleOps,
+    PaletteCommand::ToggleQueryHistory,
 ];
 
 impl PaletteCommand {
@@ -79,6 +81,7 @@ impl PaletteCommand {
             Self::ThemeLight => "Theme: Light",
             Self::ThemeSystem => "Theme: System",
             Self::ToggleOps => "Ops view",
+            Self::ToggleQueryHistory => "Query history and saved queries",
         }
     }
 
@@ -107,6 +110,7 @@ impl PaletteCommand {
             Self::ThemeLight => workspace.set_theme_preference("light", window, cx),
             Self::ThemeSystem => workspace.set_theme_preference("system", window, cx),
             Self::ToggleOps => workspace.ops_toggle(cx),
+            Self::ToggleQueryHistory => workspace.history_toggle(cx),
         }
     }
 }

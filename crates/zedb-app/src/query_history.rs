@@ -1,0 +1,865 @@
+//! Query history + saved queries (docs/PHASE-7.1-IDEAS.md, first
+//! bite): every statement zeDB runs is recorded locally per
+//! connection; named snippets live in settings.json and sync. The
+//! drawer docks to the right of the query editor, split into History
+//! and Saved tabs. Bookmarking saves immediately under a name derived
+//! from the query; renaming happens inline on the Saved tab.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+use gpui::{div, prelude::*, px, svg, Context, Focusable as _, HighlightStyle, Window};
+use zedb_core::{HistoryEntry, SavedQuery};
+
+use crate::{theme, Workspace};
+
+/// Rows shown per section before search narrows things down.
+const HISTORY_SHOWN: usize = 200;
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum HistoryTab {
+    #[default]
+    History,
+    Saved,
+}
+
+impl HistoryTab {
+    const ALL: [HistoryTab; 2] = [HistoryTab::History, HistoryTab::Saved];
+
+    fn label(self) -> &'static str {
+        match self {
+            HistoryTab::History => "History",
+            HistoryTab::Saved => "Saved",
+        }
+    }
+}
+
+impl Workspace {
+    pub(crate) fn history_toggle(&mut self, cx: &mut Context<Self>) {
+        self.show_history = !self.show_history;
+        // The drawer lives beside the editor; surface it.
+        if self.show_history && self.connected.is_some() && !self.show_query_editor {
+            self.show_query_editor = true;
+            self.show_ops = false;
+            self.show_fleet = false;
+        }
+        cx.notify();
+    }
+
+    /// Record a finished run. Called from the run-completion handler
+    /// with whatever actually executed.
+    pub(crate) fn history_record(
+        &mut self,
+        sqls: &[String],
+        duration_ms: Option<u64>,
+        rows: Option<u64>,
+        error: Option<&str>,
+    ) {
+        let Some(connected) = &self.connected else {
+            return;
+        };
+        let connection = connected.name.clone();
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs() as i64)
+            .unwrap_or(0);
+        let single = sqls.len() == 1;
+        let last = sqls.len().saturating_sub(1);
+        for (index, sql) in sqls.iter().enumerate() {
+            let error_line = error
+                .filter(|_| index == last)
+                .map(|error| error.lines().next().unwrap_or_default().to_string())
+                .map(|mut line| {
+                    if line.len() > 200 {
+                        let mut cut = 200;
+                        while !line.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        line.truncate(cut);
+                        line.push('\u{2026}');
+                    }
+                    line
+                });
+            zedb_core::push_entry(
+                &mut self.history,
+                HistoryEntry {
+                    sql: sql.clone(),
+                    connection: connection.clone(),
+                    at,
+                    duration_ms: duration_ms.filter(|_| single),
+                    rows: rows.filter(|_| index == last && error.is_none()),
+                    error: error_line,
+                },
+            );
+        }
+        let _ = zedb_core::save_history(&self.history);
+    }
+
+    fn history_insert(&mut self, sql: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.query_tabs.get(self.active_query_tab) else {
+            return;
+        };
+        let editor = tab.editor.clone();
+        editor.update(cx, |editor, cx| {
+            let text = editor.value().to_string();
+            let cursor = editor.cursor();
+            // Land on its own line: newline before when mid-line, after
+            // when something follows.
+            let mut insert = String::new();
+            if cursor > 0 && !text[..cursor].ends_with('\n') {
+                insert.push('\n');
+            }
+            insert.push_str(sql);
+            if !sql.ends_with(';') {
+                insert.push(';');
+            }
+            if !text[cursor..].starts_with('\n') && !text[cursor..].is_empty() {
+                insert.push('\n');
+            }
+            editor.insert(insert, window, cx);
+        });
+        let handle = editor.read(cx).focus_handle(cx);
+        window.focus(&handle);
+        cx.notify();
+    }
+
+    /// Bookmark: save immediately under a name derived from the query
+    /// (first 25 chars), uniqued with a numeric suffix. Rename later
+    /// from the Saved tab.
+    fn history_save(&mut self, sql: &str, cx: &mut Context<Self>) {
+        let base = default_name(sql);
+        let mut name = base.clone();
+        let mut counter = 2;
+        while self
+            .preferences
+            .saved_queries
+            .iter()
+            .any(|saved| saved.name == name)
+        {
+            name = format!("{base} {counter}");
+            counter += 1;
+        }
+        self.preferences.saved_queries.push(SavedQuery {
+            name,
+            sql: sql.to_string(),
+            favorite: false,
+        });
+        sort_saved(&mut self.preferences.saved_queries);
+        if let Err(error) = zedb_core::save_preferences(&self.preferences) {
+            self.flash_warning(format!("Could not save query: {error}"), cx);
+        }
+        self.settings_sync_tick(cx);
+        // Show it where it landed.
+        self.history_tab = HistoryTab::Saved;
+        cx.notify();
+    }
+
+    fn history_rename_commit(&mut self, cx: &mut Context<Self>) {
+        let Some((original, input)) = self.history_renaming.take() else {
+            return;
+        };
+        let new_name = input.read(cx).text().trim().to_string();
+        if new_name.is_empty() || new_name == original {
+            cx.notify();
+            return;
+        }
+        // The name is the key: renaming onto an existing name replaces it.
+        self.preferences
+            .saved_queries
+            .retain(|saved| saved.name != new_name);
+        if let Some(saved) = self
+            .preferences
+            .saved_queries
+            .iter_mut()
+            .find(|saved| saved.name == original)
+        {
+            saved.name = new_name;
+        }
+        sort_saved(&mut self.preferences.saved_queries);
+        let _ = zedb_core::save_preferences(&self.preferences);
+        self.settings_sync_tick(cx);
+        cx.notify();
+    }
+
+    fn history_clear(&mut self, cx: &mut Context<Self>) {
+        self.history.clear();
+        let _ = zedb_core::save_history(&self.history);
+        self.history_clear_armed = false;
+        cx.notify();
+    }
+
+    fn history_delete_saved(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.preferences
+            .saved_queries
+            .retain(|saved| saved.name != name);
+        let _ = zedb_core::save_preferences(&self.preferences);
+        self.settings_sync_tick(cx);
+        cx.notify();
+    }
+
+    fn history_toggle_favorite(&mut self, name: &str, cx: &mut Context<Self>) {
+        if let Some(saved) = self
+            .preferences
+            .saved_queries
+            .iter_mut()
+            .find(|saved| saved.name == name)
+        {
+            saved.favorite = !saved.favorite;
+        }
+        sort_saved(&mut self.preferences.saved_queries);
+        let _ = zedb_core::save_preferences(&self.preferences);
+        self.settings_sync_tick(cx);
+        cx.notify();
+    }
+
+    /// The shared splitter pattern: a 1px divider with a wide invisible
+    /// drag target centered on it.
+    pub(crate) fn history_resize_handle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        gpui::deferred(
+            div()
+                .id("history-resize-handle")
+                .w(px(13.))
+                .h_full()
+                .ml(px(-6.))
+                .mr(px(-6.))
+                .flex_none()
+                .relative()
+                .cursor_col_resize()
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(6.))
+                        .top_0()
+                        .bottom_0()
+                        .w(px(1.))
+                        .bg(theme::border()),
+                )
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                        this.history_resizing =
+                            Some((this.history_width, f32::from(event.position.x)));
+                        cx.notify();
+                    }),
+                ),
+        )
+    }
+
+    pub(crate) fn history_drawer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let filter = self.history_search.read(cx).text().trim().to_lowercase();
+        let connection = self
+            .connected
+            .as_ref()
+            .map(|connected| connected.name.clone());
+        let active_tab = self.history_tab;
+
+        let tabs = div()
+            .flex()
+            .items_center()
+            .border_b_1()
+            .border_color(theme::border())
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .gap_4()
+                    .children(HistoryTab::ALL.into_iter().map(|tab| {
+                        let active = tab == active_tab;
+                        div()
+                            .id(tab.label())
+                            .py_1p5()
+                            .border_b_2()
+                            .border_color(if active {
+                                theme::accent()
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .text_sm()
+                            .text_color(if active {
+                                theme::text()
+                            } else {
+                                theme::text_dim()
+                            })
+                            .hover(|label| label.text_color(theme::text()).cursor_pointer())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.history_tab = tab;
+                                this.history_clear_armed = false;
+                                cx.notify();
+                            }))
+                            .child(tab.label())
+                    })),
+            )
+            .child(
+                div()
+                    .id("history-close")
+                    .flex_none()
+                    .px_1()
+                    .rounded(px(3.))
+                    .text_color(theme::text_dim())
+                    .child("\u{00d7}")
+                    .hover(|close| {
+                        close
+                            .bg(theme::hover())
+                            .text_color(theme::text())
+                            .cursor_pointer()
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.show_history = false;
+                        cx.notify();
+                    })),
+            );
+
+        let header = div()
+            .flex_none()
+            .px_3()
+            .pt_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            // Explicit width: the input's own w_full does not resolve
+            // against this container reliably.
+            .child(
+                div()
+                    .w(px(self.history_width - 24.0))
+                    .child(self.history_search.clone()),
+            )
+            .child(tabs);
+
+        let content: gpui::AnyElement = match active_tab {
+            HistoryTab::History => {
+                let entries: Vec<&HistoryEntry> = self
+                    .history
+                    .iter()
+                    .filter(|entry| filter.is_empty() || entry.sql.to_lowercase().contains(&filter))
+                    .take(HISTORY_SHOWN)
+                    .collect();
+                let rows: Vec<_> = entries
+                    .iter()
+                    .enumerate()
+                    .map(|(index, entry)| {
+                        let sql = entry.sql.clone();
+                        let save_sql = entry.sql.clone();
+                        let hover_sql = entry.sql.clone();
+                        let failed = entry.error.is_some();
+                        let mut meta = relative_time(entry.at);
+                        if let Some(connection_name) = &connection {
+                            if *connection_name != entry.connection {
+                                meta.push_str(" \u{b7} ");
+                                meta.push_str(&entry.connection);
+                            }
+                        }
+                        if let Some(rows) = entry.rows {
+                            meta.push_str(&format!(" \u{b7} {rows} rows"));
+                        }
+                        if let Some(duration) = entry.duration_ms {
+                            meta.push_str(&format!(" \u{b7} {duration} ms"));
+                        }
+                        if let Some(error) = &entry.error {
+                            meta = format!("{} \u{b7} {error}", relative_time(entry.at));
+                        }
+                        div()
+                            .id(("history-entry", index))
+                            .group("history-row")
+                            .px_3()
+                            .py_1p5()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .hover(|row| row.bg(theme::row_hover()).cursor_pointer())
+                            .tooltip(move |window, cx| sql_tooltip(&hover_sql).build(window, cx))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.history_insert(&sql, window, cx)
+                            }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .font_family("Menlo")
+                                            .text_color(theme::text())
+                                            .child(first_line(&entry.sql)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_color(if failed {
+                                                theme::danger()
+                                            } else {
+                                                theme::text_dim()
+                                            })
+                                            .child(meta),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id(("save-history", index))
+                                    .flex_none()
+                                    .size(px(20.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(3.))
+                                    .invisible()
+                                    .group_hover("history-row", |button| button.visible())
+                                    .child(
+                                        svg()
+                                            .path("icons/bookmark.svg")
+                                            .size(px(11.))
+                                            .text_color(theme::text_dim()),
+                                    )
+                                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                    .tooltip(|window, cx| {
+                                        gpui_component::tooltip::Tooltip::new("Save query")
+                                            .build(window, cx)
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.history_save(&save_sql, cx);
+                                    })),
+                            )
+                    })
+                    .collect();
+                div()
+                    .children(rows)
+                    .when(entries.is_empty(), |list| {
+                        list.child(empty_line(if filter.is_empty() {
+                            "Statements you run will appear here."
+                        } else {
+                            "No matches."
+                        }))
+                    })
+                    .into_any_element()
+            }
+            HistoryTab::Saved => {
+                let renaming_name = self.history_renaming.as_ref().map(|(name, _)| name.clone());
+                let saved: Vec<&SavedQuery> = self
+                    .preferences
+                    .saved_queries
+                    .iter()
+                    .filter(|saved| {
+                        filter.is_empty()
+                            || saved.name.to_lowercase().contains(&filter)
+                            || saved.sql.to_lowercase().contains(&filter)
+                    })
+                    .collect();
+                let rows: Vec<_> = saved
+                    .iter()
+                    .enumerate()
+                    .map(|(index, saved)| {
+                        let sql = saved.sql.clone();
+                        let name = saved.name.clone();
+                        let hover_sql = saved.sql.clone();
+                        let delete_name = saved.name.clone();
+                        let favorite_name = saved.name.clone();
+                        let rename_name = saved.name.clone();
+                        let favorite = saved.favorite;
+                        let renaming = renaming_name.as_deref() == Some(saved.name.as_str());
+
+                        if renaming {
+                            let input = self
+                                .history_renaming
+                                .as_ref()
+                                .map(|(_, input)| input.clone())
+                                .expect("renaming row has an input");
+                            return div()
+                                .id(("saved-query", index))
+                                .px_3()
+                                .py_1p5()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().w(px(self.history_width - 130.0)).child(input))
+                                .child(
+                                    div()
+                                        .id(("rename-commit", index))
+                                        .flex_none()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded(px(3.))
+                                        .bg(theme::selected())
+                                        .text_xs()
+                                        .text_color(theme::text())
+                                        .child("Save")
+                                        .hover(|button| button.cursor_pointer())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.history_rename_commit(cx)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id(("rename-cancel", index))
+                                        .flex_none()
+                                        .px_1()
+                                        .rounded(px(3.))
+                                        .text_color(theme::text_dim())
+                                        .child("\u{00d7}")
+                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.history_renaming = None;
+                                            cx.notify();
+                                        })),
+                                );
+                        }
+
+                        let action_button =
+                            |id: (&'static str, usize),
+                             icon: &'static str,
+                             always_visible: bool,
+                             color: gpui::Hsla| {
+                                div()
+                                    .id(id)
+                                    .flex_none()
+                                    .size(px(20.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(3.))
+                                    .when(!always_visible, |button| {
+                                        button
+                                            .invisible()
+                                            .group_hover("saved-row", |button| button.visible())
+                                    })
+                                    .child(svg().path(icon).size(px(11.)).text_color(color))
+                            };
+
+                        div()
+                            .id(("saved-query", index))
+                            .group("saved-row")
+                            .px_3()
+                            .py_1p5()
+                            .flex()
+                            .flex_col()
+                            .hover(|row| row.bg(theme::row_hover()).cursor_pointer())
+                            .tooltip(move |window, cx| sql_tooltip(&hover_sql).build(window, cx))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.history_insert(&sql, window, cx)
+                            }))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .text_sm()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_color(theme::text())
+                                    .child(name),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .text_xs()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .font_family("Menlo")
+                                    .text_color(theme::text_dim())
+                                    .child(first_line(&saved.sql)),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .pt_0p5()
+                                    .child(
+                                        action_button(
+                                            ("favorite-saved", index),
+                                            "icons/star.svg",
+                                            favorite,
+                                            if favorite {
+                                                theme::sort_indicator()
+                                            } else {
+                                                theme::text_dim()
+                                            },
+                                        )
+                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                this.history_toggle_favorite(&favorite_name, cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        action_button(
+                                            ("rename-saved", index),
+                                            "icons/edit.svg",
+                                            false,
+                                            theme::text_dim(),
+                                        )
+                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new("Rename")
+                                                .build(window, cx)
+                                        })
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                this.history_renaming = Some((
+                                                    rename_name.clone(),
+                                                    Self::input(
+                                                        rename_name.clone(),
+                                                        "Name",
+                                                        false,
+                                                        cx,
+                                                    ),
+                                                ));
+                                                cx.notify();
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        action_button(
+                                            ("delete-saved", index),
+                                            "icons/trash.svg",
+                                            false,
+                                            theme::text_dim(),
+                                        )
+                                        .hover(|button| {
+                                            button.bg(theme::danger_hover()).cursor_pointer()
+                                        })
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                this.history_delete_saved(&delete_name, cx);
+                                            }),
+                                        ),
+                                    ),
+                            )
+                    })
+                    .collect();
+                div()
+                    .children(rows)
+                    .when(saved.is_empty(), |list| {
+                        list.child(empty_line(if filter.is_empty() {
+                            "Bookmark a history entry to keep and sync it."
+                        } else {
+                            "No matches."
+                        }))
+                    })
+                    .into_any_element()
+            }
+        };
+
+        let footer = (active_tab == HistoryTab::History && !self.history.is_empty()).then(|| {
+            let armed = self.history_clear_armed;
+            let count = self.history.len();
+            div()
+                .flex_none()
+                .h(px(26.))
+                .px_3()
+                .border_t_1()
+                .border_color(theme::border())
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap_2()
+                .when(armed, |gutter| {
+                    gutter.child(
+                        div()
+                            .id("history-clear-cancel")
+                            .px_1p5()
+                            .rounded(px(3.))
+                            .text_xs()
+                            .text_color(theme::text_dim())
+                            .child("Cancel")
+                            .hover(|button| {
+                                button
+                                    .bg(theme::hover())
+                                    .text_color(theme::text())
+                                    .cursor_pointer()
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.history_clear_armed = false;
+                                cx.notify();
+                            })),
+                    )
+                })
+                .child(
+                    div()
+                        .id("history-clear")
+                        .px_1p5()
+                        .rounded(px(3.))
+                        .text_xs()
+                        .map(|button| {
+                            if armed {
+                                button
+                                    .text_color(theme::danger())
+                                    .child(format!("Clear {count} entries?"))
+                            } else {
+                                button.text_color(theme::text_dim()).child("Clear history")
+                            }
+                        })
+                        .hover(|button| {
+                            button
+                                .bg(theme::danger_hover())
+                                .text_color(theme::danger())
+                                .cursor_pointer()
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if this.history_clear_armed {
+                                this.history_clear(cx);
+                            } else {
+                                this.history_clear_armed = true;
+                                cx.notify();
+                            }
+                        })),
+                )
+        });
+
+        div()
+            .w(px(self.history_width))
+            .flex_none()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(theme::bg_sidebar())
+            .child(header)
+            .child(
+                div()
+                    .id("history-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(content),
+            )
+            .children(footer)
+    }
+}
+
+type HighlightRuns = Vec<(std::ops::Range<usize>, HighlightStyle)>;
+
+thread_local! {
+    /// One compiled SQL highlighter for hover cards (compilation is
+    /// ~10ms; parsing is microseconds) plus a per-text run cache so a
+    /// visible tooltip costs nothing per frame.
+    static HOVER_HL: RefCell<Option<gpui_component::highlighter::SyntaxHighlighter>> =
+        const { RefCell::new(None) };
+    static HOVER_CACHE: RefCell<HashMap<(String, bool), HighlightRuns>> =
+        RefCell::new(HashMap::new());
+}
+
+fn hover_runs(sql: &str, cx: &gpui::App) -> HighlightRuns {
+    let dark = theme::is_dark();
+    let key = (sql.to_string(), dark);
+    HOVER_CACHE.with(|cache| {
+        if let Some(runs) = cache.borrow().get(&key) {
+            return runs.clone();
+        }
+        let runs = HOVER_HL.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            let highlighter = slot
+                .get_or_insert_with(|| gpui_component::highlighter::SyntaxHighlighter::new("sql"));
+            highlighter.replace_all(&gpui_component::Rope::from(sql));
+            let highlight_theme = &gpui_component::Theme::global(cx).highlight_theme;
+            highlighter.styles(&(0..sql.len()), highlight_theme)
+        });
+        let mut cache = cache.borrow_mut();
+        if cache.len() > 500 {
+            cache.clear();
+        }
+        cache.insert(key, runs.clone());
+        runs
+    })
+}
+
+/// Hover card with the full statement, tree-sitter colored, size-capped.
+fn sql_tooltip(sql: &str) -> gpui_component::tooltip::Tooltip {
+    const MAX_CHARS: usize = 4000;
+    let mut text = sql.to_string();
+    let mut truncated = false;
+    if text.len() > MAX_CHARS {
+        let mut cut = MAX_CHARS;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        text.truncate(cut);
+        truncated = true;
+    }
+    gpui_component::tooltip::Tooltip::element(move |_, cx| {
+        let runs = hover_runs(&text, cx);
+        div()
+            .max_w(px(560.))
+            .font_family("Menlo")
+            .text_xs()
+            .child(gpui::StyledText::new(text.clone()).with_highlights(runs))
+            .when(truncated, |card| {
+                card.child(div().text_color(theme::text_dim()).child("\u{2026}"))
+            })
+            .into_any_element()
+    })
+}
+
+/// Favorites first, then by name.
+fn sort_saved(saved: &mut [SavedQuery]) {
+    saved.sort_by(|a, b| {
+        b.favorite
+            .cmp(&a.favorite)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+fn empty_line(message: &'static str) -> gpui::Div {
+    div()
+        .px_3()
+        .py_2()
+        .text_sm()
+        .text_color(theme::text_dim())
+        .child(message)
+}
+
+/// The default saved-query name: the first 25 characters of the
+/// statement's first line.
+fn default_name(sql: &str) -> String {
+    let line = sql.lines().next().unwrap_or_default().trim();
+    let mut name = line.to_string();
+    if name.len() > 25 {
+        let mut cut = 25;
+        while !name.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        name.truncate(cut);
+        name.push('\u{2026}');
+    }
+    if name.is_empty() {
+        name = "unnamed".into();
+    }
+    name
+}
+
+fn first_line(sql: &str) -> String {
+    let line = sql.lines().next().unwrap_or_default().trim();
+    let mut line = line.to_string();
+    if line.len() > 90 {
+        let mut cut = 90;
+        while !line.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        line.truncate(cut);
+        line.push('\u{2026}');
+    }
+    line
+}
+
+fn relative_time(at: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+    let delta = (now - at).max(0);
+    if delta < 60 {
+        "just now".into()
+    } else if delta < 3600 {
+        format!("{}m ago", delta / 60)
+    } else if delta < 86_400 {
+        format!("{}h ago", delta / 3600)
+    } else {
+        format!("{}d ago", delta / 86_400)
+    }
+}

@@ -8,6 +8,7 @@ mod fleet;
 mod github;
 mod grid_spike;
 mod ops;
+mod query_history;
 mod rt;
 mod schema_intelligence_ui;
 mod settings_sync;
@@ -141,6 +142,9 @@ impl AssetSource for Assets {
             "icons/github.svg" => Some(include_bytes!("../assets/icons/github.svg")),
             "icons/gitlab.svg" => Some(include_bytes!("../assets/icons/gitlab.svg")),
             "icons/ops.svg" => Some(include_bytes!("../assets/icons/ops.svg")),
+            "icons/history.svg" => Some(include_bytes!("../assets/icons/history.svg")),
+            "icons/bookmark.svg" => Some(include_bytes!("../assets/icons/bookmark.svg")),
+            "icons/star.svg" => Some(include_bytes!("../assets/icons/star.svg")),
             "icons/check-chain.svg" => Some(include_bytes!("../assets/icons/check-chain.svg")),
             "icons/commit.svg" => Some(include_bytes!("../assets/icons/commit.svg")),
             "icons/fleet.svg" => Some(include_bytes!("../assets/icons/fleet.svg")),
@@ -433,6 +437,18 @@ struct Workspace {
     commit: Option<commit::CommitState>,
     show_fleet: bool,
     show_ops: bool,
+    /// Query history + saved queries drawer beside the editor.
+    show_history: bool,
+    history: Vec<zedb_core::HistoryEntry>,
+    history_search: Entity<TextInput>,
+    /// A saved query being renamed inline: (original name, input).
+    history_renaming: Option<(String, Entity<TextInput>)>,
+    /// Clear-history asked once; the next click clears.
+    history_clear_armed: bool,
+    history_width: f32,
+    /// An active drawer-edge drag: (start width, start mouse x).
+    history_resizing: Option<(f32, f32)>,
+    history_tab: query_history::HistoryTab,
     ops: ops::OpsState,
     /// query_ids killed from the ops view; errors on these statements
     /// report the kill instead of a transport failure.
@@ -744,6 +760,14 @@ impl Workspace {
                 ),
                 show_fleet: false,
                 show_ops: false,
+                show_history: false,
+                history: zedb_core::load_history(),
+                history_search: Self::input("", "Search queries", false, cx),
+                history_renaming: None,
+                history_clear_armed: false,
+                history_width: 320.0,
+                history_resizing: None,
+                history_tab: query_history::HistoryTab::default(),
                 ops: ops::OpsState::default(),
                 ops_killed: std::collections::HashSet::new(),
                 agent: agent_pane::AgentPaneState::new(
@@ -808,6 +832,14 @@ impl Workspace {
                 ),
                 show_fleet: false,
                 show_ops: false,
+                show_history: false,
+                history: zedb_core::load_history(),
+                history_search: Self::input("", "Search queries", false, cx),
+                history_renaming: None,
+                history_clear_armed: false,
+                history_width: 320.0,
+                history_resizing: None,
+                history_tab: query_history::HistoryTab::default(),
                 ops: ops::OpsState::default(),
                 ops_killed: std::collections::HashSet::new(),
                 agent: agent_pane::AgentPaneState::new(
@@ -4573,6 +4605,9 @@ impl Workspace {
         tab.elapsed = None;
         let config = connected.client_config.clone();
         let row_limit = tab.max_rows.limit();
+        // For the history record on completion; `statements` moves
+        // into the runner task.
+        let run_sqls: Vec<String> = statements.iter().map(|(sql, _)| sql.clone()).collect();
         self.query_run_id += 1;
         let run_id = self.query_run_id;
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -4757,10 +4792,25 @@ impl Workspace {
                         grid.set_filters(filters, cx);
                     });
                 }
+                let duration_ms = tab.elapsed.map(|elapsed| elapsed.as_millis() as u64);
+                let result_rows = tab.result_rows as u64;
+                let run_error = match &tab.outcome {
+                    QueryOutcome::Error(error) => Some(error.clone()),
+                    _ => None,
+                };
                 let successful_sql: Vec<String> = successful_statements
                     .iter()
                     .map(|(sql, _)| sql.clone())
                     .collect();
+                if run_error.is_none() {
+                    if !successful_sql.is_empty() {
+                        this.history_record(&successful_sql, duration_ms, Some(result_rows), None);
+                    }
+                } else if run_sqls.len() == 1 {
+                    // Failed single-statement runs are history too: the
+                    // statement you need to fix is the one you want back.
+                    this.history_record(&run_sqls, duration_ms, None, run_error.as_deref());
+                }
                 this.refresh_schema_after_statements(&successful_sql);
                 cx.notify();
             })
@@ -6089,8 +6139,10 @@ impl Workspace {
             .or_else(|| active.started_at.map(|started| started.elapsed()))
             .map(format_query_duration);
 
-        div()
-            .size_full()
+        let editor_column = div()
+            .h_full()
+            .flex_1()
+            .min_w_0()
             .flex()
             .flex_col()
             .child(
@@ -6126,6 +6178,35 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap_2()
+                            .child(
+                                div()
+                                    .id("toggle-history")
+                                    .size(px(24.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(3.))
+                                    .when(self.show_history, |button| button.bg(theme::hover()))
+                                    .child(
+                                        svg().path("icons/history.svg").size(px(14.)).text_color(
+                                            if self.show_history {
+                                                theme::text()
+                                            } else {
+                                                theme::text_dim()
+                                            },
+                                        ),
+                                    )
+                                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                    .tooltip(|window, cx| {
+                                        gpui_component::tooltip::Tooltip::new(
+                                            "Query history and saved queries",
+                                        )
+                                        .build(window, cx)
+                                    })
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.history_toggle(cx)),
+                                    ),
+                            )
                             .child(self.max_rows_selector(running, cx))
                             .child(
                                 div()
@@ -6330,7 +6411,16 @@ impl Workspace {
                                 )
                             }),
                     ),
-            )
+            );
+
+        div()
+            .size_full()
+            .flex()
+            .child(editor_column)
+            .when(self.show_history, |root| {
+                root.child(self.history_resize_handle(cx))
+                    .child(self.history_drawer(cx))
+            })
     }
 
     fn status_bar(&self) -> impl IntoElement {
@@ -6586,6 +6676,11 @@ impl Render for Workspace {
                         .clamp(280.0, (viewport_width - 400.0).max(280.0));
                     cx.notify();
                 }
+                if let Some((start_width, start_x)) = this.history_resizing {
+                    let width = start_width + (start_x - f32::from(event.position.x));
+                    this.history_width = width.clamp(240.0, 640.0);
+                    cx.notify();
+                }
                 if let Some((target, last_y)) = this.query_resize {
                     let current_y = f32::from(event.position.y);
                     let delta = current_y - last_y;
@@ -6615,6 +6710,7 @@ impl Render for Workspace {
                         let _ = save_preferences(&this.preferences);
                     }
                     this.query_resize = None;
+                    this.history_resizing = None;
                 }),
             )
             .on_mouse_up_out(
@@ -6625,6 +6721,7 @@ impl Render for Workspace {
                     this.fleet.resizing_detail = false;
                     this.agent.resizing = false;
                     this.query_resize = None;
+                    this.history_resizing = None;
                 }),
             )
             .when(self.palette.open, |root| {
