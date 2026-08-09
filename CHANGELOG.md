@@ -30,12 +30,24 @@ GitHub release notes.
   the results pane, and every MergeTree read shows its index pruning
   (selected vs initial parts and granules per index stage) with a
   utilization bar: green when the index prunes hard, red on a full
-  scan. Works on servers back to at least 25.8.
+  scan. The pane scrolls both ways for deep plans. Works on servers
+  back to at least 25.8.
 - Fixed a rare hard freeze of the whole app on macOS when a popup
   (tooltip, hover card) was open during a window activation change:
   an upstream gpui deadlock (zed#51035), fix backported.
 - The connection list's posture and tier pills shrank to tag size,
   giving the connection names the room.
+- The Run button carries the whole lifecycle: it reads "Running..."
+  while a query streams and turns into Cancel on hover, replacing
+  the dedicated Cancel button. "Run all" became Execute with a
+  script glyph, and both buttons moved their keyboard shortcuts into
+  tooltips.
+- Errors grew hands: the error bar offers Copy and Ask (your
+  last-used agent, shown by its logo). Ask opens the agent pane,
+  sends the error automatically once the session is ready, and
+  attaches the failing tab and SQL invisibly; when the agent
+  proposes a corrected query, it replaces the failed statement in
+  the original tab instead of opening a new one.
 
 ## v0.1.14 - 2026-08-09
 

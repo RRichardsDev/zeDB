@@ -5,6 +5,7 @@
 //! `EXPLAIN json = 1` (verified back to 25.8).
 
 use gpui::{div, prelude::*, px, Context, Window};
+use gpui_component::scroll::ScrollableElement as _;
 use zedb_ch::explain::{ExplainIndex, ExplainNode};
 
 use crate::{rt, theme, Workspace};
@@ -130,13 +131,27 @@ impl Workspace {
                     ),
             )
             .child(
+                // Horizontal range from the widest row (items_start +
+                // nowrap) via the scrollbar wrapper; vertical is the
+                // inner column's own native scroll. The pane clips
+                // against whatever right-hand panels are open.
                 div()
                     .id("explain-scroll")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .py_1()
-                    .children(rows),
+                    .min_w_0()
+                    .child(
+                        div()
+                            .id("explain-rows")
+                            .h_full()
+                            .overflow_y_scroll()
+                            .py_1()
+                            .flex()
+                            .flex_col()
+                            .items_start()
+                            .children(rows),
+                    )
+                    .overflow_x_scrollbar(),
             )
     }
 }
@@ -183,8 +198,7 @@ fn flatten(
         .gap_2()
         .font_family("Menlo")
         .text_sm()
-        .whitespace_nowrap()
-        .overflow_hidden();
+        .whitespace_nowrap();
     if !branch.is_empty() {
         row = row.child(
             div()
@@ -202,8 +216,6 @@ fn flatten(
     if let Some(description) = &node.description {
         row = row.child(
             div()
-                .min_w_0()
-                .overflow_hidden()
                 .whitespace_nowrap()
                 .text_xs()
                 .text_color(theme::text_dim())
@@ -261,7 +273,6 @@ fn index_row(index: &ExplainIndex, prefix: &str) -> gpui::AnyElement {
         .font_family("Menlo")
         .text_xs()
         .whitespace_nowrap()
-        .overflow_hidden()
         .child(
             div()
                 .flex_none()
@@ -287,8 +298,6 @@ fn index_row(index: &ExplainIndex, prefix: &str) -> gpui::AnyElement {
         .when_some(index.condition.clone(), |row, condition| {
             row.child(
                 div()
-                    .min_w_0()
-                    .overflow_hidden()
                     .whitespace_nowrap()
                     .text_color(theme::text_dim())
                     .child(condition),

@@ -146,6 +146,7 @@ impl AssetSource for Assets {
             "icons/history.svg" => Some(include_bytes!("../assets/icons/history.svg")),
             "icons/bookmark.svg" => Some(include_bytes!("../assets/icons/bookmark.svg")),
             "icons/star.svg" => Some(include_bytes!("../assets/icons/star.svg")),
+            "icons/execute.svg" => Some(include_bytes!("../assets/icons/execute.svg")),
             "icons/check-chain.svg" => Some(include_bytes!("../assets/icons/check-chain.svg")),
             "icons/commit.svg" => Some(include_bytes!("../assets/icons/commit.svg")),
             "icons/fleet.svg" => Some(include_bytes!("../assets/icons/fleet.svg")),
@@ -385,6 +386,8 @@ struct QueryTab {
     schema_analysis_generation: u64,
     /// An EXPLAIN plan shown in place of the results grid.
     explain: Option<zedb_ch::explain::ExplainNode>,
+    /// What the failed run executed, for the error bar's Ask button.
+    failed_sql: Option<String>,
     /// The last successfully executed statement, i.e. the one whose
     /// result the grid is showing; header sorts rewrite and re-run it.
     displayed_statement: Option<String>,
@@ -448,6 +451,9 @@ struct Workspace {
     history_renaming: Option<(String, Entity<TextInput>)>,
     /// Clear-history asked once; the next click clears.
     history_clear_armed: bool,
+    /// Where an error-bar ask came from: (query tab id, failed sql).
+    /// An agent-proposed query replaces that statement in place.
+    agent_fix_target: Option<(usize, String)>,
     history_width: f32,
     /// An active drawer-edge drag: (start width, start mouse x).
     history_resizing: Option<(f32, f32)>,
@@ -768,6 +774,7 @@ impl Workspace {
                 history_search: Self::input("", "Search queries", false, cx),
                 history_renaming: None,
                 history_clear_armed: false,
+                agent_fix_target: None,
                 history_width: 320.0,
                 history_resizing: None,
                 history_tab: query_history::HistoryTab::default(),
@@ -840,6 +847,7 @@ impl Workspace {
                 history_search: Self::input("", "Search queries", false, cx),
                 history_renaming: None,
                 history_clear_armed: false,
+                agent_fix_target: None,
                 history_width: 320.0,
                 history_resizing: None,
                 history_tab: query_history::HistoryTab::default(),
@@ -3961,6 +3969,7 @@ impl Workspace {
             vim_recording: None,
             schema_analysis_generation: 0,
             explain: None,
+            failed_sql: None,
             displayed_statement: None,
             displayed_statement_offset: None,
             running_query_id: None,
@@ -4612,6 +4621,7 @@ impl Workspace {
         let tab_id = tab.id;
         tab.outcome = QueryOutcome::Running;
         tab.explain = None;
+        tab.failed_sql = None;
         tab.result_columns = 0;
         tab.result_rows = 0;
         // has_result stays as it was: an already-displayed result keeps
@@ -4819,6 +4829,7 @@ impl Workspace {
                     QueryOutcome::Error(error) => Some(error.clone()),
                     _ => None,
                 };
+                tab.failed_sql = run_error.is_some().then(|| run_sqls.join(";\n\n"));
                 let successful_sql: Vec<String> = successful_statements
                     .iter()
                     .map(|(sql, _)| sql.clone())
@@ -6099,6 +6110,29 @@ impl Workspace {
             QueryOutcome::Running | QueryOutcome::StatementError { .. }
         );
         let statement_failed = matches!(active.outcome, QueryOutcome::StatementError { .. });
+        let error_text = match &active.outcome {
+            QueryOutcome::Error(error) => Some(error.clone()),
+            _ => None,
+        };
+        // Ask needs a remembered agent that discovery has not ruled out.
+        let ask_agent = self.preferences.last_agent.clone().filter(|name| {
+            self.agent.agents.is_empty()
+                || self.agent.agents.iter().any(|agent| agent.name == *name)
+        });
+        let ask_agent_icon = ask_agent.as_ref().map(|name| {
+            self.agent
+                .agents
+                .iter()
+                .find(|agent| agent.name == *name)
+                .map(|agent| agent_pane::icon_for(&agent.id))
+                .unwrap_or(match name.as_str() {
+                    // Discovery may not have run yet; the built-ins
+                    // are known by name.
+                    "Claude Code" => "icons/agent-claude.svg",
+                    "Codex" => "icons/agent-codex.svg",
+                    _ => "icons/sparkle.svg",
+                })
+        });
         let has_result = active.has_result || active.explain.is_some();
         let result_capped = active.result_capped;
         let editor_height = active.editor_height;
@@ -6202,25 +6236,6 @@ impl Workspace {
                             .child(self.max_rows_selector(running, cx))
                             .child(
                                 div()
-                                    .id("cancel-query")
-                                    .px_3()
-                                    .py_1()
-                                    .rounded(px(3.))
-                                    .text_color(theme::text_dim())
-                                    .when(running, |button| {
-                                        button
-                                            .text_color(theme::danger())
-                                            .hover(|button| {
-                                                button.bg(theme::danger_hover()).cursor_pointer()
-                                            })
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| this.cancel_query(cx)),
-                                            )
-                                    })
-                                    .child("Cancel"),
-                            )
-                            .child(
-                                div()
                                     .id("run-selection")
                                     .px_3()
                                     .py_1()
@@ -6228,7 +6243,22 @@ impl Workspace {
                                     .border_1()
                                     .border_color(theme::border())
                                     .text_color(theme::text_dim())
-                                    .child("Run all  ⌃X")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .child(
+                                        svg()
+                                            .path("icons/execute.svg")
+                                            .size(px(13.))
+                                            .text_color(theme::text_dim()),
+                                    )
+                                    .child("Execute")
+                                    .tooltip(|window, cx| {
+                                        gpui_component::tooltip::Tooltip::new(
+                                            "Execute the selection, or every statement \u{b7} \u{2303}X",
+                                        )
+                                        .build(window, cx)
+                                    })
                                     .when(!running, |button| {
                                         button
                                             .text_color(theme::text())
@@ -6243,20 +6273,68 @@ impl Workspace {
                             .child(
                                 div()
                                     .id("run-query")
+                                    .group("run-button")
                                     .px_3()
                                     .py_1()
                                     .rounded(px(3.))
-                                    .bg(theme::primary())
-                                    .text_color(theme::primary_foreground())
-                                    .child("Run  ⌘↵")
-                                    .when(!running, |button| {
-                                        button
-                                            .hover(|button| {
-                                                button.bg(theme::primary_hover()).cursor_pointer()
-                                            })
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.run_query(window, cx)
-                                            }))
+                                    .map(|button| {
+                                        if running {
+                                            // Running at rest; Cancel on hover
+                                            // (stacked labels: hover cannot
+                                            // change text).
+                                            button
+                                                .relative()
+                                                .bg(theme::hover())
+                                                .text_color(theme::text_dim())
+                                                .hover(|button| {
+                                                    button
+                                                        .bg(theme::danger_hover())
+                                                        .text_color(theme::danger())
+                                                        .cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.cancel_query(cx)
+                                                }))
+                                                .child(
+                                                    div()
+                                                        .group_hover("run-button", |label| {
+                                                            label.invisible()
+                                                        })
+                                                        .child("Running\u{2026}"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .absolute()
+                                                        .inset_0()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .invisible()
+                                                        .group_hover("run-button", |label| {
+                                                            label.visible()
+                                                        })
+                                                        .child("Cancel"),
+                                                )
+                                        } else {
+                                            button
+                                                .bg(theme::primary())
+                                                .text_color(theme::primary_foreground())
+                                                .child("Run")
+                                                .tooltip(|window, cx| {
+                                                    gpui_component::tooltip::Tooltip::new(
+                                                        "Run the statement at the cursor \u{b7} \u{2318}\u{21a9}",
+                                                    )
+                                                    .build(window, cx)
+                                                })
+                                                .hover(|button| {
+                                                    button
+                                                        .bg(theme::primary_hover())
+                                                        .cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.run_query(window, cx)
+                                                }))
+                                        }
                                     }),
                             )
                             .child(
@@ -6381,6 +6459,102 @@ impl Workspace {
                                     .gap_3()
                                     .child(div().flex_1().min_w_0().child(status)),
                             )
+                            .when_some(error_text, |row, error| {
+                                let copy_error = error.clone();
+                                row.child(
+                                    div()
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .id("copy-error")
+                                                .px_2()
+                                                .rounded(px(3.))
+                                                .border_1()
+                                                .border_color(theme::border())
+                                                .text_color(theme::text())
+                                                .hover(|button| {
+                                                    button.bg(theme::hover()).cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(move |_, _, _, cx| {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(
+                                                            copy_error.clone(),
+                                                        ),
+                                                    );
+                                                }))
+                                                .child("Copy"),
+                                        )
+                                        .when_some(ask_agent.clone(), |actions, agent_name| {
+                                            // Visible message: the error itself.
+                                            // Hidden context: where it came from.
+                                            let visible = format!(
+                                                "This query failed, help me diagnose and fix it:\n{error}"
+                                            );
+                                            let mut hidden = format!(
+                                                "Context (not shown to the user): the error came from zeDB query tab \"Query {}\"",
+                                                active.id
+                                            );
+                                            match &active.failed_sql {
+                                                Some(sql) => hidden.push_str(&format!(
+                                                    ", which executed:\n```sql\n{sql}\n```\nIf you propose a corrected query with the propose_query tool, zeDB will replace the failed statement in that tab in place."
+                                                )),
+                                                None => hidden.push('.'),
+                                            }
+                                            let fix_target = active
+                                                .failed_sql
+                                                .clone()
+                                                .map(|sql| (active.id, sql));
+                                            actions.child(
+                                                div()
+                                                    .id("ask-agent-error")
+                                                    .px_2()
+                                                    .rounded(px(3.))
+                                                    .border_1()
+                                                    .border_color(theme::border())
+                                                    .text_color(theme::text())
+                                                    .hover(|button| {
+                                                        button
+                                                            .bg(theme::hover())
+                                                            .cursor_pointer()
+                                                    })
+                                                    .on_click(cx.listener(
+                                                        move |this, _, window, cx| {
+                                                            this.agent_fix_target =
+                                                                fix_target.clone();
+                                                            this.agent_ask_about(
+                                                                visible.clone(),
+                                                                hidden.clone(),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    ))
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1p5()
+                                                    .child("Ask")
+                                                    .child(
+                                                        svg()
+                                                            .path(
+                                                                ask_agent_icon
+                                                                    .unwrap_or("icons/sparkle.svg"),
+                                                            )
+                                                            .size(px(12.))
+                                                            .text_color(theme::text()),
+                                                    )
+                                                    .tooltip(move |window, cx| {
+                                                        gpui_component::tooltip::Tooltip::new(
+                                                            format!("Ask {agent_name}"),
+                                                        )
+                                                        .build(window, cx)
+                                                    }),
+                                            )
+                                        }),
+                                )
+                            })
                             .when(statement_failed, |row| {
                                 row.child(
                                     div()

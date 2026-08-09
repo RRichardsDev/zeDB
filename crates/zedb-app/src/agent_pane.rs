@@ -34,6 +34,8 @@ pub struct OpenAddAgent;
 
 /// Window-needing work requested by an agent over the bridge.
 pub enum AgentEffect {
+    /// A queued error-bar ask whose session just became ready.
+    SendPendingAsk,
     ProposeMigration {
         upgrade_sql: String,
         rollback_sql: Option<String>,
@@ -79,7 +81,7 @@ migrations/YYYY/MM/NNNNN as upgrade.sql plus rollback.sql whose first line is \
 This is orientation, not restriction: do whatever the user asks.";
 
 /// The icon shipped for a discovered agent id.
-fn icon_for(id: &str) -> &'static str {
+pub(crate) fn icon_for(id: &str) -> &'static str {
     match id {
         "claude-code" => "icons/agent-claude.svg",
         "codex" => "icons/agent-codex.svg",
@@ -157,6 +159,9 @@ pub struct AgentPaneState {
     pub add_form: Option<AddAgentForm>,
     /// A previous session's transcript, reopened read-only.
     pub restored: Option<(String, Vec<(String, String)>)>,
+    /// An error-bar ask waiting for a session: (visible message,
+    /// hidden context). Sent automatically once ready.
+    pub pending_ask: Option<(String, String)>,
 }
 
 pub struct AddAgentForm {
@@ -180,6 +185,7 @@ impl AgentPaneState {
             pending_effects: Vec::new(),
             add_form: None,
             restored: None,
+            pending_ask: None,
         }
     }
 }
@@ -268,6 +274,36 @@ impl Workspace {
         if self.agent.open {
             self.agent_refresh_registry();
             self.agent_focus_composer(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Hand an error to the last-used agent: open the pane, reuse the
+    /// live thread or start the remembered agent, and send the visible
+    /// message automatically once a session is ready; `hidden` context
+    /// (the failing tab and SQL) rides the prompt invisibly.
+    pub(crate) fn agent_ask_about(
+        &mut self,
+        visible: String,
+        hidden: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.agent.open {
+            self.agent_toggle(window, cx);
+        }
+        let ready = self
+            .agent
+            .thread
+            .as_ref()
+            .is_some_and(|thread| thread.session_id.is_some() && !thread.running);
+        if ready {
+            self.agent_send_message(visible, Some(hidden), window, cx);
+        } else {
+            self.agent.pending_ask = Some((visible, hidden));
+            if self.agent.thread.is_none() {
+                self.agent_start_last_thread(window, cx);
+            }
         }
         cx.notify();
     }
@@ -466,6 +502,7 @@ impl Workspace {
                     Ok(inner) => inner.map_err(|error| error.to_string()),
                     Err(error) => Err(error.to_string()),
                 };
+                let mut session_ready = false;
                 match flattened {
                     Ok(session_id) => {
                         agent_log(
@@ -474,6 +511,7 @@ impl Workspace {
                         );
                         thread.session_id = Some(session_id);
                         thread.status = None;
+                        session_ready = true;
                     }
                     Err(error) => {
                         agent_log("session_failed", serde_json::json!({ "error": error }));
@@ -482,6 +520,11 @@ impl Workspace {
                              problem, log in with the agent's own CLI first"
                         ));
                     }
+                }
+                if session_ready && this.agent.pending_ask.is_some() {
+                    // The queued error-bar ask sends on the next
+                    // render, where a Window is in hand.
+                    this.agent.pending_effects.push(AgentEffect::SendPendingAsk);
                 }
                 cx.notify();
             })
@@ -859,11 +902,21 @@ impl Workspace {
         let effects = std::mem::take(&mut self.agent.pending_effects);
         for effect in effects {
             match effect {
+                AgentEffect::SendPendingAsk => {
+                    if let Some((visible, hidden)) = self.agent.pending_ask.take() {
+                        self.agent_send_message(visible, Some(hidden), window, cx);
+                    }
+                }
                 AgentEffect::OpenQueryView => {
                     self.open_query_editor_for_agent(window, cx);
                 }
                 AgentEffect::ProposeQuery { sql } => {
-                    self.open_query_tab_with(&sql, window, cx);
+                    // An error-bar ask remembers where the failure
+                    // lives; the fix replaces it in place. Otherwise a
+                    // proposed query opens its own tab as before.
+                    if !self.agent_apply_fix(&sql, window, cx) {
+                        self.open_query_tab_with(&sql, window, cx);
+                    }
                 }
                 AgentEffect::ProposeMigration {
                     upgrade_sql,
@@ -1127,28 +1180,51 @@ impl Workspace {
     }
 
     pub(crate) fn agent_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.agent.thread.as_mut() else {
-            return;
-        };
-        if thread.running {
-            return;
-        }
-        let Some(session_id) = thread.session_id.clone() else {
+        let Some(thread) = self.agent.thread.as_ref() else {
             return;
         };
         let text = thread.input.read(cx).value().trim().to_string();
         if text.is_empty() {
             return;
         }
-        thread
-            .input
-            .update(cx, |input, cx| input.set_value("", window, cx));
+        let input = thread.input.clone();
+        if self.agent_send_message(text, None, window, cx) {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+    }
+
+    /// Send a turn: `visible` is what the transcript shows; `hidden`
+    /// rides the prompt invisibly (like the primer and ambient
+    /// context). Returns false when no session is ready.
+    pub(crate) fn agent_send_message(
+        &mut self,
+        visible: String,
+        hidden: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let _ = &window;
+        let Some(thread) = self.agent.thread.as_mut() else {
+            return false;
+        };
+        if thread.running {
+            return false;
+        }
+        let Some(session_id) = thread.session_id.clone() else {
+            return false;
+        };
+        let text = visible;
         let include_context = thread.include_context;
         thread.entries.push(ThreadEntry::User(text.clone()));
         if include_context {
             thread
                 .entries
                 .push(ThreadEntry::Info("screen context attached".into()));
+        }
+        if hidden.is_some() {
+            thread
+                .entries
+                .push(ThreadEntry::Info("failed query attached".into()));
         }
         thread.entries.push(ThreadEntry::Assistant(String::new()));
         thread.running = true;
@@ -1174,6 +1250,10 @@ impl Workspace {
         }
         if include_context {
             full_text.push_str(&self.agent_ambient_context());
+            full_text.push_str("\n\n");
+        }
+        if let Some(hidden) = &hidden {
+            full_text.push_str(hidden);
             full_text.push_str("\n\n");
         }
         full_text.push_str(&text);
@@ -1220,6 +1300,53 @@ impl Workspace {
             .ok();
         })
         .detach();
+        true
+    }
+
+    /// Replace the failed statement an error-bar ask came from with
+    /// the agent's proposed fix, in its own tab. False when the
+    /// target is gone (tab closed, text edited away): the caller
+    /// falls back to a fresh tab.
+    pub(crate) fn agent_apply_fix(
+        &mut self,
+        sql: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((tab_id, failed_sql)) = self.agent_fix_target.take() else {
+            return false;
+        };
+        let Some(index) = self.query_tabs.iter().position(|tab| tab.id == tab_id) else {
+            return false;
+        };
+        let editor = self.query_tabs[index].editor.clone();
+        let replaced = editor.update(cx, |editor, cx| {
+            let text = editor.value().to_string();
+            let Some(start) = text.find(&failed_sql) else {
+                return false;
+            };
+            let fix = sql.trim().trim_end_matches(';');
+            let updated = format!(
+                "{}{}{}",
+                &text[..start],
+                fix,
+                &text[start + failed_sql.len()..]
+            );
+            editor.set_value(updated, window, cx);
+            true
+        });
+        if !replaced {
+            return false;
+        }
+        self.active_query_tab = index;
+        self.show_query_editor = true;
+        self.show_fleet = false;
+        self.show_ops = false;
+        self.notice = Some("Agent fix applied to the failed statement".into());
+        self.notice_warning = false;
+        self.notice_flash_id += 1;
+        cx.notify();
+        true
     }
 
     /// A snapshot of what the user is looking at; deictic questions

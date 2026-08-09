@@ -1,24 +1,18 @@
 # Phase 7.1 ideas: toward a first-class browser and migration manager
 
 Status: IDEAS, not committed scope. A ranked shopping list from the
-2026-08-08 soak review, carried forward after Phase 6 shipped the
-ops view (v0.1.13) and Phase 7 shipped composite/JSON grid rendering
-with the cell inspector (v0.1.14, docs/PHASE-7.md); each item stands
-alone and none is promised. Pick by appetite.
+2026-08-08 soak review; each item stands alone and none is promised.
+Shipped so far from this list: the ops view (v0.1.13, Phase 6),
+composite/JSON grid rendering with the cell inspector (v0.1.14,
+Phase 7), and query history + saved queries and EXPLAIN visualized
+(v0.1.15). Pick by appetite.
 
 ## Browser: daily-driver gaps
 
-- **Query history + saved queries.** The largest absence in the app:
-  every executed query is gone forever. Searchable per-connection
-  history (system.query_log helps), pinned/saved queries with names.
-  Highest daily-feel payoff of anything on this list.
 - **Export to file.** Stream FORMAT Parquet/CSV/JSONEachRow straight
   to disk, bypassing decode and the grid; near wire speed with the
   compression work already shipped. Parked twice; still the right
   answer for big pulls.
-- **EXPLAIN, visualized.** Plan/pipeline view plus the query_log
-  aftermath (read vs result rows, memory, spill). ClickHouse makes
-  people guess why queries are slow; showing them wins loyalty.
 
 ## Migration manager: growing up
 
@@ -46,5 +40,4 @@ alone and none is promised. Pick by appetite.
 
 ## A suggested first bite
 
-Query history for feel (the largest daily-driver gap left), and
-drift->migration for having something nobody else has.
+Drift->migration, for having something nobody else has.
