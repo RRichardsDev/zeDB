@@ -7,7 +7,13 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.15 - 2026-08-09
+
+The query editor learns to remember and to explain itself: history
+and saved queries, EXPLAIN visualized, and errors that summon your
+agent to fix the statement where it stands.
+
+### Query history and saved queries
 
 - Query history and saved queries: a resizable drawer beside the
   query editor (toolbar clock icon or the command palette) with
@@ -25,13 +31,28 @@ GitHub release notes.
   star/rename/delete actions beneath (favorites pin to the top and
   keep their star lit). Saved queries live in settings.json and sync
   to your other machines; history stays local.
-- EXPLAIN, visualized: "Explain query" in the command palette draws
+
+### EXPLAIN, visualized
+
+- "Explain query" in the command palette draws
   the plan for the statement under the cursor as a colored tree in
   the results pane, and every MergeTree read shows its index pruning
   (selected vs initial parts and granules per index stage) with a
   utilization bar: green when the index prunes hard, red on a full
   scan. The pane scrolls both ways for deep plans. Works on servers
   back to at least 25.8.
+
+### Errors grew hands
+
+- The error bar offers Copy and Ask (your
+  last-used agent, shown by its logo). Ask opens the agent pane,
+  sends the error automatically once the session is ready, and
+  attaches the failing tab and SQL invisibly; when the agent
+  proposes a corrected query, it replaces the failed statement in
+  the original tab instead of opening a new one.
+
+### Polish and fixes
+
 - Fixed a rare hard freeze of the whole app on macOS when a popup
   (tooltip, hover card) was open during a window activation change:
   an upstream gpui deadlock (zed#51035), fix backported.
@@ -42,12 +63,6 @@ GitHub release notes.
   the dedicated Cancel button. "Run all" became Execute with a
   script glyph, and both buttons moved their keyboard shortcuts into
   tooltips.
-- Errors grew hands: the error bar offers Copy and Ask (your
-  last-used agent, shown by its logo). Ask opens the agent pane,
-  sends the error automatically once the session is ready, and
-  attaches the failing tab and SQL invisibly; when the agent
-  proposes a corrected query, it replaces the failed statement in
-  the original tab instead of opening a new one.
 
 ## v0.1.14 - 2026-08-09
 
