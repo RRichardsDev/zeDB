@@ -23,6 +23,9 @@ GitHub release notes.
   server-side cancellations (code 394) read as cancellations. Client
   addresses display cleanly (IPv6-mapped IPv4 unwrapped, port
   stripped).
+- The ops view gains Merges (progress bars, parts, size, mutation
+  flag) and Mutations (unfinished only, failing ones surfaced first
+  with their fail reason) sections below the query list.
 
 ## v0.1.12 - 2026-08-08
 

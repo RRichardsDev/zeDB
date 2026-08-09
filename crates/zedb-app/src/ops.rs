@@ -31,6 +31,27 @@ pub struct OpsProcess {
     pub initial_user: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct OpsMerge {
+    pub database: String,
+    pub table: String,
+    pub elapsed_secs: f64,
+    /// 0.0..=1.0
+    pub progress: f64,
+    pub num_parts: u64,
+    pub total_size_bytes: u64,
+    pub is_mutation: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct OpsMutation {
+    pub database: String,
+    pub table: String,
+    pub command: String,
+    pub parts_to_do: u64,
+    pub latest_fail_reason: String,
+}
+
 #[derive(Default)]
 pub struct OpsState {
     pub processes: Vec<OpsProcess>,
@@ -43,6 +64,8 @@ pub struct OpsState {
     pub killing: Option<String>,
     /// Open-connection counters from system.metrics, label + count.
     pub connections: Vec<(String, u64)>,
+    pub merges: Vec<OpsMerge>,
+    pub mutations: Vec<OpsMutation>,
 }
 
 fn number(value: Option<&Value>) -> u64 {
@@ -181,14 +204,33 @@ impl Workspace {
                      ORDER BY metric",
                 )
                 .await;
-            (processes, connections)
+            let merges = client
+                .query(
+                    "SELECT database, table, elapsed, progress, num_parts, \
+                        total_size_bytes_compressed, is_mutation \
+                     FROM system.merges \
+                     ORDER BY elapsed DESC LIMIT 20",
+                )
+                .await;
+            // Unfinished mutations only; failing ones first.
+            let mutations = client
+                .query(
+                    "SELECT database, table, command, parts_to_do, \
+                        latest_fail_reason \
+                     FROM system.mutations \
+                     WHERE NOT is_done \
+                     ORDER BY latest_fail_reason != '' DESC, create_time ASC \
+                     LIMIT 20",
+                )
+                .await;
+            (processes, connections, merges, mutations)
         });
         cx.spawn(async move |this, cx| {
             let result = handle.await;
             this.update(cx, |this, cx| {
                 this.ops.fetch_in_flight = false;
                 match result {
-                    Ok((Ok(result), connections)) => {
+                    Ok((Ok(result), connections, merges, mutations)) => {
                         this.ops.processes = result
                             .rows
                             .iter()
@@ -234,10 +276,38 @@ impl Workspace {
                                 .filter(|(_, count)| *count > 0)
                                 .collect();
                         }
+                        if let Ok(merges) = merges {
+                            this.ops.merges = merges
+                                .rows
+                                .iter()
+                                .map(|row| OpsMerge {
+                                    database: text(row.first()),
+                                    table: text(row.get(1)),
+                                    elapsed_secs: float(row.get(2)),
+                                    progress: float(row.get(3)).clamp(0.0, 1.0),
+                                    num_parts: number(row.get(4)),
+                                    total_size_bytes: number(row.get(5)),
+                                    is_mutation: number(row.get(6)) > 0,
+                                })
+                                .collect();
+                        }
+                        if let Ok(mutations) = mutations {
+                            this.ops.mutations = mutations
+                                .rows
+                                .iter()
+                                .map(|row| OpsMutation {
+                                    database: text(row.first()),
+                                    table: text(row.get(1)),
+                                    command: text(row.get(2)),
+                                    parts_to_do: number(row.get(3)),
+                                    latest_fail_reason: text(row.get(4)),
+                                })
+                                .collect();
+                        }
                         this.ops.as_of = Some(chrono::Local::now());
                         this.ops.error = None;
                     }
-                    Ok((Err(error), _)) => this.ops.error = Some(error.to_string()),
+                    Ok((Err(error), _, _, _)) => this.ops.error = Some(error.to_string()),
                     Err(_) => {}
                 }
                 cx.notify();
@@ -494,28 +564,190 @@ impl Workspace {
                 })
                 .collect();
 
+        let section_title = |title: &'static str| {
+            div()
+                .px_4()
+                .pt_4()
+                .pb_1()
+                .text_xs()
+                .text_color(theme::text_dim())
+                .child(title)
+        };
+
+        let merge_rows: Vec<_> = self
+            .ops
+            .merges
+            .iter()
+            .enumerate()
+            .map(|(index, merge)| {
+                let bar_width = 120.0_f32;
+                div()
+                    .px_4()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(theme::border())
+                    .flex()
+                    .gap_3()
+                    .items_center()
+                    .text_sm()
+                    .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
+                    .child(
+                        div()
+                            .w(px(80.))
+                            .flex_none()
+                            .text_color(theme::warning())
+                            .child(format_elapsed(merge.elapsed_secs)),
+                    )
+                    .child(
+                        div()
+                            .w(px(300.))
+                            .flex_none()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_color(theme::text())
+                            .child(format!("{}.{}", merge.database, merge.table)),
+                    )
+                    .child(
+                        div()
+                            .w(px(bar_width))
+                            .flex_none()
+                            .h(px(6.))
+                            .rounded(px(3.))
+                            .bg(theme::row_stripe())
+                            .child(
+                                div()
+                                    .w(px(bar_width * merge.progress as f32))
+                                    .h(px(6.))
+                                    .rounded(px(3.))
+                                    .bg(theme::warning()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(60.))
+                            .flex_none()
+                            .text_color(theme::text_dim())
+                            .child(format!("{:.0}%", merge.progress * 100.0)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(theme::text_dim())
+                            .child(format!(
+                                "{} parts \u{b7} {}{}",
+                                merge.num_parts,
+                                Self::format_bytes(merge.total_size_bytes),
+                                if merge.is_mutation {
+                                    " \u{b7} mutation"
+                                } else {
+                                    ""
+                                }
+                            )),
+                    )
+            })
+            .collect();
+
+        let mutation_rows: Vec<_> = self
+            .ops
+            .mutations
+            .iter()
+            .enumerate()
+            .map(|(index, mutation)| {
+                let failing = !mutation.latest_fail_reason.is_empty();
+                div()
+                    .px_4()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(theme::border())
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .text_sm()
+                    .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_3()
+                            .items_center()
+                            .child(
+                                div()
+                                    .w(px(300.))
+                                    .flex_none()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_color(theme::text())
+                                    .child(format!("{}.{}", mutation.database, mutation.table)),
+                            )
+                            .child(
+                                div()
+                                    .w(px(110.))
+                                    .flex_none()
+                                    .text_color(if failing {
+                                        theme::danger()
+                                    } else {
+                                        theme::text_dim()
+                                    })
+                                    .child(format!("{} parts left", mutation.parts_to_do)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .font_family("Menlo")
+                                    .text_color(theme::text_dim())
+                                    .child(mutation.command.clone()),
+                            ),
+                    )
+                    .when(failing, |row| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::danger())
+                                .child(mutation.latest_fail_reason.clone()),
+                        )
+                    })
+            })
+            .collect();
+
+        let empty_line = |message: &'static str| {
+            div()
+                .px_4()
+                .py_2()
+                .text_sm()
+                .text_color(theme::text_dim())
+                .child(message)
+        };
+
         div()
             .size_full()
             .flex()
             .flex_col()
             .bg(theme::bg())
             .child(header)
-            .child(column_header)
             .child(
                 div()
-                    .id("ops-process-list")
+                    .id("ops-scroll")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .child(section_title("QUERIES NOW"))
+                    .child(column_header)
                     .children(rows)
                     .when(self.ops.processes.is_empty(), |list| {
-                        list.child(
-                            div()
-                                .px_4()
-                                .py_6()
-                                .text_color(theme::text_dim())
-                                .child("No queries running right now."),
-                        )
+                        list.child(empty_line("No queries running right now."))
+                    })
+                    .child(section_title("MERGES"))
+                    .children(merge_rows)
+                    .when(self.ops.merges.is_empty(), |list| {
+                        list.child(empty_line("No merges in flight."))
+                    })
+                    .child(section_title("MUTATIONS"))
+                    .children(mutation_rows)
+                    .when(self.ops.mutations.is_empty(), |list| {
+                        list.child(empty_line("No unfinished mutations."))
                     }),
             )
     }
