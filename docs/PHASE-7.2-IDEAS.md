@@ -1,11 +1,10 @@
-# Phase 7.1 ideas: toward a first-class browser and migration manager
+# Phase 7.2 ideas: toward a first-class migration manager
 
-Status: IDEAS, not committed scope. A ranked shopping list from the
-2026-08-08 soak review; each item stands alone and none is promised.
-Shipped so far from this list: the ops view (v0.1.13, Phase 6),
-composite/JSON grid rendering with the cell inspector (v0.1.14,
-Phase 7), query history + saved queries and EXPLAIN visualized
-(v0.1.15), and export to file. Pick by appetite.
+Status: IDEAS, not committed scope. What remains of the 2026-08-08
+soak-review shopping list after the browser daily-driver gaps were
+closed (docs/PHASE-7.1.md, v0.1.15): the migration-manager growth
+and the bigger platform bets. Each item stands alone and none is
+promised. Pick by appetite.
 
 ## Migration manager: growing up
 
