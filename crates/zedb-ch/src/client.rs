@@ -119,6 +119,17 @@ impl ChClient {
         {
             params.push(("enable_http_compression".into(), "1".into()));
         }
+        // JSON columns arrive as their string form; RowBinary's native
+        // JSON serialization (dynamic paths) is not decoded.
+        if !params
+            .iter()
+            .any(|(name, _)| name == "output_format_binary_write_json_as_string")
+        {
+            params.push((
+                "output_format_binary_write_json_as_string".into(),
+                "1".into(),
+            ));
+        }
         params
     }
 

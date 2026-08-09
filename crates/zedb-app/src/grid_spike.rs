@@ -71,6 +71,9 @@ enum FilterMode {
 const ROW_HEIGHT: f32 = 24.0;
 const COL_WIDTH: f32 = 120.0;
 
+/// Resolved tree-sitter highlight runs over a displayed string.
+type HighlightRuns = Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>;
+
 pub struct GridSpike {
     columns: Vec<ColumnMeta>,
     rows: Vec<Vec<Value>>,
@@ -97,6 +100,20 @@ pub struct GridSpike {
     /// shape of query keeps your resizes.
     width_memory: HashMap<String, Vec<f32>>,
     filter_panel: Option<FilterPanel>,
+    /// Cell whose full value is open in the inspector overlay.
+    inspected: Option<(usize, usize)>,
+    /// Lazily-filled tree-sitter runs for visible composite cells;
+    /// None entries mean "computed, nothing to color". Cleared on new
+    /// results and on theme change.
+    highlight_cache: HashMap<(usize, usize), Option<HighlightRuns>>,
+    /// The theme mode the cache was computed under.
+    cache_dark: bool,
+    /// Long-lived highlighters (query compilation is ~10ms; parsing a
+    /// cell is microseconds), one per grammar.
+    hl_sql: Option<gpui_component::highlighter::SyntaxHighlighter>,
+    hl_json: Option<gpui_component::highlighter::SyntaxHighlighter>,
+    /// The inspector's computed runs for its open cell.
+    inspector_cache: Option<((usize, usize), Option<HighlightRuns>)>,
 }
 
 impl GridSpike {
@@ -119,6 +136,12 @@ impl GridSpike {
             filters: Vec::new(),
             width_memory: HashMap::new(),
             filter_panel: None,
+            inspected: None,
+            highlight_cache: HashMap::new(),
+            cache_dark: theme::is_dark(),
+            hl_sql: None,
+            hl_json: None,
+            inspector_cache: None,
         }
     }
 
@@ -165,6 +188,9 @@ impl GridSpike {
             self.result_complete = false;
             self.result_capped = false;
             self.selected = None;
+            self.inspected = None;
+            self.highlight_cache.clear();
+            self.inspector_cache = None;
             self.scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
         }
     }
@@ -451,7 +477,14 @@ impl GridSpike {
 
     fn copy_selected(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some((row, col)) = self.selected {
-            let text = self.cell(row, col);
+            // Composites copy as SQL-pasteable literals (quoted
+            // strings); everything else copies raw, not the collapsed
+            // cell display.
+            let text = match self.rows.get(row).and_then(|row| row.get(col)) {
+                Some(value @ (Value::Array(_) | Value::Tuple(_) | Value::Map(_))) => literal(value),
+                Some(value) => value.to_string(),
+                None => String::new(),
+            };
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
@@ -490,12 +523,167 @@ impl GridSpike {
         )
     }
 
+    fn column_is_json(&self, column: usize) -> bool {
+        self.columns
+            .get(column)
+            .map(|meta| {
+                let name = meta.type_name.trim();
+                name == "JSON" || name.starts_with("JSON(")
+            })
+            .unwrap_or(false)
+    }
+
+    /// Compact face for composite cells: short values inline as
+    /// literals, long ones as a bracket glyph plus a dim count. The
+    /// third field names the grammar that colors an inline face.
+    fn cell_composite_parts(
+        &self,
+        row: usize,
+        column: usize,
+    ) -> Option<(String, String, Option<&'static str>)> {
+        let value = self.rows.get(row)?.get(column)?;
+        let (glyph, count, noun) = match value {
+            Value::Array(items) => ("[\u{2026}]", items.len(), "items"),
+            Value::Tuple(items) => ("(\u{2026})", items.len(), "fields"),
+            Value::Map(pairs) => ("{\u{2026}}", pairs.len(), "entries"),
+            Value::String(text) if self.column_is_json(column) => {
+                return Some(if text.len() <= 60 {
+                    (text.clone(), String::new(), Some("json"))
+                } else {
+                    ("{\u{2026}}".to_string(), " json".to_string(), None)
+                });
+            }
+            _ => return None,
+        };
+        let inline = literal(value);
+        Some(if inline.len() <= 60 {
+            (inline, String::new(), Some("sql"))
+        } else {
+            (glyph.to_string(), format!(" {count} {noun}"), None)
+        })
+    }
+
+    /// Tree-sitter runs for `text` under `lang`, via the long-lived
+    /// highlighters. Bare literals parse as nothing in the SQL
+    /// grammar, so they parse as `SELECT <literal>` with ranges
+    /// shifted back over the displayed text.
+    fn highlight_runs(
+        &mut self,
+        lang: &'static str,
+        text: &str,
+        cx: &App,
+    ) -> Option<HighlightRuns> {
+        use gpui_component::highlighter::SyntaxHighlighter;
+        let (parse_text, prefix) = if lang == "sql" {
+            (format!("SELECT {text}"), "SELECT ".len())
+        } else {
+            (text.to_string(), 0)
+        };
+        let slot = if lang == "sql" {
+            &mut self.hl_sql
+        } else {
+            &mut self.hl_json
+        };
+        let highlighter = slot.get_or_insert_with(|| SyntaxHighlighter::new(lang));
+        highlighter.replace_all(&gpui_component::Rope::from(parse_text.as_str()));
+        let highlight_theme = &gpui_component::Theme::global(cx).highlight_theme;
+        let runs: HighlightRuns = highlighter
+            .styles(&(0..parse_text.len()), highlight_theme)
+            .into_iter()
+            .filter(|(range, _)| range.end > prefix)
+            .map(|(range, style)| {
+                (
+                    range.start.saturating_sub(prefix)..range.end - prefix,
+                    style,
+                )
+            })
+            .collect();
+        (!runs.is_empty()).then_some(runs)
+    }
+
+    /// Cached per-cell runs; a theme flip invalidates everything.
+    fn cell_highlights(
+        &mut self,
+        row: usize,
+        column: usize,
+        main: &str,
+        lang: &'static str,
+        cx: &App,
+    ) -> Option<HighlightRuns> {
+        let dark = theme::is_dark();
+        if dark != self.cache_dark {
+            self.highlight_cache.clear();
+            self.inspector_cache = None;
+            self.cache_dark = dark;
+        }
+        // A scroll through millions of rows must not hoard runs.
+        if self.highlight_cache.len() > 50_000 {
+            self.highlight_cache.clear();
+        }
+        if let Some(cached) = self.highlight_cache.get(&(row, column)) {
+            return cached.clone();
+        }
+        let runs = self.highlight_runs(lang, main, cx);
+        self.highlight_cache.insert((row, column), runs.clone());
+        runs
+    }
+
+    /// Whether clicking this cell opens the inspector overlay.
+    fn cell_expandable(&self, row: usize, column: usize) -> bool {
+        match self.rows.get(row).and_then(|row| row.get(column)) {
+            Some(Value::Array(_) | Value::Tuple(_) | Value::Map(_)) => true,
+            Some(Value::String(text)) => {
+                self.column_is_json(column) || text.len() > 100 || text.contains('\n')
+            }
+            _ => false,
+        }
+    }
+
+    /// The inspector's expanded rendering: composites one element per
+    /// line, JSON documents pretty-printed, strings verbatim. The
+    /// second field names the tree-sitter grammar to color it with.
+    fn inspector_text(&self, row: usize, column: usize) -> (String, Option<&'static str>) {
+        let Some(value) = self.rows.get(row).and_then(|row| row.get(column)) else {
+            return (String::new(), None);
+        };
+        match value {
+            Value::String(text) => {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
+                    if matches!(
+                        parsed,
+                        serde_json::Value::Object(_) | serde_json::Value::Array(_)
+                    ) {
+                        let pretty =
+                            serde_json::to_string_pretty(&parsed).unwrap_or_else(|_| text.clone());
+                        return (pretty, Some("json"));
+                    }
+                }
+                (text.clone(), None)
+            }
+            other => {
+                let mut out = String::new();
+                literal_pretty(other, 0, &mut out);
+                // ClickHouse literals are SQL expressions; the SQL
+                // grammar colors their strings and numbers.
+                (out, Some("sql"))
+            }
+        }
+    }
+
     fn cell(&self, row: usize, column: usize) -> String {
-        self.rows
+        let text = self
+            .rows
             .get(row)
             .and_then(|row| row.get(column))
             .map(ToString::to_string)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Multi-line values (e.g. DESCRIBE's named-tuple types) must
+        // not spill over the fixed row height.
+        if text.contains('\n') {
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        } else {
+            text
+        }
     }
 
     /// Header outside the list, following the list's horizontal offset.
@@ -796,6 +984,79 @@ fn enum_variants(type_name: &str) -> Vec<String> {
     quoted_strings(type_name)
 }
 
+/// A ClickHouse-literal rendering: strings quoted and escaped, so a
+/// composite pastes straight into SQL.
+fn literal(value: &Value) -> String {
+    match value {
+        Value::String(text) | Value::Enum(text) => quote_literal(text),
+        Value::Array(items) => {
+            let inner: Vec<String> = items.iter().map(literal).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        Value::Tuple(items) => {
+            let inner: Vec<String> = items.iter().map(literal).collect();
+            format!("({})", inner.join(", "))
+        }
+        Value::Map(pairs) => {
+            let inner: Vec<String> = pairs
+                .iter()
+                .map(|(key, value)| format!("{}: {}", literal(key), literal(value)))
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+        other => other.to_string(),
+    }
+}
+
+fn quote_literal(text: &str) -> String {
+    format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// Multi-line literal for the inspector: one element per line,
+/// indented two spaces per depth; empty composites stay inline.
+fn literal_pretty(value: &Value, indent: usize, out: &mut String) {
+    let open_close = match value {
+        Value::Array(items) if !items.is_empty() => Some(("[", "]")),
+        Value::Tuple(items) if !items.is_empty() => Some(("(", ")")),
+        Value::Map(pairs) if !pairs.is_empty() => Some(("{", "}")),
+        _ => None,
+    };
+    let Some((open, close)) = open_close else {
+        out.push_str(&literal(value));
+        return;
+    };
+    let pad = "  ".repeat(indent + 1);
+    out.push_str(open);
+    match value {
+        Value::Map(pairs) => {
+            for (index, (key, value)) in pairs.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push('\n');
+                out.push_str(&pad);
+                out.push_str(&literal(key));
+                out.push_str(": ");
+                literal_pretty(value, indent + 1, out);
+            }
+        }
+        Value::Array(items) | Value::Tuple(items) => {
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push('\n');
+                out.push_str(&pad);
+                literal_pretty(item, indent + 1, out);
+            }
+        }
+        _ => unreachable!("only composites reach here"),
+    }
+    out.push('\n');
+    out.push_str(&"  ".repeat(indent));
+    out.push_str(close);
+}
+
 /// Every '...'-quoted string in the text, unescaped.
 fn quoted_strings(text: &str) -> Vec<String> {
     let mut values = Vec::new();
@@ -845,6 +1106,19 @@ impl Render for GridSpike {
                             .map(|col| {
                                 let is_selected = selected == Some((row, col));
                                 let is_null = this.cell_is_null(row, col);
+                                let expandable = this.cell_expandable(row, col);
+                                let temporal = this.cell_temporal_parts(row, col);
+                                let face = if temporal.is_none() {
+                                    this.cell_composite_parts(row, col)
+                                } else {
+                                    None
+                                };
+                                let highlights = match &face {
+                                    Some((main, _, Some(lang))) => {
+                                        this.cell_highlights(row, col, main, lang, cx)
+                                    }
+                                    _ => None,
+                                };
                                 div()
                                     .id(("cell", row * cols + col))
                                     .w(px(this.width(col)))
@@ -856,11 +1130,13 @@ impl Render for GridSpike {
                                     .border_color(theme::border())
                                     .when(is_null, |d| d.text_color(theme::text_dim()).italic())
                                     .when(is_selected, |d| d.bg(rgb(0x2f5f8f)))
+                                    .when(expandable, |d| d.cursor_pointer())
                                     .on_click(cx.listener(move |this: &mut GridSpike, _, _, cx| {
                                         this.selected = Some((row, col));
+                                        this.inspected = expandable.then_some((row, col));
                                         cx.notify();
                                     }))
-                                    .map(|d| match this.cell_temporal_parts(row, col) {
+                                    .map(|d| match temporal {
                                         Some((date, time)) => d
                                             .flex()
                                             .items_center()
@@ -878,7 +1154,29 @@ impl Render for GridSpike {
                                                         .child(time),
                                                 )
                                             }),
-                                        None => d.child(this.cell(row, col)),
+                                        None => match face {
+                                            Some((main, dim, _)) => d
+                                                .flex()
+                                                .items_center()
+                                                .child(
+                                                    div().flex_none().child(match highlights {
+                                                        Some(runs) => gpui::StyledText::new(main)
+                                                            .with_highlights(runs)
+                                                            .into_any_element(),
+                                                        None => main.into_any_element(),
+                                                    }),
+                                                )
+                                                .when(!dim.is_empty(), |d| {
+                                                    d.child(
+                                                        div()
+                                                            .flex_none()
+                                                            .text_xs()
+                                                            .text_color(theme::text_dim())
+                                                            .child(dim),
+                                                    )
+                                                }),
+                                            None => d.child(this.cell(row, col)),
+                                        },
                                     })
                             })
                             .collect();
@@ -1109,6 +1407,139 @@ impl Render for GridSpike {
             )
         });
 
+        // Inspector content and runs, computed with &mut self before
+        // the element closure borrows immutably; runs come from the
+        // shared highlighters and cache per open cell.
+        let mut inspector_parts: Option<(usize, usize, String, Option<HighlightRuns>)> = None;
+        if let Some((row, col)) = self.inspected {
+            if row < self.rows.len() && col < self.columns.len() {
+                let (text, lang) = self.inspector_text(row, col);
+                let runs = match lang.filter(|_| text.len() <= 256 * 1024) {
+                    Some(lang) => match &self.inspector_cache {
+                        Some((key, cached)) if *key == (row, col) => cached.clone(),
+                        _ => {
+                            let computed = self.highlight_runs(lang, &text, cx);
+                            self.inspector_cache = Some(((row, col), computed.clone()));
+                            computed
+                        }
+                    },
+                    None => None,
+                };
+                inspector_parts = Some((row, col, text, runs));
+            }
+        }
+        let inspector = inspector_parts.and_then(|(_row, col, text, runs)| {
+            let column = self.columns.get(col)?;
+            let title = column.name.clone();
+            let type_name = column.type_name.clone();
+            let copy_text = text.clone();
+            let body_text: gpui::AnyElement = match runs {
+                Some(runs) => gpui::StyledText::new(text.clone())
+                    .with_highlights(runs)
+                    .into_any_element(),
+                None => div().child(text.clone()).into_any_element(),
+            };
+            Some(
+                div()
+                    .id("cell-inspector")
+                    .occlude()
+                    .absolute()
+                    .top(px(ROW_HEIGHT + 2.0))
+                    .bottom(px(28.))
+                    .right_2()
+                    .w(px(420.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(4.))
+                    .bg(theme::bg_sidebar())
+                    .border_1()
+                    .border_color(theme::border())
+                    .child(
+                        div()
+                            .flex_none()
+                            .px_2()
+                            .py_1()
+                            .border_b_1()
+                            .border_color(theme::border())
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_xs().text_color(theme::text()).child(title))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_xs()
+                                    .text_color(theme::text_dim())
+                                    .child(type_name),
+                            )
+                            .child(
+                                div()
+                                    .id("inspector-copy")
+                                    .size(px(20.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(3.))
+                                    .text_color(theme::text_dim())
+                                    .child(
+                                        gpui::svg()
+                                            .path("icons/copy.svg")
+                                            .size(px(12.))
+                                            .text_color(theme::text_dim()),
+                                    )
+                                    .hover(|button| {
+                                        button
+                                            .bg(theme::hover())
+                                            .text_color(theme::text())
+                                            .cursor_pointer()
+                                    })
+                                    .tooltip(|window, cx| {
+                                        gpui_component::tooltip::Tooltip::new("Copy value")
+                                            .build(window, cx)
+                                    })
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            copy_text.clone(),
+                                        ));
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("inspector-close")
+                                    .px_1()
+                                    .rounded(px(3.))
+                                    .text_color(theme::text_dim())
+                                    .hover(|close| {
+                                        close
+                                            .bg(theme::hover())
+                                            .text_color(theme::text())
+                                            .cursor_pointer()
+                                    })
+                                    .child("\u{00d7}")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.inspected = None;
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("cell-inspector-body")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .p_2()
+                            .font_family("Menlo")
+                            .text_xs()
+                            .text_color(theme::text())
+                            .child(body_text),
+                    ),
+            )
+        });
+
         div()
             .size_full()
             .flex()
@@ -1118,6 +1549,12 @@ impl Render for GridSpike {
             .text_color(theme::text())
             .text_sm()
             .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && this.inspected.take().is_some() {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(Self::copy_selected))
             // The list consumes wheel events; repaint so the header can
             // mirror its horizontal offset.
@@ -1148,6 +1585,12 @@ impl Render for GridSpike {
             .child(self.header_row(scroll_x, cx))
             .child(div().flex_1().w_full().min_h_0().child(list))
             .child(status)
+            .when_some(inspector, |root, panel| {
+                // Deferred so it paints above the row list; no backdrop,
+                // so the grid stays interactive and clicking another
+                // expandable cell switches the inspected value.
+                root.child(gpui::deferred(panel))
+            })
             .when_some(filter_panel, |root, panel| {
                 // Deferred so the popover paints above the row list; the
                 // backdrop dismisses on click-away within the grid.

@@ -49,6 +49,12 @@ pub enum ChType {
     Array(Box<ChType>),
     Tuple(Vec<ChType>),
     Map(Box<ChType>, Box<ChType>),
+    /// The JSON object type. The driver asks the server to serialize
+    /// it as a string in RowBinary (output_format_binary_write_json_as_string),
+    /// so the payload is the document's text. Type parameters
+    /// (max_dynamic_paths, typed paths, SKIP) don't change that and
+    /// are skipped unparsed.
+    Json,
 }
 
 pub fn parse_type(input: &str) -> Result<ChType> {
@@ -285,12 +291,48 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+            "JSON" => {
+                if self.peek_char() == Some('(') {
+                    self.skip_parens()?;
+                }
+                Ok(ChType::Json)
+            }
             other => Err(ChError::UnsupportedType(if other.is_empty() {
                 self.input.to_string()
             } else {
                 other.to_string()
             })),
         }
+    }
+
+    /// Consume a balanced parenthesized argument list without
+    /// interpreting it, respecting quoted strings.
+    fn skip_parens(&mut self) -> Result<()> {
+        self.eat('(')?;
+        let mut depth = 1usize;
+        while let Some((_, c)) = self.chars.next() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(());
+                    }
+                }
+                '\'' => loop {
+                    match self.chars.next() {
+                        Some((_, '\\')) => {
+                            self.chars.next();
+                        }
+                        Some((_, '\'')) => break,
+                        Some(_) => {}
+                        None => return Err(self.err("unterminated string".into())),
+                    }
+                },
+                _ => {}
+            }
+        }
+        Err(self.err("unterminated parens".into()))
     }
 
     /// A tuple element is either `Type` or `name Type` (named tuples). A
@@ -401,6 +443,19 @@ mod tests {
         assert_eq!(
             parse_type("Tuple(name String, age UInt8)").unwrap(),
             ChType::Tuple(vec![ChType::String, ChType::UInt8])
+        );
+    }
+
+    #[test]
+    fn json_with_and_without_parameters() {
+        assert_eq!(parse_type("JSON").unwrap(), ChType::Json);
+        assert_eq!(
+            parse_type("JSON(max_dynamic_paths = 16, a.b UInt32, SKIP `x.y`)").unwrap(),
+            ChType::Json
+        );
+        assert_eq!(
+            parse_type("Array(JSON)").unwrap(),
+            ChType::Array(Box::new(ChType::Json))
         );
     }
 

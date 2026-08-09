@@ -353,6 +353,31 @@ impl SyntaxHighlighter {
         self.text = text.clone();
     }
 
+    /// zeDB patch: full-replacement update, for reusing one compiled
+    /// highlighter across unrelated small texts (the grid's cell
+    /// highlight cache). `update(None, ...)` describes the change as
+    /// an insertion at offset 0, which mis-edits the previous tree
+    /// when the old text is not a suffix of the new; this builds the
+    /// correct whole-document edit instead.
+    pub fn replace_all(&mut self, text: &Rope) {
+        if self.text.eq(text) {
+            return;
+        }
+        let end_point = |rope: &Rope| {
+            let row = rope.lines_len().saturating_sub(1);
+            Point::new(row, rope.line_len(row))
+        };
+        let edit = InputEdit {
+            start_byte: 0,
+            old_end_byte: self.text.len(),
+            new_end_byte: text.len(),
+            start_position: Point::new(0, 0),
+            old_end_position: end_point(&self.text),
+            new_end_position: end_point(text),
+        };
+        self.update(Some(edit), text);
+    }
+
     /// Match the visible ranges of nodes in the Tree for highlighting.
     fn match_styles(&self, range: Range<usize>) -> Vec<HighlightItem> {
         let mut highlights = vec![];

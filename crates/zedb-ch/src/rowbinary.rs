@@ -237,6 +237,12 @@ fn read_value(r: &mut Reader, ty: &ChType) -> Result<Value> {
             let len = r.varuint()? as usize;
             bytes_to_value(r.take(len)?)
         }
+        // The driver requests JSON as its string form
+        // (output_format_binary_write_json_as_string).
+        ChType::Json => {
+            let len = r.varuint()? as usize;
+            bytes_to_value(r.take(len)?)
+        }
         ChType::FixedString(n) => bytes_to_value(r.take(*n)?),
         ChType::Uuid => {
             // Stored as two little-endian u64 halves; reverse each half to

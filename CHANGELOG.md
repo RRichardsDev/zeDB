@@ -7,6 +7,25 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- The JSON column type is supported: queries against tables with JSON
+  columns no longer fail with "unsupported ClickHouse type", and the
+  documents arrive as their text form.
+- Composite values grew up in the results grid: short arrays, maps,
+  and tuples render inline as proper quoted literals; long ones show
+  a compact face like "[...] 200 items"; cmd-c copies a composite as
+  a SQL-pasteable literal. Multi-line values (e.g. DESCRIBE's named
+  tuple types) no longer spill over neighboring rows.
+- A cell inspector: clicking a composite, JSON, or long/multiline
+  value opens a panel docked to the grid's right edge showing the
+  full value expanded (JSON pretty-printed, composites one element
+  per line) with tree-sitter syntax coloring matching the editor
+  theme, plus copy and close. Escape dismisses it.
+- Inline composite and JSON cells are syntax-colored in the grid
+  itself, computed once per cell and cached, so million-row scrolls
+  stay smooth.
+
 ## v0.1.13 - 2026-08-09
 
 The ops view (Phase 6): a live cockpit for the cluster, new in the
