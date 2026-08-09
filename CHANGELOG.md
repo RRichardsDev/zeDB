@@ -33,6 +33,18 @@ GitHub release notes.
   readonly/session/delay/queue flags plus replication-queue
   exceptions), Disks (usage bars that go amber at 75% and red at
   90%), and Largest Tables (top ten by on-disk size).
+- The ops view goes cluster-wide (docs/PHASE-6.md M4): on connections
+  with a known topology, a scope dropdown in the header switches
+  every tab from the connected node to the whole cluster. Queries,
+  merges, mutations, replication problems, and disks fan out to every
+  replica with a NODE column; Largest Tables sums one replica per
+  shard for true cluster-wide table sizes; connection counters total
+  across nodes; and Kill reaches queries on any node via ON CLUSTER.
+  Switching connection or node returns the scope to the single node.
+- Largest Tables polish: the table name gets the full row width with
+  the database and table colored like the SQL editor, size and row
+  count sit right-aligned, and a Top dropdown chooses how many tables
+  to list (10, 25, 50, 100, or All).
 
 ## v0.1.12 - 2026-08-08
 

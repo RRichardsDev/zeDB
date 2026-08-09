@@ -46,6 +46,7 @@ pub struct Palette {
     pub filter_border: Hsla,
     pub filter_tint: Hsla,
     pub date_tint: Hsla,
+    pub table_tint: Hsla,
 }
 
 /// zeDB-specific shades with no gpui-component token, per mode.
@@ -66,6 +67,8 @@ struct Accents {
     filter_border: u32,
     filter_tint: u32,
     date_tint: u32,
+    /// The SQL editor's `type` token: table names after a dot.
+    table_tint: u32,
 }
 
 /// Today's dark values, unchanged.
@@ -86,6 +89,7 @@ const DARK: Accents = Accents {
     filter_border: 0x6f5b99,
     filter_tint: 0x9d84cc,
     date_tint: 0xb56b6b,
+    table_tint: 0xb8603d,
 };
 
 /// First-draft light values; expect soak-mode tuning.
@@ -106,6 +110,7 @@ const LIGHT: Accents = Accents {
     filter_border: 0x8a76b8,
     filter_tint: 0x6d51a1,
     date_tint: 0xa14f4f,
+    table_tint: 0x7a54ad,
 };
 
 impl Palette {
@@ -145,6 +150,7 @@ impl Palette {
             filter_border: rgb(a.filter_border).into(),
             filter_tint: rgb(a.filter_tint).into(),
             date_tint: rgb(a.date_tint).into(),
+            table_tint: rgb(a.table_tint).into(),
         }
     }
 }
@@ -204,6 +210,7 @@ pub fn apply(cx: &mut App) {
         filter_border: rgb(accents.filter_border).into(),
         filter_tint: rgb(accents.filter_tint).into(),
         date_tint: rgb(accents.date_tint).into(),
+        table_tint: rgb(accents.table_tint).into(),
     };
     *palette_lock().write().expect("palette lock") = palette;
     DARK_MODE.store(theme.is_dark(), std::sync::atomic::Ordering::Relaxed);
@@ -253,4 +260,5 @@ accessors!(
     filter_border,
     filter_tint,
     date_tint,
+    table_tint,
 );

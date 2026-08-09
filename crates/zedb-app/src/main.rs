@@ -6493,6 +6493,12 @@ impl Render for Workspace {
                     this.open_column_filter(action.column.clone(), window, cx)
                 }),
             )
+            .on_action(cx.listener(|this, action: &ops::SetOpsTopLimit, _, cx| {
+                this.ops_set_top_limit(action.limit, cx)
+            }))
+            .on_action(cx.listener(|this, action: &ops::SetOpsScope, _, cx| {
+                this.ops_set_scope(action.cluster.clone(), cx)
+            }))
             .on_action(cx.listener(|this, action: &ViewObjectDdl, window, cx| {
                 let object = this
                     .schema_databases

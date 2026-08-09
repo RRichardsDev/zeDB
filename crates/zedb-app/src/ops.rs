@@ -5,13 +5,36 @@
 
 use std::time::Duration;
 
-use gpui::{div, prelude::*, px, Context, Timer};
+use gpui::{div, prelude::*, px, Action, Context, Timer};
+use gpui_component::{
+    button::Button,
+    menu::{DropdownMenu, PopupMenu},
+};
 use zedb_core::Value;
 
 use crate::theme;
 use crate::{rt, Workspace};
 
 const POLL_SECS: u64 = 2;
+
+/// Which node(s) the panels ask about. Cluster scope fans every
+/// query out via clusterAllReplicas()/cluster() (docs/PHASE-6.md M4)
+/// and exists only for topologies the nodes reported at connect time.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub enum OpsScope {
+    #[default]
+    Node,
+    Cluster(String),
+}
+
+impl OpsScope {
+    fn cluster(&self) -> Option<&str> {
+        match self {
+            OpsScope::Node => None,
+            OpsScope::Cluster(name) => Some(name),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct OpsProcess {
@@ -29,6 +52,8 @@ pub struct OpsProcess {
     pub client: String,
     pub os_user: String,
     pub initial_user: String,
+    /// hostName() of the node running it; empty in node scope.
+    pub node: String,
 }
 
 #[derive(Clone, Debug)]
@@ -41,6 +66,7 @@ pub struct OpsMerge {
     pub num_parts: u64,
     pub total_size_bytes: u64,
     pub is_mutation: bool,
+    pub node: String,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +76,7 @@ pub struct OpsMutation {
     pub command: String,
     pub parts_to_do: u64,
     pub latest_fail_reason: String,
+    pub node: String,
 }
 
 #[derive(Clone, Debug)]
@@ -60,6 +87,7 @@ pub struct OpsReplicaProblem {
     pub session_expired: bool,
     pub delay_secs: u64,
     pub queue_size: u64,
+    pub node: String,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +97,7 @@ pub struct OpsQueueIssue {
     pub depth: u64,
     pub oldest_secs: u64,
     pub exception: String,
+    pub node: String,
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +105,7 @@ pub struct OpsDisk {
     pub name: String,
     pub free: u64,
     pub total: u64,
+    pub node: String,
 }
 
 #[derive(Clone, Debug)]
@@ -84,6 +114,54 @@ pub struct OpsTopTable {
     pub table: String,
     pub bytes: u64,
     pub rows: u64,
+}
+
+/// How many rows the largest-tables list asks for.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum OpsTopLimit {
+    #[default]
+    Ten,
+    TwentyFive,
+    Fifty,
+    Hundred,
+    All,
+}
+
+impl OpsTopLimit {
+    fn label(self) -> &'static str {
+        match self {
+            OpsTopLimit::Ten => "10",
+            OpsTopLimit::TwentyFive => "25",
+            OpsTopLimit::Fifty => "50",
+            OpsTopLimit::Hundred => "100",
+            OpsTopLimit::All => "All",
+        }
+    }
+
+    /// The LIMIT clause, empty for All (the grouped result is one row
+    /// per table, so unbounded stays small).
+    fn clause(self) -> &'static str {
+        match self {
+            OpsTopLimit::Ten => " LIMIT 10",
+            OpsTopLimit::TwentyFive => " LIMIT 25",
+            OpsTopLimit::Fifty => " LIMIT 50",
+            OpsTopLimit::Hundred => " LIMIT 100",
+            OpsTopLimit::All => "",
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+pub struct SetOpsTopLimit {
+    pub limit: OpsTopLimit,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+pub struct SetOpsScope {
+    /// None selects the connected node; Some(name) a known cluster.
+    pub cluster: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -136,6 +214,8 @@ pub struct OpsState {
     pub top_tables: Vec<OpsTopTable>,
     pub slow_fetch_in_flight: bool,
     pub tab: OpsTab,
+    pub top_limit: OpsTopLimit,
+    pub scope: OpsScope,
 }
 
 fn number(value: Option<&Value>) -> u64 {
@@ -179,6 +259,12 @@ fn display_address(address: &str) -> String {
     host.strip_prefix("::ffff:").unwrap_or(host).to_string()
 }
 
+/// A single-quoted ClickHouse string literal (cluster names in
+/// table-function calls).
+fn quoted(name: &str) -> String {
+    format!("'{}'", name.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
 fn format_elapsed(seconds: f64) -> String {
     if seconds < 60.0 {
         format!("{seconds:.1}s")
@@ -217,6 +303,18 @@ impl Workspace {
     /// connection, fetch the new target immediately and restart the
     /// cadence from zero.
     pub(crate) fn ops_reset(&mut self, cx: &mut Context<Self>) {
+        self.ops_clear_data();
+        // The new target may not know the old scope's cluster.
+        self.ops.scope = OpsScope::Node;
+        if self.connected.is_none() {
+            self.show_ops = false;
+        } else if self.show_ops {
+            self.ops_start_poll(cx);
+        }
+        cx.notify();
+    }
+
+    fn ops_clear_data(&mut self) {
         self.ops.poll_generation += 1;
         self.ops.processes.clear();
         self.ops.connections.clear();
@@ -230,9 +328,40 @@ impl Workspace {
         self.ops.as_of = None;
         self.ops.error = None;
         self.ops.killing = None;
-        if self.connected.is_none() {
-            self.show_ops = false;
-        } else if self.show_ops {
+    }
+
+    /// Clusters the connected node reported membership of; the scope
+    /// dropdown's options. The implicit per-node "default" cluster is
+    /// not a topology.
+    fn ops_cluster_options(&self) -> Vec<String> {
+        let Some(connected) = &self.connected else {
+            return Vec::new();
+        };
+        let Some(health) = self.endpoint_health.get(&connected.name) else {
+            return Vec::new();
+        };
+        let mut clusters: Vec<String> = health
+            .iter()
+            .filter(|node| node.node_index == connected.active_node)
+            .flat_map(|node| node.memberships.iter())
+            .filter(|membership| membership.cluster != "default")
+            .map(|membership| membership.cluster.clone())
+            .collect();
+        clusters.dedup();
+        clusters
+    }
+
+    pub fn ops_set_scope(&mut self, cluster: Option<String>, cx: &mut Context<Self>) {
+        let scope = match cluster {
+            Some(name) => OpsScope::Cluster(name),
+            None => OpsScope::Node,
+        };
+        if self.ops.scope == scope {
+            return;
+        }
+        self.ops_clear_data();
+        self.ops.scope = scope;
+        if self.show_ops {
             self.ops_start_poll(cx);
         }
         cx.notify();
@@ -280,51 +409,63 @@ impl Workspace {
         };
         self.ops.fetch_in_flight = true;
         let config = connected.client_config.clone();
+        // Cluster scope fans out to every replica; hostName() names
+        // the node each row came from.
+        let cluster = self.ops.scope.cluster().map(quoted);
+        let from = |table: &str| match &cluster {
+            Some(name) => format!("clusterAllReplicas({name}, {table})"),
+            None => table.to_string(),
+        };
+        let host_col = if cluster.is_some() {
+            ", hostName()"
+        } else {
+            ""
+        };
+        let processes_query = format!(
+            "SELECT query_id, user, elapsed, read_rows, read_bytes, \
+                total_rows_approx, memory_usage, query, \
+                toString(address), client_name, http_user_agent, \
+                os_user, initial_user{host_col} \
+             FROM {} \
+             WHERE query NOT LIKE '%system.processes%' \
+             ORDER BY elapsed DESC \
+             LIMIT 50",
+            from("system.processes")
+        );
+        // Aggregate open-connection counters; ClickHouse has no
+        // session table (HTTP is stateless), so counts are the
+        // whole truth here. Cluster scope sums across nodes.
+        let connections_query = format!(
+            "SELECT metric, sum(value) FROM {} \
+             WHERE metric IN ('HTTPConnection', 'TCPConnection', \
+                'MySQLConnection', 'PostgreSQLConnection', \
+                'InterserverConnection') \
+             GROUP BY metric ORDER BY metric",
+            from("system.metrics")
+        );
+        let merges_query = format!(
+            "SELECT database, table, elapsed, progress, num_parts, \
+                total_size_bytes_compressed, is_mutation{host_col} \
+             FROM {} \
+             ORDER BY elapsed DESC LIMIT 20",
+            from("system.merges")
+        );
+        // Unfinished mutations only; failing ones first.
+        let mutations_query = format!(
+            "SELECT database, table, command, parts_to_do, \
+                latest_fail_reason{host_col} \
+             FROM {} \
+             WHERE NOT is_done \
+             ORDER BY latest_fail_reason != '' DESC, create_time ASC \
+             LIMIT 20",
+            from("system.mutations")
+        );
         let handle = rt::tokio().spawn(async move {
             let client = zedb_ch::ChClient::new(config);
-            let processes = client
-                .query(
-                    "SELECT query_id, user, elapsed, read_rows, read_bytes, \
-                        total_rows_approx, memory_usage, query, \
-                        toString(address), client_name, http_user_agent, \
-                        os_user, initial_user \
-                     FROM system.processes \
-                     WHERE query NOT LIKE '%system.processes%' \
-                     ORDER BY elapsed DESC \
-                     LIMIT 50",
-                )
-                .await;
-            // Aggregate open-connection counters; ClickHouse has no
-            // session table (HTTP is stateless), so counts are the
-            // whole truth here.
-            let connections = client
-                .query(
-                    "SELECT metric, value FROM system.metrics \
-                     WHERE metric IN ('HTTPConnection', 'TCPConnection', \
-                        'MySQLConnection', 'PostgreSQLConnection', \
-                        'InterserverConnection') \
-                     ORDER BY metric",
-                )
-                .await;
-            let merges = client
-                .query(
-                    "SELECT database, table, elapsed, progress, num_parts, \
-                        total_size_bytes_compressed, is_mutation \
-                     FROM system.merges \
-                     ORDER BY elapsed DESC LIMIT 20",
-                )
-                .await;
-            // Unfinished mutations only; failing ones first.
-            let mutations = client
-                .query(
-                    "SELECT database, table, command, parts_to_do, \
-                        latest_fail_reason \
-                     FROM system.mutations \
-                     WHERE NOT is_done \
-                     ORDER BY latest_fail_reason != '' DESC, create_time ASC \
-                     LIMIT 20",
-                )
-                .await;
+            let processes = client.query(&processes_query).await;
+            let connections = client.query(&connections_query).await;
+            let merges = client.query(&merges_query).await;
+            let mutations = client.query(&mutations_query).await;
             (processes, connections, merges, mutations)
         });
         cx.spawn(async move |this, cx| {
@@ -357,6 +498,7 @@ impl Workspace {
                                     },
                                     os_user: text(row.get(11)),
                                     initial_user: text(row.get(12)),
+                                    node: text(row.get(13)),
                                 }
                             })
                             .collect();
@@ -390,6 +532,7 @@ impl Workspace {
                                     num_parts: number(row.get(4)),
                                     total_size_bytes: number(row.get(5)),
                                     is_mutation: number(row.get(6)) > 0,
+                                    node: text(row.get(7)),
                                 })
                                 .collect();
                         }
@@ -403,6 +546,7 @@ impl Workspace {
                                     command: text(row.get(2)),
                                     parts_to_do: number(row.get(3)),
                                     latest_fail_reason: text(row.get(4)),
+                                    node: text(row.get(5)),
                                 })
                                 .collect();
                         }
@@ -430,43 +574,70 @@ impl Workspace {
         };
         self.ops.slow_fetch_in_flight = true;
         let config = connected.client_config.clone();
+        let top_clause = self.ops.top_limit.clause();
+        let cluster = self.ops.scope.cluster().map(quoted);
+        let from = |table: &str| match &cluster {
+            Some(name) => format!("clusterAllReplicas({name}, {table})"),
+            None => table.to_string(),
+        };
+        let host_col = if cluster.is_some() {
+            ", hostName()"
+        } else {
+            ""
+        };
+        let replica_total_query = format!("SELECT count() FROM {}", from("system.replicas"));
+        let replica_problems_query = format!(
+            "SELECT database, table, is_readonly, is_session_expired, \
+                absolute_delay, queue_size{host_col} \
+             FROM {} \
+             WHERE is_readonly OR is_session_expired \
+                OR absolute_delay > 0 OR queue_size > 0 \
+             ORDER BY absolute_delay DESC LIMIT 20",
+            from("system.replicas")
+        );
+        let queue_issues_query = format!(
+            "SELECT database, table, count() AS depth, \
+                max(dateDiff('second', create_time, now())), \
+                anyIf(last_exception, last_exception != ''){host_col} \
+             FROM {} \
+             GROUP BY database, table{} \
+             ORDER BY depth DESC LIMIT 10",
+            from("system.replication_queue"),
+            if cluster.is_some() {
+                ", hostName()"
+            } else {
+                ""
+            },
+        );
+        let disks_query = format!(
+            "SELECT name, free_space, total_space{host_col} FROM {} ORDER BY {}",
+            from("system.disks"),
+            if cluster.is_some() {
+                "hostName(), name"
+            } else {
+                "name"
+            },
+        );
+        // Largest tables in cluster scope read one replica per shard
+        // (cluster(), not clusterAllReplicas) so replicas are not
+        // double-counted; the sums are then cluster-wide totals.
+        let top_tables_query = format!(
+            "SELECT database, table, sum(bytes_on_disk), sum(rows) \
+             FROM {} WHERE active \
+             GROUP BY database, table \
+             ORDER BY sum(bytes_on_disk) DESC{top_clause}",
+            match &cluster {
+                Some(name) => format!("cluster({name}, system.parts)"),
+                None => "system.parts".to_string(),
+            },
+        );
         let handle = rt::tokio().spawn(async move {
             let client = zedb_ch::ChClient::new(config);
-            let replica_total = client.query("SELECT count() FROM system.replicas").await;
-            let replica_problems = client
-                .query(
-                    "SELECT database, table, is_readonly, is_session_expired, \
-                        absolute_delay, queue_size \
-                     FROM system.replicas \
-                     WHERE is_readonly OR is_session_expired \
-                        OR absolute_delay > 0 OR queue_size > 0 \
-                     ORDER BY absolute_delay DESC LIMIT 20",
-                )
-                .await;
-            let queue_issues = client
-                .query(
-                    "SELECT database, table, count() AS depth, \
-                        max(dateDiff('second', create_time, now())), \
-                        anyIf(last_exception, last_exception != '') \
-                     FROM system.replication_queue \
-                     GROUP BY database, table \
-                     ORDER BY depth DESC LIMIT 10",
-                )
-                .await;
-            let disks = client
-                .query(
-                    "SELECT name, free_space, total_space \
-                     FROM system.disks ORDER BY name",
-                )
-                .await;
-            let top_tables = client
-                .query(
-                    "SELECT database, table, sum(bytes_on_disk), sum(rows) \
-                     FROM system.parts WHERE active \
-                     GROUP BY database, table \
-                     ORDER BY sum(bytes_on_disk) DESC LIMIT 10",
-                )
-                .await;
+            let replica_total = client.query(&replica_total_query).await;
+            let replica_problems = client.query(&replica_problems_query).await;
+            let queue_issues = client.query(&queue_issues_query).await;
+            let disks = client.query(&disks_query).await;
+            let top_tables = client.query(&top_tables_query).await;
             (
                 replica_total,
                 replica_problems,
@@ -501,6 +672,7 @@ impl Workspace {
                             session_expired: number(row.get(3)) > 0,
                             delay_secs: number(row.get(4)),
                             queue_size: number(row.get(5)),
+                            node: text(row.get(6)),
                         })
                         .collect();
                 }
@@ -514,6 +686,7 @@ impl Workspace {
                             depth: number(row.get(2)),
                             oldest_secs: number(row.get(3)),
                             exception: text(row.get(4)),
+                            node: text(row.get(5)),
                         })
                         .collect();
                 }
@@ -525,6 +698,7 @@ impl Workspace {
                             name: text(row.first()),
                             free: number(row.get(1)),
                             total: number(row.get(2)),
+                            node: text(row.get(3)),
                         })
                         .collect();
                 }
@@ -547,6 +721,15 @@ impl Workspace {
         .detach();
     }
 
+    pub fn ops_set_top_limit(&mut self, limit: OpsTopLimit, cx: &mut Context<Self>) {
+        if self.ops.top_limit == limit {
+            return;
+        }
+        self.ops.top_limit = limit;
+        self.ops_fetch_slow(cx);
+        cx.notify();
+    }
+
     fn ops_kill(&mut self, query_id: String, cx: &mut Context<Self>) {
         let Some(connected) = &self.connected else {
             return;
@@ -558,11 +741,21 @@ impl Workspace {
         self.ops.killing = Some(query_id.clone());
         self.ops_killed.insert(query_id.clone());
         let config = connected.client_config.clone();
+        // In cluster scope the query may run on another node; ON
+        // CLUSTER reaches it via the distributed DDL queue.
+        let on_cluster = self
+            .ops
+            .scope
+            .cluster()
+            .map(|name| format!(" ON CLUSTER {}", quoted(name)))
+            .unwrap_or_default();
         let handle = rt::tokio().spawn(async move {
             let client = zedb_ch::ChClient::new(config);
             let escaped = query_id.replace('\'', "''");
             client
-                .query(&format!("KILL QUERY WHERE query_id = '{escaped}'"))
+                .query(&format!(
+                    "KILL QUERY{on_cluster} WHERE query_id = '{escaped}'"
+                ))
                 .await
                 .map(|_| ())
         });
@@ -592,17 +785,40 @@ impl Workspace {
             .as_of
             .map(|stamp| format!("as of {}", stamp.format("%H:%M:%S")))
             .unwrap_or_else(|| "loading...".into());
+        let cluster_scope = self.ops.scope.cluster().is_some();
+        let scope_options = self.ops_cluster_options();
 
-        let header = div()
-            .flex_none()
-            .px_4()
-            .py_3()
-            .border_b_1()
-            .border_color(theme::border())
+        let header_row = div()
             .flex()
             .items_center()
             .gap_3()
             .child(div().text_lg().text_color(theme::text()).child("Ops"))
+            .when(!scope_options.is_empty(), |header| {
+                let label = match self.ops.scope.cluster() {
+                    Some(name) => format!("Cluster: {name}"),
+                    None => "This node".to_string(),
+                };
+                header.child(
+                    Button::new("ops-scope")
+                        .label(label)
+                        .dropdown_caret(true)
+                        .compact()
+                        .outline()
+                        .dropdown_menu(move |menu: PopupMenu, _, _| {
+                            let menu = menu
+                                .min_w(px(160.))
+                                .menu("This node", Box::new(SetOpsScope { cluster: None }));
+                            scope_options.iter().fold(menu, |menu, name| {
+                                menu.menu(
+                                    format!("Cluster: {name}"),
+                                    Box::new(SetOpsScope {
+                                        cluster: Some(name.clone()),
+                                    }),
+                                )
+                            })
+                        }),
+                )
+            })
             .child(div().text_sm().text_color(theme::text_dim()).child(format!(
                 "queries now \u{b7} {as_of} \u{b7} refreshes every {POLL_SECS}s"
             )))
@@ -620,9 +836,49 @@ impl Workspace {
                         .text_color(theme::text_dim())
                         .child(format!("connections: {summary}")),
                 )
-            })
+            });
+
+        let header = div()
+            .flex_none()
+            .px_4()
+            .py_3()
+            .border_b_1()
+            .border_color(theme::border())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(header_row)
             .when_some(self.ops.error.clone(), |header, error| {
-                header.child(div().text_sm().text_color(theme::danger()).child(error))
+                // Fan-out to a replica whose cluster config carries no
+                // credentials fails remote auth; explain that instead
+                // of relaying ClickHouse's password-reset essay.
+                let summary = if cluster_scope && error.contains("AUTHENTICATION_FAILED") {
+                    "Remote nodes refused the fanned-out query: this cluster's config \
+                     has no credentials for distributed queries. Switch back to This node."
+                        .to_string()
+                } else {
+                    let mut line = error.lines().next().unwrap_or_default().to_string();
+                    if line.len() > 180 {
+                        let mut cut = 180;
+                        while !line.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        line.truncate(cut);
+                        line.push('\u{2026}');
+                    }
+                    line
+                };
+                header.child(
+                    div()
+                        .id("ops-error")
+                        .w_full()
+                        .text_sm()
+                        .text_color(theme::danger())
+                        .child(summary)
+                        .tooltip(move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(error.clone()).build(window, cx)
+                        }),
+                )
             });
 
         let column_header = div()
@@ -635,6 +891,9 @@ impl Workspace {
             .gap_3()
             .text_xs()
             .text_color(theme::text_dim())
+            .when(cluster_scope, |header| {
+                header.child(div().w(px(110.)).flex_none().child("NODE"))
+            })
             .child(div().w(px(80.)).flex_none().child("ELAPSED"))
             .child(div().w(px(150.)).flex_none().child("USER / CLIENT"))
             .child(div().w(px(90.)).flex_none().child("MEMORY"))
@@ -682,6 +941,17 @@ impl Workspace {
                         .items_center()
                         .text_sm()
                         .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
+                        .when(cluster_scope, |row| {
+                            row.child(
+                                div()
+                                    .w(px(110.))
+                                    .flex_none()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_color(theme::text_dim())
+                                    .child(process.node.clone()),
+                            )
+                        })
                         .child(
                             div()
                                 .w(px(80.))
@@ -821,6 +1091,17 @@ impl Workspace {
                     .items_center()
                     .text_sm()
                     .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
+                    .when(cluster_scope, |row| {
+                        row.child(
+                            div()
+                                .w(px(110.))
+                                .flex_none()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_color(theme::text_dim())
+                                .child(merge.node.clone()),
+                        )
+                    })
                     .child(
                         div()
                             .w(px(80.))
@@ -900,6 +1181,17 @@ impl Workspace {
                             .flex()
                             .gap_3()
                             .items_center()
+                            .when(cluster_scope, |row| {
+                                row.child(
+                                    div()
+                                        .w(px(110.))
+                                        .flex_none()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_color(theme::text_dim())
+                                        .child(mutation.node.clone()),
+                                )
+                            })
                             .child(
                                 div()
                                     .w(px(300.))
@@ -1048,6 +1340,17 @@ impl Workspace {
                                     .gap_3()
                                     .text_sm()
                                     .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
+                                    .when(cluster_scope, |row| {
+                                        row.child(
+                                            div()
+                                                .w(px(110.))
+                                                .flex_none()
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_color(theme::text_dim())
+                                                .child(problem.node.clone()),
+                                        )
+                                    })
                                     .child(
                                         div()
                                             .w(px(300.))
@@ -1086,7 +1389,12 @@ impl Workspace {
                                 .gap_1()
                                 .text_sm()
                                 .child(div().text_color(theme::text()).child(format!(
-                                    "{}.{} \u{b7} queue {} \u{b7} oldest {}",
+                                    "{}{}.{} \u{b7} queue {} \u{b7} oldest {}",
+                                    if issue.node.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("{} \u{b7} ", issue.node)
+                                    },
                                     issue.database,
                                     issue.table,
                                     issue.depth,
@@ -1117,6 +1425,17 @@ impl Workspace {
                         .gap_3()
                         .items_center()
                         .text_sm()
+                        .when(cluster_scope, |row| {
+                            row.child(
+                                div()
+                                    .w(px(110.))
+                                    .flex_none()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_color(theme::text_dim())
+                                    .child(disk.node.clone()),
+                            )
+                        })
                         .child(
                             div()
                                 .w(px(120.))
@@ -1155,7 +1474,40 @@ impl Workspace {
                 .when(self.ops.disks.is_empty(), |list| {
                     list.child(empty_line("No disk information."))
                 })
-                .child(section_title("LARGEST TABLES"))
+                .child(
+                    div()
+                        .px_4()
+                        .pt_4()
+                        .pb_1()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(div().text_xs().text_color(theme::text_dim()).child(
+                            if cluster_scope {
+                                "LARGEST TABLES (summed across shards)"
+                            } else {
+                                "LARGEST TABLES"
+                            },
+                        ))
+                        .child(
+                            Button::new("ops-top-limit")
+                                .label(format!("Top: {}", self.ops.top_limit.label()))
+                                .dropdown_caret(true)
+                                .compact()
+                                .outline()
+                                .dropdown_menu(|menu: PopupMenu, _, _| {
+                                    let entry = |menu: PopupMenu, limit: OpsTopLimit| {
+                                        menu.menu(limit.label(), Box::new(SetOpsTopLimit { limit }))
+                                    };
+                                    let menu = menu.min_w(px(96.));
+                                    let menu = entry(menu, OpsTopLimit::Ten);
+                                    let menu = entry(menu, OpsTopLimit::TwentyFive);
+                                    let menu = entry(menu, OpsTopLimit::Fifty);
+                                    let menu = entry(menu, OpsTopLimit::Hundred);
+                                    entry(menu, OpsTopLimit::All)
+                                }),
+                        ),
+                )
                 .children(
                     self.ops
                         .top_tables
@@ -1173,23 +1525,41 @@ impl Workspace {
                                 .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
                                 .child(
                                     div()
-                                        .w(px(300.))
-                                        .flex_none()
+                                        .flex_1()
+                                        .min_w_0()
                                         .overflow_hidden()
                                         .whitespace_nowrap()
-                                        .text_color(theme::text())
-                                        .child(format!("{}.{}", table.database, table.table)),
+                                        .flex()
+                                        .child(
+                                            div()
+                                                .flex_none()
+                                                .text_color(theme::text())
+                                                .child(format!("{}.", table.database)),
+                                        )
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_color(theme::table_tint())
+                                                .child(table.table.clone()),
+                                        ),
                                 )
                                 .child(
                                     div()
-                                        .w(px(100.))
+                                        .w(px(90.))
                                         .flex_none()
+                                        .whitespace_nowrap()
+                                        .text_right()
                                         .text_color(theme::text_dim())
                                         .child(Self::format_bytes(table.bytes)),
                                 )
                                 .child(
                                     div()
-                                        .flex_1()
+                                        .w(px(160.))
+                                        .flex_none()
+                                        .whitespace_nowrap()
+                                        .text_right()
                                         .text_color(theme::text_dim())
                                         .child(format!("{} rows", Self::format_count(table.rows))),
                                 )
