@@ -1,18 +1,10 @@
-# Phase 7 ideas: toward a first-class browser and migration manager
+# Phase 7.1 ideas: toward a first-class browser and migration manager
 
 Status: IDEAS, not committed scope. A ranked shopping list from the
 2026-08-08 soak review, carried forward after Phase 6 shipped the
-ops view (v0.1.13); each item stands alone and none is promised.
-Pick by appetite.
-
-## Unfinished thread (small, do soon)
-
-- **Array values in the data view.** Started 2026-08-08 and derailed
-  by the empty-body DDL bug: `sat.arrayValues` (values Array(String))
-  was created to see how arrays render in the results grid, and
-  nobody ever looked. Audit grid rendering for Array / Map / Tuple /
-  Nested / JSON values: readable inline formatting, sensible
-  truncation, and copy behavior. Pairs with the cell inspector below.
+ops view (v0.1.13) and Phase 7 shipped composite/JSON grid rendering
+with the cell inspector (v0.1.14, docs/PHASE-7.md); each item stands
+alone and none is promised. Pick by appetite.
 
 ## Browser: daily-driver gaps
 
@@ -27,8 +19,6 @@ Pick by appetite.
 - **EXPLAIN, visualized.** Plan/pipeline view plus the query_log
   aftermath (read vs result rows, memory, spill). ClickHouse makes
   people guess why queries are slow; showing them wins loyalty.
-- **Cell inspector.** Click a long value (JSON blob, array, huge
-  string) and see it pretty-printed in a side pane. Small, daily.
 
 ## Migration manager: growing up
 
@@ -56,6 +46,5 @@ Pick by appetite.
 
 ## A suggested first bite
 
-Query history for feel (the largest daily-driver gap now the ops
-view has shipped), drift->migration for having something nobody
-else has, and the array-values thread closed while it is small.
+Query history for feel (the largest daily-driver gap left), and
+drift->migration for having something nobody else has.
