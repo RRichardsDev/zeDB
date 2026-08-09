@@ -7,49 +7,51 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.14 - 2026-08-09
 
-- The JSON column type is supported: queries against tables with JSON
-  columns no longer fail with "unsupported ClickHouse type", and the
-  documents arrive as their text form.
-- Composite values grew up in the results grid: short arrays, maps,
-  and tuples render inline as proper quoted literals; long ones show
-  a compact face like "[...] 200 items"; cmd-c copies a composite as
-  a SQL-pasteable literal. Multi-line values (e.g. DESCRIBE's named
-  tuple types) no longer spill over neighboring rows.
-- A cell inspector: clicking a composite, JSON, or long/multiline
-  value opens a panel docked to the grid's right edge showing the
-  full value expanded (JSON pretty-printed, composites one element
-  per line) with tree-sitter syntax coloring matching the editor
-  theme, plus copy and close. Escape dismisses it.
+Complex data grows up in the results grid, and the long-standing
+"it ran the wrong statement" ghost is dead.
+
+### Composite values and JSON
+
+- The JSON column type is supported: queries against tables with
+  JSON columns no longer fail with "unsupported ClickHouse type".
+- Arrays, maps, and tuples render honestly in the grid: short values
+  inline as proper quoted literals, long ones as a compact face like
+  "[...] 200 items", and cmd-c copies a SQL-pasteable literal.
+  Multi-line values (DESCRIBE's named tuple types) no longer spill
+  over neighboring rows.
+- A cell inspector: clicking a composite, JSON, or long value opens
+  a panel docked to the grid's right edge with the full value
+  expanded (JSON pretty-printed, composites one element per line),
+  syntax-colored to match the editor theme, with copy and
+  escape-to-close.
 - Inline composite and JSON cells are syntax-colored in the grid
   itself, computed once per cell and cached, so million-row scrolls
   stay smooth.
-- Run means run: pressing Run (or cmd-enter) while a previous query
-  is still streaming cancels it and runs the statement you asked
-  for. It was silently ignored before, which made switching between
-  statements after a large result feel like the second run "didn't
-  see" the new query.
-- Statements the SQL grammar doesn't know (DESCRIBE, EXPLAIN,
-  OPTIMIZE, KILL, TRUNCATE, and friends) now get their keywords
-  colored in the editor instead of rendering as plain text.
-- A caret at the end of a statement's line (after the semicolon) now
-  runs THAT statement. It was byte-wise inside the next statement's
-  segment, so arrowing to a line's end or pressing End and hitting
-  Run executed the neighbor below: the long-standing "it ran the
-  wrong statement" ghost.
+
+### Running the statement you meant
+
+- Pressing Run while a previous query is still streaming cancels it
+  and runs the statement you asked for; it was silently ignored.
+- A caret at the end of a statement's line (just past the semicolon)
+  runs that statement, not the neighbor below it.
 - The schema hover card no longer swallows clicks: clicking into a
-  statement whose text sat under the card left the caret (and the
-  next Run) on the previous statement. Clicks pass through to place
-  the caret; wheel scrolling stays contained to the card.
+  statement whose text sat under the card now places the caret.
+
+### Types in color
+
 - Column types render in color wherever they appear (DESCRIBE and
   system.columns results, the schema inspector's Columns tab, the
-  cell inspector's header): container types (Array, Map, Tuple) in
-  blue, leaf types in the editor's orange, Nullable muted, Enum
-  labels and numbers as literals, named-tuple field names plain. So
-  Array(Nullable(String)) reads as structure, annotation, payload.
-- Table names after a dot color like parsed object references even
-  in statements the SQL grammar can't parse (describe sat.foo).
+  cell inspector's header): container types like Array, Map, and
+  Tuple in blue, leaf types in the editor's orange, Nullable muted,
+  Enum labels and numbers as literals, and named-tuple field names
+  plain, so Array(Nullable(String)) reads as structure, annotation,
+  payload.
+- Statements the SQL grammar doesn't know (DESCRIBE, EXPLAIN,
+  OPTIMIZE, KILL, TRUNCATE, and friends) get their keywords colored
+  in the editor, and table names after a dot color like parsed
+  object references (describe sat.foo).
 - Fixed a crash when highlighting unparsed statements containing
   multibyte characters (accents, emoji).
 
