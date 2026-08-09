@@ -194,7 +194,14 @@ impl Element for Popover {
                 .id("hover-popover-content")
                 .when(!is_open, |s| s.invisible())
                 .flex_none()
-                .occlude()
+                // zeDB patch: the hover card is informational and must
+                // not swallow the caret-placing click. `.occlude()` ate
+                // clicks over its footprint, so clicking into a
+                // statement under the card left the caret (and the next
+                // Run) on the previous statement. Clicks now pass
+                // through to the editor; wheel scrolling stays
+                // contained to the card.
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                 .p_1()
                 .text_xs()
                 .popover_style(cx)

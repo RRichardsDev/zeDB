@@ -33,6 +33,15 @@ GitHub release notes.
 - Statements the SQL grammar doesn't know (DESCRIBE, EXPLAIN,
   OPTIMIZE, KILL, TRUNCATE, and friends) now get their keywords
   colored in the editor instead of rendering as plain text.
+- A caret at the end of a statement's line (after the semicolon) now
+  runs THAT statement. It was byte-wise inside the next statement's
+  segment, so arrowing to a line's end or pressing End and hitting
+  Run executed the neighbor below: the long-standing "it ran the
+  wrong statement" ghost.
+- The schema hover card no longer swallows clicks: clicking into a
+  statement whose text sat under the card left the caret (and the
+  next Run) on the previous statement. Clicks pass through to place
+  the caret; wheel scrolling stays contained to the card.
 
 ## v0.1.13 - 2026-08-09
 

@@ -6935,10 +6935,22 @@ fn nearest_occurrence(text: &str, needle: &str, cursor: usize) -> Option<usize> 
 
 fn statement_at_cursor(text: &str, cursor: usize) -> Option<&str> {
     let segments = split_statements(text);
-    let idx = segments
+    let mut idx = segments
         .iter()
         .position(|&(start, end)| cursor >= start && cursor <= end)
         .unwrap_or(segments.len() - 1);
+    // A caret just after a statement's semicolon is byte-wise the
+    // first position of the NEXT segment, but visually still on the
+    // finished statement's line (End, arrow-up to line end, click
+    // past the semicolon). If everything on this line behind the
+    // caret is a finished statement, it is the one meant.
+    if idx > 0 && cursor <= text.len() {
+        let line_start = text[..cursor].rfind('\n').map(|pos| pos + 1).unwrap_or(0);
+        let line_before_cursor = text[line_start..cursor].trim_end();
+        if line_before_cursor.ends_with(';') && segments[idx].0 >= line_start {
+            idx -= 1;
+        }
+    }
     let pick = |i: usize| {
         let (start, end) = segments[i];
         let statement = text[start..end.min(text.len())].trim();
@@ -7274,6 +7286,30 @@ mod tests {
         assert_eq!(statement_at_cursor(text, 3), Some("SELECT 1"));
         assert_eq!(statement_at_cursor(text, 12), Some("SELECT 2"));
         assert_eq!(statement_at_cursor(text, text.len()), Some("SELECT 3"));
+    }
+
+    #[test]
+    fn statement_at_cursor_end_of_line_stays_on_that_line() {
+        // The caret after a statement's semicolon (End, arrow-up to a
+        // shorter line's end) is byte-wise inside the next segment but
+        // visually on the finished statement's line; it must pick the
+        // statement on its own line, not the neighbor below.
+        let text = "DESCRIBE sat.arrayValues;\ndescribe sat.complexTypes;";
+        let after_first_semicolon = text.find(';').unwrap() + 1;
+        assert_eq!(
+            statement_at_cursor(text, after_first_semicolon),
+            Some("DESCRIBE sat.arrayValues")
+        );
+        // Same-line trailing whitespace after the semicolon too.
+        let text = "SELECT 1;  \nSELECT 2;";
+        assert_eq!(statement_at_cursor(text, 10), Some("SELECT 1"));
+        assert_eq!(statement_at_cursor(text, 11), Some("SELECT 1"));
+        // But the start of the NEXT line belongs to the next statement.
+        assert_eq!(statement_at_cursor(text, 12), Some("SELECT 2"));
+        // And a second statement beginning on the same line after the
+        // semicolon still wins once the caret is inside it.
+        let text = "SELECT 1; SELECT 2;";
+        assert_eq!(statement_at_cursor(text, 14), Some("SELECT 2"));
     }
 
     #[test]
