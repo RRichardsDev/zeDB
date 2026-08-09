@@ -26,6 +26,8 @@ GitHub release notes.
 - The ops view gains Merges (progress bars, parts, size, mutation
   flag) and Mutations (unfinished only, failing ones surfaced first
   with their fail reason) sections below the query list.
+- The ops view splits into tabs (Queries, Background, Replication,
+  Storage) with the header and connection counters fixed above.
 - And three more sections on a slower 10s cadence: Replication
   (a green all-healthy line, or the problem replicas with
   readonly/session/delay/queue flags plus replication-queue

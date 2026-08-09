@@ -86,6 +86,33 @@ pub struct OpsTopTable {
     pub rows: u64,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum OpsTab {
+    #[default]
+    Queries,
+    Background,
+    Replication,
+    Storage,
+}
+
+impl OpsTab {
+    const ALL: [OpsTab; 4] = [
+        OpsTab::Queries,
+        OpsTab::Background,
+        OpsTab::Replication,
+        OpsTab::Storage,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            OpsTab::Queries => "Queries",
+            OpsTab::Background => "Background",
+            OpsTab::Replication => "Replication",
+            OpsTab::Storage => "Storage",
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct OpsState {
     pub processes: Vec<OpsProcess>,
@@ -108,6 +135,7 @@ pub struct OpsState {
     pub disks: Vec<OpsDisk>,
     pub top_tables: Vec<OpsTopTable>,
     pub slow_fetch_in_flight: bool,
+    pub tab: OpsTab,
 }
 
 fn number(value: Option<&Value>) -> u64 {
@@ -897,191 +925,97 @@ impl Workspace {
                 .child(message)
         };
 
-        div()
-            .size_full()
+        let active_tab = self.ops.tab;
+        let tab_bar = div()
+            .flex_none()
+            .px_4()
+            .border_b_1()
+            .border_color(theme::border())
             .flex()
-            .flex_col()
-            .bg(theme::bg())
-            .child(header)
-            .child(
+            .gap_4()
+            .children(OpsTab::ALL.into_iter().map(|tab| {
+                let active = tab == active_tab;
                 div()
-                    .id("ops-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(section_title("QUERIES NOW"))
-                    .child(column_header)
-                    .children(rows)
-                    .when(self.ops.processes.is_empty(), |list| {
-                        list.child(empty_line("No queries running right now."))
+                    .id(tab.label())
+                    .py_2()
+                    .border_b_2()
+                    .border_color(if active {
+                        theme::accent()
+                    } else {
+                        gpui::transparent_black()
                     })
-                    .child(section_title("MERGES"))
-                    .children(merge_rows)
-                    .when(self.ops.merges.is_empty(), |list| {
-                        list.child(empty_line("No merges in flight."))
+                    .text_sm()
+                    .text_color(if active {
+                        theme::text()
+                    } else {
+                        theme::text_dim()
                     })
-                    .child(section_title("MUTATIONS"))
-                    .children(mutation_rows)
-                    .when(self.ops.mutations.is_empty(), |list| {
-                        list.child(empty_line("No unfinished mutations."))
-                    })
-                    .child(section_title("REPLICATION"))
-                    .map(|list| {
-                        if self.ops.replica_total == 0 {
-                            list.child(empty_line("No replicated tables."))
-                        } else if self.ops.replica_problems.is_empty() {
-                            list.child(
-                                div()
-                                    .px_4()
-                                    .py_2()
-                                    .text_sm()
-                                    .text_color(theme::success())
-                                    .child(format!(
-                                        "{} replicated table(s), all healthy",
-                                        self.ops.replica_total
-                                    )),
-                            )
-                        } else {
-                            list.children(self.ops.replica_problems.iter().enumerate().map(
-                                |(index, problem)| {
-                                    let mut flags: Vec<String> = Vec::new();
-                                    if problem.is_readonly {
-                                        flags.push("READONLY".into());
-                                    }
-                                    if problem.session_expired {
-                                        flags.push("SESSION EXPIRED".into());
-                                    }
-                                    if problem.delay_secs > 0 {
-                                        flags.push(format!("{}s behind", problem.delay_secs));
-                                    }
-                                    if problem.queue_size > 0 {
-                                        flags.push(format!("queue {}", problem.queue_size));
-                                    }
-                                    div()
-                                        .px_4()
-                                        .py_2()
-                                        .border_b_1()
-                                        .border_color(theme::border())
-                                        .flex()
-                                        .gap_3()
-                                        .text_sm()
-                                        .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
-                                        .child(
-                                            div()
-                                                .w(px(300.))
-                                                .flex_none()
-                                                .overflow_hidden()
-                                                .whitespace_nowrap()
-                                                .text_color(theme::text())
-                                                .child(format!(
-                                                    "{}.{}",
-                                                    problem.database, problem.table
-                                                )),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .text_color(theme::danger())
-                                                .child(flags.join(" \u{b7} ")),
-                                        )
-                                },
-                            ))
-                        }
-                    })
-                    .children(
-                        self.ops
-                            .queue_issues
-                            .iter()
-                            .filter(|issue| !issue.exception.is_empty())
-                            .map(|issue| {
-                                div()
-                                    .px_4()
-                                    .py_2()
-                                    .border_b_1()
-                                    .border_color(theme::border())
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .text_sm()
-                                    .child(div().text_color(theme::text()).child(format!(
-                                        "{}.{} \u{b7} queue {} \u{b7} oldest {}",
-                                        issue.database,
-                                        issue.table,
-                                        issue.depth,
-                                        format_elapsed(issue.oldest_secs as f64)
-                                    )))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme::danger())
-                                            .child(issue.exception.clone()),
-                                    )
-                            }),
-                    )
-                    .child(section_title("DISKS"))
-                    .children(self.ops.disks.iter().map(|disk| {
-                        let used = disk.total.saturating_sub(disk.free);
-                        let fraction = if disk.total > 0 {
-                            used as f64 / disk.total as f64
-                        } else {
-                            0.0
-                        };
-                        let bar_width = 200.0_f32;
-                        div()
-                            .px_4()
-                            .py_2()
-                            .flex()
-                            .gap_3()
-                            .items_center()
-                            .text_sm()
-                            .child(
-                                div()
-                                    .w(px(120.))
-                                    .flex_none()
-                                    .text_color(theme::text())
-                                    .child(disk.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .w(px(bar_width))
-                                    .flex_none()
-                                    .h(px(6.))
-                                    .rounded(px(3.))
-                                    .bg(theme::row_stripe())
-                                    .child(
-                                        div()
-                                            .w(px(bar_width * fraction as f32))
-                                            .h(px(6.))
-                                            .rounded(px(3.))
-                                            .bg(if fraction > 0.9 {
-                                                theme::danger()
-                                            } else if fraction > 0.75 {
-                                                theme::warning()
-                                            } else {
-                                                theme::success()
-                                            }),
-                                    ),
-                            )
-                            .child(div().text_color(theme::text_dim()).child(format!(
-                                "{} of {} used ({:.0}%)",
-                                Self::format_bytes(used),
-                                Self::format_bytes(disk.total),
-                                fraction * 100.0
-                            )))
+                    .hover(|label| label.text_color(theme::text()).cursor_pointer())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.ops.tab = tab;
+                        cx.notify();
                     }))
-                    .when(self.ops.disks.is_empty(), |list| {
-                        list.child(empty_line("No disk information."))
-                    })
-                    .child(section_title("LARGEST TABLES"))
-                    .children(
-                        self.ops
-                            .top_tables
-                            .iter()
-                            .enumerate()
-                            .map(|(index, table)| {
+                    .child(tab.label())
+            }));
+
+        let content = div()
+            .id("ops-scroll")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll();
+        let content = match active_tab {
+            OpsTab::Queries => content
+                .child(column_header)
+                .children(rows)
+                .when(self.ops.processes.is_empty(), |list| {
+                    list.child(empty_line("No queries running right now."))
+                }),
+            OpsTab::Background => content
+                .child(section_title("MERGES"))
+                .children(merge_rows)
+                .when(self.ops.merges.is_empty(), |list| {
+                    list.child(empty_line("No merges in flight."))
+                })
+                .child(section_title("MUTATIONS"))
+                .children(mutation_rows)
+                .when(self.ops.mutations.is_empty(), |list| {
+                    list.child(empty_line("No unfinished mutations."))
+                }),
+            OpsTab::Replication => content
+                .map(|list| {
+                    if self.ops.replica_total == 0 {
+                        list.child(empty_line("No replicated tables."))
+                    } else if self.ops.replica_problems.is_empty() {
+                        list.child(
+                            div()
+                                .px_4()
+                                .py_2()
+                                .text_sm()
+                                .text_color(theme::success())
+                                .child(format!(
+                                    "{} replicated table(s), all healthy",
+                                    self.ops.replica_total
+                                )),
+                        )
+                    } else {
+                        list.children(self.ops.replica_problems.iter().enumerate().map(
+                            |(index, problem)| {
+                                let mut flags: Vec<String> = Vec::new();
+                                if problem.is_readonly {
+                                    flags.push("READONLY".into());
+                                }
+                                if problem.session_expired {
+                                    flags.push("SESSION EXPIRED".into());
+                                }
+                                if problem.delay_secs > 0 {
+                                    flags.push(format!("{}s behind", problem.delay_secs));
+                                }
+                                if problem.queue_size > 0 {
+                                    flags.push(format!("queue {}", problem.queue_size));
+                                }
                                 div()
                                     .px_4()
-                                    .py_1p5()
+                                    .py_2()
                                     .border_b_1()
                                     .border_color(theme::border())
                                     .flex()
@@ -1095,25 +1029,158 @@ impl Workspace {
                                             .overflow_hidden()
                                             .whitespace_nowrap()
                                             .text_color(theme::text())
-                                            .child(format!("{}.{}", table.database, table.table)),
+                                            .child(format!(
+                                                "{}.{}",
+                                                problem.database, problem.table
+                                            )),
                                     )
                                     .child(
                                         div()
-                                            .w(px(100.))
-                                            .flex_none()
-                                            .text_color(theme::text_dim())
-                                            .child(Self::format_bytes(table.bytes)),
+                                            .flex_1()
+                                            .text_color(theme::danger())
+                                            .child(flags.join(" \u{b7} ")),
                                     )
-                                    .child(
-                                        div().flex_1().text_color(theme::text_dim()).child(
-                                            format!("{} rows", Self::format_count(table.rows)),
-                                        ),
-                                    )
-                            }),
-                    )
-                    .when(self.ops.top_tables.is_empty(), |list| {
-                        list.child(empty_line("No table parts on this node."))
-                    }),
-            )
+                            },
+                        ))
+                    }
+                })
+                .children(
+                    self.ops
+                        .queue_issues
+                        .iter()
+                        .filter(|issue| !issue.exception.is_empty())
+                        .map(|issue| {
+                            div()
+                                .px_4()
+                                .py_2()
+                                .border_b_1()
+                                .border_color(theme::border())
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .text_sm()
+                                .child(div().text_color(theme::text()).child(format!(
+                                    "{}.{} \u{b7} queue {} \u{b7} oldest {}",
+                                    issue.database,
+                                    issue.table,
+                                    issue.depth,
+                                    format_elapsed(issue.oldest_secs as f64)
+                                )))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme::danger())
+                                        .child(issue.exception.clone()),
+                                )
+                        }),
+                ),
+            OpsTab::Storage => content
+                .child(section_title("DISKS"))
+                .children(self.ops.disks.iter().map(|disk| {
+                    let used = disk.total.saturating_sub(disk.free);
+                    let fraction = if disk.total > 0 {
+                        used as f64 / disk.total as f64
+                    } else {
+                        0.0
+                    };
+                    let bar_width = 200.0_f32;
+                    div()
+                        .px_4()
+                        .py_2()
+                        .flex()
+                        .gap_3()
+                        .items_center()
+                        .text_sm()
+                        .child(
+                            div()
+                                .w(px(120.))
+                                .flex_none()
+                                .text_color(theme::text())
+                                .child(disk.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .w(px(bar_width))
+                                .flex_none()
+                                .h(px(6.))
+                                .rounded(px(3.))
+                                .bg(theme::row_stripe())
+                                .child(
+                                    div()
+                                        .w(px(bar_width * fraction as f32))
+                                        .h(px(6.))
+                                        .rounded(px(3.))
+                                        .bg(if fraction > 0.9 {
+                                            theme::danger()
+                                        } else if fraction > 0.75 {
+                                            theme::warning()
+                                        } else {
+                                            theme::success()
+                                        }),
+                                ),
+                        )
+                        .child(div().text_color(theme::text_dim()).child(format!(
+                            "{} of {} used ({:.0}%)",
+                            Self::format_bytes(used),
+                            Self::format_bytes(disk.total),
+                            fraction * 100.0
+                        )))
+                }))
+                .when(self.ops.disks.is_empty(), |list| {
+                    list.child(empty_line("No disk information."))
+                })
+                .child(section_title("LARGEST TABLES"))
+                .children(
+                    self.ops
+                        .top_tables
+                        .iter()
+                        .enumerate()
+                        .map(|(index, table)| {
+                            div()
+                                .px_4()
+                                .py_1p5()
+                                .border_b_1()
+                                .border_color(theme::border())
+                                .flex()
+                                .gap_3()
+                                .text_sm()
+                                .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
+                                .child(
+                                    div()
+                                        .w(px(300.))
+                                        .flex_none()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_color(theme::text())
+                                        .child(format!("{}.{}", table.database, table.table)),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(100.))
+                                        .flex_none()
+                                        .text_color(theme::text_dim())
+                                        .child(Self::format_bytes(table.bytes)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_color(theme::text_dim())
+                                        .child(format!("{} rows", Self::format_count(table.rows))),
+                                )
+                        }),
+                )
+                .when(self.ops.top_tables.is_empty(), |list| {
+                    list.child(empty_line("No table parts on this node."))
+                }),
+        };
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(theme::bg())
+            .child(header)
+            .child(tab_bar)
+            .child(content)
     }
 }
