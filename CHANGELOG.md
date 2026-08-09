@@ -26,6 +26,11 @@ GitHub release notes.
 - The ops view gains Merges (progress bars, parts, size, mutation
   flag) and Mutations (unfinished only, failing ones surfaced first
   with their fail reason) sections below the query list.
+- And three more sections on a slower 10s cadence: Replication
+  (a green all-healthy line, or the problem replicas with
+  readonly/session/delay/queue flags plus replication-queue
+  exceptions), Disks (usage bars that go amber at 75% and red at
+  90%), and Largest Tables (top ten by on-disk size).
 
 ## v0.1.12 - 2026-08-08
 

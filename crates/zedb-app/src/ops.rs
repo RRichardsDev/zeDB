@@ -52,6 +52,40 @@ pub struct OpsMutation {
     pub latest_fail_reason: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct OpsReplicaProblem {
+    pub database: String,
+    pub table: String,
+    pub is_readonly: bool,
+    pub session_expired: bool,
+    pub delay_secs: u64,
+    pub queue_size: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct OpsQueueIssue {
+    pub database: String,
+    pub table: String,
+    pub depth: u64,
+    pub oldest_secs: u64,
+    pub exception: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct OpsDisk {
+    pub name: String,
+    pub free: u64,
+    pub total: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct OpsTopTable {
+    pub database: String,
+    pub table: String,
+    pub bytes: u64,
+    pub rows: u64,
+}
+
 #[derive(Default)]
 pub struct OpsState {
     pub processes: Vec<OpsProcess>,
@@ -66,6 +100,14 @@ pub struct OpsState {
     pub connections: Vec<(String, u64)>,
     pub merges: Vec<OpsMerge>,
     pub mutations: Vec<OpsMutation>,
+    /// Ticks since the view opened; the slow queries run every fifth.
+    pub tick: u64,
+    pub replica_total: u64,
+    pub replica_problems: Vec<OpsReplicaProblem>,
+    pub queue_issues: Vec<OpsQueueIssue>,
+    pub disks: Vec<OpsDisk>,
+    pub top_tables: Vec<OpsTopTable>,
+    pub slow_fetch_in_flight: bool,
 }
 
 fn number(value: Option<&Value>) -> u64 {
@@ -148,7 +190,9 @@ impl Workspace {
     fn ops_start_poll(&mut self, cx: &mut Context<Self>) {
         self.ops.poll_generation += 1;
         let generation = self.ops.poll_generation;
+        self.ops.tick = 0;
         self.ops_fetch(cx);
+        self.ops_fetch_slow(cx);
         cx.spawn(async move |this, cx| loop {
             Timer::after(Duration::from_secs(POLL_SECS)).await;
             let live = this
@@ -157,7 +201,11 @@ impl Workspace {
                         && this.show_ops
                         && this.connected.is_some();
                     if live {
+                        this.ops.tick += 1;
                         this.ops_fetch(cx);
+                        if this.ops.tick % 5 == 0 {
+                            this.ops_fetch_slow(cx);
+                        }
                     }
                     live
                 })
@@ -309,6 +357,134 @@ impl Workspace {
                     }
                     Ok((Err(error), _, _, _)) => this.ops.error = Some(error.to_string()),
                     Err(_) => {}
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Replication health, disks, and largest tables: slow-moving,
+    /// fetched every fifth tick.
+    fn ops_fetch_slow(&mut self, cx: &mut Context<Self>) {
+        if self.ops.slow_fetch_in_flight {
+            return;
+        }
+        let Some(connected) = &self.connected else {
+            return;
+        };
+        self.ops.slow_fetch_in_flight = true;
+        let config = connected.client_config.clone();
+        let handle = rt::tokio().spawn(async move {
+            let client = zedb_ch::ChClient::new(config);
+            let replica_total = client.query("SELECT count() FROM system.replicas").await;
+            let replica_problems = client
+                .query(
+                    "SELECT database, table, is_readonly, is_session_expired, \
+                        absolute_delay, queue_size \
+                     FROM system.replicas \
+                     WHERE is_readonly OR is_session_expired \
+                        OR absolute_delay > 0 OR queue_size > 0 \
+                     ORDER BY absolute_delay DESC LIMIT 20",
+                )
+                .await;
+            let queue_issues = client
+                .query(
+                    "SELECT database, table, count() AS depth, \
+                        max(dateDiff('second', create_time, now())), \
+                        anyIf(last_exception, last_exception != '') \
+                     FROM system.replication_queue \
+                     GROUP BY database, table \
+                     ORDER BY depth DESC LIMIT 10",
+                )
+                .await;
+            let disks = client
+                .query(
+                    "SELECT name, free_space, total_space \
+                     FROM system.disks ORDER BY name",
+                )
+                .await;
+            let top_tables = client
+                .query(
+                    "SELECT database, table, sum(bytes_on_disk), sum(rows) \
+                     FROM system.parts WHERE active \
+                     GROUP BY database, table \
+                     ORDER BY sum(bytes_on_disk) DESC LIMIT 10",
+                )
+                .await;
+            (
+                replica_total,
+                replica_problems,
+                queue_issues,
+                disks,
+                top_tables,
+            )
+        });
+        cx.spawn(async move |this, cx| {
+            let result = handle.await;
+            this.update(cx, |this, cx| {
+                this.ops.slow_fetch_in_flight = false;
+                let Ok((replica_total, replica_problems, queue_issues, disks, top_tables)) = result
+                else {
+                    return;
+                };
+                if let Ok(total) = replica_total {
+                    this.ops.replica_total = total
+                        .rows
+                        .first()
+                        .map(|row| number(row.first()))
+                        .unwrap_or(0);
+                }
+                if let Ok(problems) = replica_problems {
+                    this.ops.replica_problems = problems
+                        .rows
+                        .iter()
+                        .map(|row| OpsReplicaProblem {
+                            database: text(row.first()),
+                            table: text(row.get(1)),
+                            is_readonly: number(row.get(2)) > 0,
+                            session_expired: number(row.get(3)) > 0,
+                            delay_secs: number(row.get(4)),
+                            queue_size: number(row.get(5)),
+                        })
+                        .collect();
+                }
+                if let Ok(issues) = queue_issues {
+                    this.ops.queue_issues = issues
+                        .rows
+                        .iter()
+                        .map(|row| OpsQueueIssue {
+                            database: text(row.first()),
+                            table: text(row.get(1)),
+                            depth: number(row.get(2)),
+                            oldest_secs: number(row.get(3)),
+                            exception: text(row.get(4)),
+                        })
+                        .collect();
+                }
+                if let Ok(disks) = disks {
+                    this.ops.disks = disks
+                        .rows
+                        .iter()
+                        .map(|row| OpsDisk {
+                            name: text(row.first()),
+                            free: number(row.get(1)),
+                            total: number(row.get(2)),
+                        })
+                        .collect();
+                }
+                if let Ok(top) = top_tables {
+                    this.ops.top_tables = top
+                        .rows
+                        .iter()
+                        .map(|row| OpsTopTable {
+                            database: text(row.first()),
+                            table: text(row.get(1)),
+                            bytes: number(row.get(2)),
+                            rows: number(row.get(3)),
+                        })
+                        .collect();
                 }
                 cx.notify();
             })
@@ -748,6 +924,195 @@ impl Workspace {
                     .children(mutation_rows)
                     .when(self.ops.mutations.is_empty(), |list| {
                         list.child(empty_line("No unfinished mutations."))
+                    })
+                    .child(section_title("REPLICATION"))
+                    .map(|list| {
+                        if self.ops.replica_total == 0 {
+                            list.child(empty_line("No replicated tables."))
+                        } else if self.ops.replica_problems.is_empty() {
+                            list.child(
+                                div()
+                                    .px_4()
+                                    .py_2()
+                                    .text_sm()
+                                    .text_color(theme::success())
+                                    .child(format!(
+                                        "{} replicated table(s), all healthy",
+                                        self.ops.replica_total
+                                    )),
+                            )
+                        } else {
+                            list.children(self.ops.replica_problems.iter().enumerate().map(
+                                |(index, problem)| {
+                                    let mut flags: Vec<String> = Vec::new();
+                                    if problem.is_readonly {
+                                        flags.push("READONLY".into());
+                                    }
+                                    if problem.session_expired {
+                                        flags.push("SESSION EXPIRED".into());
+                                    }
+                                    if problem.delay_secs > 0 {
+                                        flags.push(format!("{}s behind", problem.delay_secs));
+                                    }
+                                    if problem.queue_size > 0 {
+                                        flags.push(format!("queue {}", problem.queue_size));
+                                    }
+                                    div()
+                                        .px_4()
+                                        .py_2()
+                                        .border_b_1()
+                                        .border_color(theme::border())
+                                        .flex()
+                                        .gap_3()
+                                        .text_sm()
+                                        .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
+                                        .child(
+                                            div()
+                                                .w(px(300.))
+                                                .flex_none()
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_color(theme::text())
+                                                .child(format!(
+                                                    "{}.{}",
+                                                    problem.database, problem.table
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .text_color(theme::danger())
+                                                .child(flags.join(" \u{b7} ")),
+                                        )
+                                },
+                            ))
+                        }
+                    })
+                    .children(
+                        self.ops
+                            .queue_issues
+                            .iter()
+                            .filter(|issue| !issue.exception.is_empty())
+                            .map(|issue| {
+                                div()
+                                    .px_4()
+                                    .py_2()
+                                    .border_b_1()
+                                    .border_color(theme::border())
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .text_sm()
+                                    .child(div().text_color(theme::text()).child(format!(
+                                        "{}.{} \u{b7} queue {} \u{b7} oldest {}",
+                                        issue.database,
+                                        issue.table,
+                                        issue.depth,
+                                        format_elapsed(issue.oldest_secs as f64)
+                                    )))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme::danger())
+                                            .child(issue.exception.clone()),
+                                    )
+                            }),
+                    )
+                    .child(section_title("DISKS"))
+                    .children(self.ops.disks.iter().map(|disk| {
+                        let used = disk.total.saturating_sub(disk.free);
+                        let fraction = if disk.total > 0 {
+                            used as f64 / disk.total as f64
+                        } else {
+                            0.0
+                        };
+                        let bar_width = 200.0_f32;
+                        div()
+                            .px_4()
+                            .py_2()
+                            .flex()
+                            .gap_3()
+                            .items_center()
+                            .text_sm()
+                            .child(
+                                div()
+                                    .w(px(120.))
+                                    .flex_none()
+                                    .text_color(theme::text())
+                                    .child(disk.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .w(px(bar_width))
+                                    .flex_none()
+                                    .h(px(6.))
+                                    .rounded(px(3.))
+                                    .bg(theme::row_stripe())
+                                    .child(
+                                        div()
+                                            .w(px(bar_width * fraction as f32))
+                                            .h(px(6.))
+                                            .rounded(px(3.))
+                                            .bg(if fraction > 0.9 {
+                                                theme::danger()
+                                            } else if fraction > 0.75 {
+                                                theme::warning()
+                                            } else {
+                                                theme::success()
+                                            }),
+                                    ),
+                            )
+                            .child(div().text_color(theme::text_dim()).child(format!(
+                                "{} of {} used ({:.0}%)",
+                                Self::format_bytes(used),
+                                Self::format_bytes(disk.total),
+                                fraction * 100.0
+                            )))
+                    }))
+                    .when(self.ops.disks.is_empty(), |list| {
+                        list.child(empty_line("No disk information."))
+                    })
+                    .child(section_title("LARGEST TABLES"))
+                    .children(
+                        self.ops
+                            .top_tables
+                            .iter()
+                            .enumerate()
+                            .map(|(index, table)| {
+                                div()
+                                    .px_4()
+                                    .py_1p5()
+                                    .border_b_1()
+                                    .border_color(theme::border())
+                                    .flex()
+                                    .gap_3()
+                                    .text_sm()
+                                    .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
+                                    .child(
+                                        div()
+                                            .w(px(300.))
+                                            .flex_none()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_color(theme::text())
+                                            .child(format!("{}.{}", table.database, table.table)),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(100.))
+                                            .flex_none()
+                                            .text_color(theme::text_dim())
+                                            .child(Self::format_bytes(table.bytes)),
+                                    )
+                                    .child(
+                                        div().flex_1().text_color(theme::text_dim()).child(
+                                            format!("{} rows", Self::format_count(table.rows)),
+                                        ),
+                                    )
+                            }),
+                    )
+                    .when(self.ops.top_tables.is_empty(), |list| {
+                        list.child(empty_line("No table parts on this node."))
                     }),
             )
     }
