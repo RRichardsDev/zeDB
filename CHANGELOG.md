@@ -25,6 +25,14 @@ GitHub release notes.
 - Inline composite and JSON cells are syntax-colored in the grid
   itself, computed once per cell and cached, so million-row scrolls
   stay smooth.
+- Run means run: pressing Run (or cmd-enter) while a previous query
+  is still streaming cancels it and runs the statement you asked
+  for. It was silently ignored before, which made switching between
+  statements after a large result feel like the second run "didn't
+  see" the new query.
+- Statements the SQL grammar doesn't know (DESCRIBE, EXPLAIN,
+  OPTIMIZE, KILL, TRUNCATE, and friends) now get their keywords
+  colored in the editor instead of rendering as plain text.
 
 ## v0.1.13 - 2026-08-09
 

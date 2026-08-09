@@ -638,6 +638,86 @@ impl SyntaxHighlighter {
             styles.push((node_range, theme.style(name.as_ref()).unwrap_or_default()));
         }
 
+        // zeDB patch: statements the sequel grammar cannot parse
+        // (ClickHouse's DESCRIBE, OPTIMIZE, KILL, ...) reduce to bare
+        // ERROR nodes and would render uncolored. Inside ERROR
+        // regions of SQL, color known statement keywords with the
+        // keyword style so unsupported-but-valid statements still
+        // read as SQL.
+        if self.language.as_ref() == "sql" {
+            if let (Some(tree), Some(style)) = (&self.tree, theme.style("keyword")) {
+                const SALVAGE: &[&str] = &[
+                    "DESCRIBE",
+                    "DESC",
+                    "EXPLAIN",
+                    "OPTIMIZE",
+                    "KILL",
+                    "SYSTEM",
+                    "TRUNCATE",
+                    "DETACH",
+                    "ATTACH",
+                    "RENAME",
+                    "EXCHANGE",
+                    "USE",
+                    "CHECK",
+                    "EXISTS",
+                    "WATCH",
+                    "GRANT",
+                    "REVOKE",
+                    "UNDROP",
+                    "QUERY",
+                    "MUTATION",
+                    "TABLE",
+                    "DATABASE",
+                    "DICTIONARY",
+                    "VIEW",
+                    "FINAL",
+                    "DEDUPLICATE",
+                    "SYNC",
+                    "ON",
+                    "CLUSTER",
+                ];
+                let mut stack = vec![tree.root_node()];
+                while let Some(node) = stack.pop() {
+                    if node.is_error() {
+                        let error_range = node.byte_range();
+                        let error_range =
+                            error_range.start.max(range.start)..error_range.end.min(range.end);
+                        if error_range.start >= error_range.end {
+                            continue;
+                        }
+                        let text = self.text.slice(error_range.clone()).to_string();
+                        let bytes = text.as_bytes();
+                        let mut i = 0;
+                        while i < bytes.len() {
+                            if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+                                let start = i;
+                                while i < bytes.len()
+                                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+                                {
+                                    i += 1;
+                                }
+                                let word = &text[start..i];
+                                if SALVAGE.iter().any(|kw| word.eq_ignore_ascii_case(kw)) {
+                                    styles.push((
+                                        error_range.start + start..error_range.start + i,
+                                        style,
+                                    ));
+                                }
+                            } else {
+                                i += 1;
+                            }
+                        }
+                    } else if node.has_error() {
+                        let mut cursor = node.walk();
+                        for child in node.children(&mut cursor) {
+                            stack.push(child);
+                        }
+                    }
+                }
+            }
+        }
+
         // If the matched styles is empty, return a default range.
         if styles.len() == 0 {
             return vec![(start_offset..range.end, HighlightStyle::default())];

@@ -4276,8 +4276,10 @@ impl Workspace {
     /// Run the selection as a single query, or the statement under the cursor
     /// when nothing is selected.
     fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Run means run: a press during an in-flight query cancels it
+        // and starts this one, instead of being silently swallowed.
         if self.query_abort.is_some() {
-            return;
+            self.cancel_query(cx);
         }
         let sql = self.selected_text(window, cx).unwrap_or_else(|| {
             self.query_tabs
@@ -4303,7 +4305,7 @@ impl Workspace {
     /// is selected) one after another.
     fn run_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.query_abort.is_some() {
-            return;
+            self.cancel_query(cx);
         }
         let selection = self.selected_text(window, cx);
         let (full_text, cursor) = self
