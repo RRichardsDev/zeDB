@@ -1,7 +1,8 @@
-# Phase 6 ideas: toward a first-class browser and migration manager
+# Phase 7 ideas: toward a first-class browser and migration manager
 
 Status: IDEAS, not committed scope. A ranked shopping list from the
-2026-08-08 soak review; each item stands alone and none is promised.
+2026-08-08 soak review, carried forward after Phase 6 shipped the
+ops view (v0.1.13); each item stands alone and none is promised.
 Pick by appetite.
 
 ## Unfinished thread (small, do soon)
@@ -23,15 +24,6 @@ Pick by appetite.
   to disk, bypassing decode and the grid; near wire speed with the
   compression work already shipped. Parked twice; still the right
   answer for big pulls.
-- **Ops view.** DOUBLED DOWN 2026-08-08: this is the competitive
-  gap. DBeaver never became a cockpit; SQL Developer proved DBAs
-  tolerate an awful tool just to get session/ops views (Oracle).
-  A good ops view in a good tool is a market hole, and ClickHouse
-  hands over everything needed as plain system tables: processes
-  (with KILL QUERY), merges, mutations, replication_queue, parts and
-  disk usage by table/partition. The topology cards from Phase 5 are
-  the seed of the cockpit; the health poll is its heartbeat. Likely
-  the headline of whatever Phase 6 becomes.
 - **EXPLAIN, visualized.** Plan/pipeline view plus the query_log
   aftermath (read vs result rows, memory, spill). ClickHouse makes
   people guess why queries are slow; showing them wins loyalty.
@@ -64,5 +56,6 @@ Pick by appetite.
 
 ## A suggested first bite
 
-Query history for feel, the ops view for power (and for the market
-gap), drift->migration for having something nobody else has.
+Query history for feel (the largest daily-driver gap now the ops
+view has shipped), drift->migration for having something nobody
+else has, and the array-values thread closed while it is small.

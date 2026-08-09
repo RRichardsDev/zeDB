@@ -1,7 +1,8 @@
 # Phase 6: the ops view
 
-Status: PLANNED. The committed slice of PHASE-6-IDEAS.md, chosen
-2026-08-09. The competitive argument lives there; short version: a
+Status: SHIPPED in v0.1.13 (2026-08-09), all four milestones. The
+committed slice of the phase-6 ideas list (now PHASE-7-IDEAS.md),
+chosen 2026-08-09. The competitive argument lives there; short version: a
 good ops cockpit inside a good browser is a hole in the market, and
 ClickHouse exposes everything needed as plain system tables the
 existing read-only HTTP client already speaks.

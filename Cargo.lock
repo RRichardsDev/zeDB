@@ -8345,7 +8345,7 @@ dependencies = [
 
 [[package]]
 name = "zedb-acp"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -8357,7 +8357,7 @@ dependencies = [
 
 [[package]]
 name = "zedb-app"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8380,7 +8380,7 @@ dependencies = [
 
 [[package]]
 name = "zedb-ch"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -8398,7 +8398,7 @@ dependencies = [
 
 [[package]]
 name = "zedb-cli"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "clap",
  "dirs 6.0.0",
@@ -8411,7 +8411,7 @@ dependencies = [
 
 [[package]]
 name = "zedb-core"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "chrono",
  "dirs 6.0.0",

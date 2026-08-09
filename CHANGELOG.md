@@ -7,44 +7,53 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.13 - 2026-08-09
 
-- The ops view (docs/PHASE-6.md M1): a new toolbar view showing every
-  query running on the cluster right now (elapsed, user, memory, read
-  progress, the query itself), refreshed every 2 seconds while
-  visible. KILL QUERY sits one click away on write connections and
-  is honestly disabled on read-only ones. Each row carries the
-  client's identity (tool, address, OS user, and the initial user
-  when it differs), and the header counts open connections by
-  protocol; ClickHouse has no session table, so that is the whole
-  truth about "who is on the cluster".
-- Killing a query from the ops view reports "Query killed from the
-  ops view" in the editor instead of a cryptic transport error, and
-  server-side cancellations (code 394) read as cancellations. Client
-  addresses display cleanly (IPv6-mapped IPv4 unwrapped, port
-  stripped).
-- The ops view gains Merges (progress bars, parts, size, mutation
-  flag) and Mutations (unfinished only, failing ones surfaced first
-  with their fail reason) sections below the query list.
-- The ops view splits into tabs (Queries, Background, Replication,
-  Storage) with the header and connection counters fixed above.
-- And three more sections on a slower 10s cadence: Replication
-  (a green all-healthy line, or the problem replicas with
-  readonly/session/delay/queue flags plus replication-queue
-  exceptions), Disks (usage bars that go amber at 75% and red at
-  90%), and Largest Tables (top ten by on-disk size).
-- The ops view goes cluster-wide (docs/PHASE-6.md M4): on connections
-  with a known topology, a scope dropdown in the header switches
-  every tab from the connected node to the whole cluster. Queries,
-  merges, mutations, replication problems, and disks fan out to every
-  replica with a NODE column; Largest Tables sums one replica per
-  shard for true cluster-wide table sizes; connection counters total
-  across nodes; and Kill reaches queries on any node via ON CLUSTER.
-  Switching connection or node returns the scope to the single node.
-- Largest Tables polish: the table name gets the full row width with
-  the database and table colored like the SQL editor, size and row
-  count sit right-aligned, and a Top dropdown chooses how many tables
-  to list (10, 25, 50, 100, or All).
+The ops view (Phase 6): a live cockpit for the cluster, new in the
+toolbar while connected. One glance answers "what is this cluster
+doing right now", and a runaway query dies in two clicks.
+
+### Queries now
+
+- Every query running on the cluster, refreshed every 2 seconds
+  while the view is visible: elapsed, user, memory, read progress,
+  and the query text. Each row carries the client's identity (tool,
+  address, OS user, and the initial user when it differs), and the
+  header counts open connections by protocol.
+- KILL QUERY sits one click away on write connections and is
+  honestly disabled on read-only ones. Kills from the ops view
+  report "Query killed from the ops view" in the editor instead of
+  a cryptic transport error, and server-side cancellations (code
+  394) read as cancellations.
+
+### Background, replication, and storage
+
+- The view splits into tabs: Queries, Background, Replication,
+  Storage, with the header and connection counters fixed above.
+- Background: merges with progress bars, parts, and size, plus
+  unfinished mutations with failing ones surfaced first alongside
+  their fail reason.
+- Replication (10s cadence): a green all-healthy line, or the
+  problem replicas with readonly/session/delay/queue flags plus
+  replication-queue exceptions.
+- Storage (10s cadence): disk usage bars that go amber at 75% and
+  red at 90%, and Largest Tables with a Top dropdown (10, 25, 50,
+  100, or All), sizes and row counts right-aligned, and names
+  colored like the SQL editor.
+
+### Cluster-wide scope
+
+- On connections with a known topology, a scope dropdown in the
+  header switches every tab from the connected node to the whole
+  cluster: queries, merges, mutations, replication problems, and
+  disks fan out to every replica with a NODE column; Largest Tables
+  sums one replica per shard for true cluster-wide table sizes;
+  connection counters total across nodes; and Kill reaches queries
+  on any node via ON CLUSTER.
+- The view resets and refetches instantly when the connection or
+  node changes (scope returns to the single node), and clusters
+  whose server config carries no credentials for distributed
+  queries get a one-line explanation instead of a raw error wall.
 
 ## v0.1.12 - 2026-08-08
 
