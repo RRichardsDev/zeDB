@@ -10,6 +10,8 @@ doc; delete freely.
 - History: record cancelled runs too, marked as such.
 - Hover cards in the history drawer could show rows/duration meta
   inside the card, not just the SQL.
+- cmd+click a fully-formed URL in a data-table cell to open it in the
+  browser (detect http(s):// values, underline on cmd-hover).
 - When a query runs past ~30s, quietly suggest the explain ("still
   running… see why: Explain query"), triggering the palette
   command's action directly.

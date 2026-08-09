@@ -5,6 +5,7 @@ mod command_palette;
 mod commit;
 mod components;
 mod explain_ui;
+mod export;
 mod fleet;
 mod github;
 mod grid_spike;
@@ -454,6 +455,8 @@ struct Workspace {
     /// Where an error-bar ask came from: (query tab id, failed sql).
     /// An agent-proposed query replaces that statement in place.
     agent_fix_target: Option<(usize, String)>,
+    /// The export dialog, when open.
+    export: Option<export::ExportState>,
     history_width: f32,
     /// An active drawer-edge drag: (start width, start mouse x).
     history_resizing: Option<(f32, f32)>,
@@ -775,6 +778,7 @@ impl Workspace {
                 history_renaming: None,
                 history_clear_armed: false,
                 agent_fix_target: None,
+                export: None,
                 history_width: 320.0,
                 history_resizing: None,
                 history_tab: query_history::HistoryTab::default(),
@@ -848,6 +852,7 @@ impl Workspace {
                 history_renaming: None,
                 history_clear_armed: false,
                 agent_fix_target: None,
+                export: None,
                 history_width: 320.0,
                 history_resizing: None,
                 history_tab: query_history::HistoryTab::default(),
@@ -6922,6 +6927,9 @@ impl Render for Workspace {
                     this.history_resizing = None;
                 }),
             )
+            .when(self.export.is_some(), |root| {
+                root.child(self.export_overlay(cx))
+            })
             .when(self.palette.open, |root| {
                 root.child(self.command_palette_overlay(cx))
             })

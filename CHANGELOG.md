@@ -7,6 +7,17 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Export current query results, from the command palette: a two-step
+  dialog picks the scope (the tab's max-rows cap, or all rows) then
+  the format (CSV, Parquet, JSONEachRow), defaulting the location
+  quietly to Downloads (click the path to edit it, or the folder
+  button for a native save panel). The download streams the server's
+  own output format straight to disk, bypassing decode and the grid,
+  with a live byte count and transfer rate; Cancel aborts it and
+  removes the partial file.
+
 ## v0.1.15 - 2026-08-09
 
 The query editor learns to remember and to explain itself: history

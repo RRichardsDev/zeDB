@@ -4,15 +4,8 @@ Status: IDEAS, not committed scope. A ranked shopping list from the
 2026-08-08 soak review; each item stands alone and none is promised.
 Shipped so far from this list: the ops view (v0.1.13, Phase 6),
 composite/JSON grid rendering with the cell inspector (v0.1.14,
-Phase 7), and query history + saved queries and EXPLAIN visualized
-(v0.1.15). Pick by appetite.
-
-## Browser: daily-driver gaps
-
-- **Export to file.** Stream FORMAT Parquet/CSV/JSONEachRow straight
-  to disk, bypassing decode and the grid; near wire speed with the
-  compression work already shipped. Parked twice; still the right
-  answer for big pulls.
+Phase 7), query history + saved queries and EXPLAIN visualized
+(v0.1.15), and export to file. Pick by appetite.
 
 ## Migration manager: growing up
 

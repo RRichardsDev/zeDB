@@ -47,6 +47,7 @@ pub enum PaletteCommand {
     ToggleOps,
     ToggleQueryHistory,
     ExplainQuery,
+    ExportResults,
 }
 
 const ALL_COMMANDS: &[PaletteCommand] = &[
@@ -65,6 +66,7 @@ const ALL_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand::ToggleOps,
     PaletteCommand::ToggleQueryHistory,
     PaletteCommand::ExplainQuery,
+    PaletteCommand::ExportResults,
 ];
 
 impl PaletteCommand {
@@ -85,6 +87,7 @@ impl PaletteCommand {
             Self::ToggleOps => "Ops view",
             Self::ToggleQueryHistory => "Query history and saved queries",
             Self::ExplainQuery => "Explain query (plan and index pruning)",
+            Self::ExportResults => "Export current query results",
         }
     }
 
@@ -96,6 +99,7 @@ impl PaletteCommand {
             | Self::ToggleFleet
             | Self::ToggleOps
             | Self::ExplainQuery => workspace.connected.is_some(),
+            Self::ExportResults => workspace.export_available(),
             _ => true,
         }
     }
@@ -117,6 +121,7 @@ impl PaletteCommand {
             Self::ToggleOps => workspace.ops_toggle(cx),
             Self::ToggleQueryHistory => workspace.history_toggle(cx),
             Self::ExplainQuery => workspace.explain_query(window, cx),
+            Self::ExportResults => workspace.export_open(cx),
         }
     }
 }

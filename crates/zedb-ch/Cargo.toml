@@ -14,7 +14,7 @@ regex = "1"
 serde_json = "1"
 tempfile = "3"
 futures-util.workspace = true
-tokio = { workspace = true, features = ["io-util", "io-std", "net"] }
+tokio = { workspace = true, features = ["io-util", "io-std", "net", "fs"] }
 thiserror.workspace = true
 arc-swap = "1"
 serde = { version = "1", features = ["derive"] }
