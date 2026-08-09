@@ -7,7 +7,7 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.16 - 2026-08-10
 
 - Export current query results, from the command palette: a two-step
   dialog picks the scope (the tab's max-rows cap, or all rows) then
@@ -17,6 +17,8 @@ GitHub release notes.
   own output format straight to disk, bypassing decode and the grid,
   with a live byte count and transfer rate; Cancel aborts it and
   removes the partial file.
+- The status bar drops the stale "M8" milestone tag, showing just the
+  version.
 
 ## v0.1.15 - 2026-08-09
 

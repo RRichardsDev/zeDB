@@ -6700,7 +6700,7 @@ impl Workspace {
                             })
                     }),
             )
-            .child(concat!("zedb ", env!("CARGO_PKG_VERSION"), " | M8"))
+            .child(concat!("zedb ", env!("CARGO_PKG_VERSION")))
     }
 
     /// Vim state for the bottom bar: mode, command line, and recording
