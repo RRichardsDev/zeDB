@@ -12,6 +12,7 @@ mod rt;
 mod schema_intelligence_ui;
 mod settings_sync;
 mod theme;
+mod type_highlight;
 mod updates;
 mod vim;
 
@@ -5562,7 +5563,7 @@ impl Workspace {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_color(theme::text_dim())
-                            .child(column.type_name.clone()),
+                            .child(type_highlight::styled(&column.type_name)),
                     )
             })
             .collect::<Vec<_>>();

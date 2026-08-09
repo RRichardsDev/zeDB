@@ -553,6 +553,22 @@ impl GridSpike {
                     ("{\u{2026}}".to_string(), " json".to_string(), None)
                 });
             }
+            // A "type" column whose values parse as ClickHouse types
+            // (DESCRIBE, system.columns) colors like the editor.
+            Value::String(text)
+                if self
+                    .columns
+                    .get(column)
+                    .map(|meta| meta.name == "type")
+                    .unwrap_or(false)
+                    && zedb_ch::parse_type(text).is_ok() =>
+            {
+                return Some((
+                    crate::type_highlight::collapse(text),
+                    String::new(),
+                    Some("chtype"),
+                ));
+            }
             _ => return None,
         };
         let inline = literal(value);
@@ -574,6 +590,10 @@ impl GridSpike {
         cx: &App,
     ) -> Option<HighlightRuns> {
         use gpui_component::highlighter::SyntaxHighlighter;
+        if lang == "chtype" {
+            let runs = crate::type_highlight::runs(text);
+            return (!runs.is_empty()).then_some(runs);
+        }
         let (parse_text, prefix) = if lang == "sql" {
             (format!("SELECT {text}"), "SELECT ".len())
         } else {
@@ -1473,7 +1493,7 @@ impl Render for GridSpike {
                                     .whitespace_nowrap()
                                     .text_xs()
                                     .text_color(theme::text_dim())
-                                    .child(type_name),
+                                    .child(crate::type_highlight::styled(&type_name)),
                             )
                             .child(
                                 div()

@@ -42,6 +42,16 @@ GitHub release notes.
   statement whose text sat under the card left the caret (and the
   next Run) on the previous statement. Clicks pass through to place
   the caret; wheel scrolling stays contained to the card.
+- Column types render in color wherever they appear (DESCRIBE and
+  system.columns results, the schema inspector's Columns tab, the
+  cell inspector's header): container types (Array, Map, Tuple) in
+  blue, leaf types in the editor's orange, Nullable muted, Enum
+  labels and numbers as literals, named-tuple field names plain. So
+  Array(Nullable(String)) reads as structure, annotation, payload.
+- Table names after a dot color like parsed object references even
+  in statements the SQL grammar can't parse (describe sat.foo).
+- Fixed a crash when highlighting unparsed statements containing
+  multibyte characters (accents, emoji).
 
 ## v0.1.13 - 2026-08-09
 

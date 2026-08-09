@@ -645,6 +645,7 @@ impl SyntaxHighlighter {
         // keyword style so unsupported-but-valid statements still
         // read as SQL.
         if self.language.as_ref() == "sql" {
+            let type_style = theme.style("type");
             if let (Some(tree), Some(style)) = (&self.tree, theme.style("keyword")) {
                 const SALVAGE: &[&str] = &[
                     "DESCRIBE",
@@ -681,11 +682,22 @@ impl SyntaxHighlighter {
                 while let Some(node) = stack.pop() {
                     if node.is_error() {
                         let error_range = node.byte_range();
-                        let error_range =
-                            error_range.start.max(range.start)..error_range.end.min(range.end);
-                        if error_range.start >= error_range.end {
+                        // Clamp to the text and to char boundaries: the
+                        // caller's range may cut a multibyte character,
+                        // and Rope::slice panics off-boundary.
+                        let len = self.text.len();
+                        let mut start = error_range.start.max(range.start).min(len);
+                        let mut end = error_range.end.min(range.end).min(len);
+                        while start < end && !self.text.is_char_boundary(start) {
+                            start += 1;
+                        }
+                        while end > start && !self.text.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        if start >= end {
                             continue;
                         }
+                        let error_range = start..end;
                         let text = self.text.slice(error_range.clone()).to_string();
                         let bytes = text.as_bytes();
                         let mut i = 0;
@@ -703,6 +715,16 @@ impl SyntaxHighlighter {
                                         error_range.start + start..error_range.start + i,
                                         style,
                                     ));
+                                } else if start > 0 && bytes[start - 1] == b'.' {
+                                    // `db.table` in an unparsed statement:
+                                    // the segment after the dot colors like
+                                    // parsed object references do.
+                                    if let Some(type_style) = type_style {
+                                        styles.push((
+                                            error_range.start + start..error_range.start + i,
+                                            type_style,
+                                        ));
+                                    }
                                 }
                             } else {
                                 i += 1;
