@@ -212,6 +212,32 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The connection target changed (new cluster, new node, or gone):
+    /// drop everything shown, and if the view is open against a live
+    /// connection, fetch the new target immediately and restart the
+    /// cadence from zero.
+    pub(crate) fn ops_reset(&mut self, cx: &mut Context<Self>) {
+        self.ops.poll_generation += 1;
+        self.ops.processes.clear();
+        self.ops.connections.clear();
+        self.ops.merges.clear();
+        self.ops.mutations.clear();
+        self.ops.replica_total = 0;
+        self.ops.replica_problems.clear();
+        self.ops.queue_issues.clear();
+        self.ops.disks.clear();
+        self.ops.top_tables.clear();
+        self.ops.as_of = None;
+        self.ops.error = None;
+        self.ops.killing = None;
+        if self.connected.is_none() {
+            self.show_ops = false;
+        } else if self.show_ops {
+            self.ops_start_poll(cx);
+        }
+        cx.notify();
+    }
+
     /// Fetch immediately, then every POLL_SECS while the view stays
     /// visible. Generation-guarded like the health poll; hiding the
     /// view or reconnecting ends the loop.

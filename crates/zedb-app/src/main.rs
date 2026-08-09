@@ -2917,6 +2917,7 @@ impl Workspace {
                 ));
                 this.load_schema_databases(cx);
                 this.settings_sync_tick(cx);
+                this.ops_reset(cx);
                 cx.notify();
             })
             .ok();
@@ -3091,6 +3092,7 @@ impl Workspace {
         self.schema_cache = None;
         self.schema_provider.set_context(None, None);
         self.clear_schema();
+        self.ops_reset(cx);
         cx.notify();
     }
 
@@ -3146,6 +3148,7 @@ impl Workspace {
             },
         );
         self.load_schema_databases(cx);
+        self.ops_reset(cx);
         cx.notify();
     }
 
