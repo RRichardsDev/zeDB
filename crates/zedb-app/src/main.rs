@@ -383,6 +383,9 @@ struct QueryTab {
     /// Byte offset of the displayed statement in the editor at run
     /// time, so rewrites target the right one among identical twins.
     displayed_statement_offset: Option<usize>,
+    /// Server-side id of the currently streaming statement, for
+    /// recognizing kills initiated from the ops view.
+    running_query_id: Option<String>,
 }
 
 enum QueryOutcome {
@@ -430,6 +433,9 @@ struct Workspace {
     show_fleet: bool,
     show_ops: bool,
     ops: ops::OpsState,
+    /// query_ids killed from the ops view; errors on these statements
+    /// report the kill instead of a transport failure.
+    ops_killed: std::collections::HashSet<String>,
     health_poll_generation: u64,
     connections: Vec<ConnectionConfig>,
     selected: Option<usize>,
@@ -738,6 +744,7 @@ impl Workspace {
                 show_fleet: false,
                 show_ops: false,
                 ops: ops::OpsState::default(),
+                ops_killed: std::collections::HashSet::new(),
                 agent: agent_pane::AgentPaneState::new(
                     preferences.agent_pane_width.unwrap_or(420.0),
                 ),
@@ -801,6 +808,7 @@ impl Workspace {
                 show_fleet: false,
                 show_ops: false,
                 ops: ops::OpsState::default(),
+                ops_killed: std::collections::HashSet::new(),
                 agent: agent_pane::AgentPaneState::new(
                     preferences.agent_pane_width.unwrap_or(420.0),
                 ),
@@ -3887,6 +3895,7 @@ impl Workspace {
             schema_analysis_generation: 0,
             displayed_statement: None,
             displayed_statement_offset: None,
+            running_query_id: None,
         }
     }
 
@@ -4634,6 +4643,9 @@ impl Workspace {
                                     message,
                                 };
                             }
+                            RunEvent::Stream(QueryStreamEvent::Started { query_id }) => {
+                                tab.running_query_id = Some(query_id);
+                            }
                             RunEvent::Stream(QueryStreamEvent::Columns(columns)) => {
                                 tab.result_columns = columns.len();
                                 tab.result_rows = 0;
@@ -4701,7 +4713,27 @@ impl Workspace {
                         successful_statements = succeeded;
                         outcome
                     }
-                    Ok(Err(error)) => QueryOutcome::Error(error),
+                    Ok(Err(error)) => {
+                        // A kill from the ops view tears the stream; the
+                        // transport error would otherwise be misleading.
+                        let killed = tab
+                            .running_query_id
+                            .as_ref()
+                            .map(|id| this.ops_killed.contains(id))
+                            .unwrap_or(false);
+                        if killed {
+                            QueryOutcome::Error("Query killed from the ops view".into())
+                        } else if error.contains("Query was cancelled")
+                            || error.contains("(394)")
+                            || error.contains("code 394")
+                        {
+                            QueryOutcome::Error(
+                                "Query was cancelled (KILL QUERY on the server)".into(),
+                            )
+                        } else {
+                            QueryOutcome::Error(error)
+                        }
+                    }
                     Err(error) => QueryOutcome::Error(error.to_string()),
                 };
                 // Re-sync the sort indicator with reality: the executed

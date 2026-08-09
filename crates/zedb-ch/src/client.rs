@@ -35,6 +35,11 @@ pub struct ChClient {
 
 #[derive(Debug)]
 pub enum QueryStreamEvent {
+    /// Sent first: the server-side query_id, for correlation (e.g.
+    /// recognizing a KILL initiated from the ops view).
+    Started {
+        query_id: String,
+    },
     Columns(Vec<ColumnMeta>),
     Rows(Vec<Vec<Value>>),
     Progress(QueryProgress),
@@ -182,6 +187,9 @@ impl ChClient {
         let query_id = next_query_id();
         request = request.query(&[("query_id", query_id.as_str())]);
         request = request.query(&[("default_format", "RowBinaryWithNamesAndTypes")]);
+        on_event(QueryStreamEvent::Started {
+            query_id: query_id.clone(),
+        });
 
         let mut progress_interval = tokio::time::interval(Duration::from_millis(100));
         progress_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

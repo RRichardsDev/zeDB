@@ -348,6 +348,7 @@ async fn streaming_query_reports_progress_and_honors_cap() {
             "SELECT number, sleepEachRow(0.0001) FROM numbers(10000)",
             1_000,
             |event| match event {
+                QueryStreamEvent::Started { .. } => {}
                 QueryStreamEvent::Columns(items) => columns = items.len(),
                 QueryStreamEvent::Rows(items) => {
                     rows += items.len();

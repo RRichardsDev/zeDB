@@ -18,6 +18,11 @@ GitHub release notes.
   when it differs), and the header counts open connections by
   protocol; ClickHouse has no session table, so that is the whole
   truth about "who is on the cluster".
+- Killing a query from the ops view reports "Query killed from the
+  ops view" in the editor instead of a cryptic transport error, and
+  server-side cancellations (code 394) read as cancellations. Client
+  addresses display cleanly (IPv6-mapped IPv4 unwrapped, port
+  stripped).
 
 ## v0.1.12 - 2026-08-08
 

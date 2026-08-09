@@ -70,6 +70,22 @@ fn text(value: Option<&Value>) -> String {
     }
 }
 
+/// A human address from system.processes: port stripped, the
+/// IPv6-mapped-IPv4 prefix unwrapped, brackets removed.
+fn display_address(address: &str) -> String {
+    let mut host = address.trim();
+    // [host]:port or host:port with a numeric tail.
+    if let Some(stripped) = host.strip_prefix('[') {
+        host = stripped.split(']').next().unwrap_or(stripped);
+    } else if let Some((head, tail)) = host.rsplit_once(':') {
+        if !tail.is_empty() && tail.chars().all(|ch| ch.is_ascii_digit()) {
+            host = head;
+        }
+    }
+    // ::ffff:172.18.0.1 is an IPv4 in IPv6 clothing.
+    host.strip_prefix("::ffff:").unwrap_or(host).to_string()
+}
+
 fn format_elapsed(seconds: f64) -> String {
     if seconds < 60.0 {
         format!("{seconds:.1}s")
@@ -189,10 +205,7 @@ impl Workspace {
                                     total_rows: number(row.get(5)),
                                     memory_bytes: number(row.get(6)),
                                     query: text(row.get(7)),
-                                    address: address
-                                        .rsplit_once(':')
-                                        .map(|(host, _)| host.to_string())
-                                        .unwrap_or(address),
+                                    address: display_address(&address),
                                     client: if client_name.is_empty() {
                                         user_agent
                                     } else {
@@ -243,6 +256,7 @@ impl Workspace {
             return;
         }
         self.ops.killing = Some(query_id.clone());
+        self.ops_killed.insert(query_id.clone());
         let config = connected.client_config.clone();
         let handle = rt::tokio().spawn(async move {
             let client = zedb_ch::ChClient::new(config);
