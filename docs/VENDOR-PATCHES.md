@@ -116,3 +116,41 @@ through the affected UI.
   regardless of the character before it, so a manual trigger (zeDB
   binds cmd-.) surfaces schema suggestions before any table/column
   letter is typed. `force` skips the `is_completion_trigger` gate.
+
+## 10. Multi-cursor (cmd-D)
+
+The largest patch by far: it adds VS Code / Zed-style multi-cursor to
+the single-selection `InputState`. Upstream is single-selection in our
+pin and on `main`, so there is nothing to absorb; on a rebase this is
+re-applied wholesale. Design and staging rationale live in
+`docs/MULTI-CURSOR-PLAN.md` (ports Helix's selection-set + change-
+mapping idea, monaco's cmd-D next-occurrence algorithm). Sites, all
+under `src/input/`:
+
+- `cursor.rs`: `Selection::mapped_through_edit` (remap an offset
+  through one edit), free fns `multi_edit_carets` (analytic caret
+  offsets after right-to-left edits) and `word_range_at` (identifier
+  under a cursor). Unit-tested in-file.
+- `state.rs`: `extra_selections: Vec<Selection>` beside the primary
+  `selected_range`, plus `multi_anchor`. `selection_set`,
+  `is_multi_selection`, `map_extra_selections`, `multi_replace_ranges`
+  (one logical edit across every selection), the `SelectNextOccurrence`
+  action + `cmd-d`/`ctrl-d` binding and its `select_next_occurrence`
+  handler, backspace/delete fan-out, and the Escape / plain-click
+  collapse back to one cursor. `replace_text_in_range` guards for
+  "targets the current selection, no IME" and fans out.
+- `movement.rs`: Left/Right first collapse each selection to a bare
+  cursor (`collapse_multi_to_edge`), then once collapsed move every
+  cursor together one grapheme at a time (`move_multi_cursors`,
+  `is_multi_collapsed`), deduping collisions.
+- `element.rs`: a caret at the head of every extra cursor, computed in
+  `layout_cursor` with the same line-walk / scroll / vertical centering
+  as the primary, carried on `PrepaintState.extra_cursor_bounds` and
+  painted in the primary's blink block; `layout_extra_selections`
+  paints the N selection highlights.
+- `input.rs`: `on_action` wiring for `select_next_occurrence`.
+
+Invariants: extras stay sorted and non-overlapping with the primary;
+IME stays single-selection (the fan-out guard excludes it). When a
+crates.io gpui-component ships real multi-selection, reassess whether
+this whole patch can be dropped.

@@ -7,6 +7,16 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Multi-cursor in the SQL editor. cmd-D selects the word under the
+  cursor; press again to add the next occurrence, and again, wrapping
+  from the bottom of the editor back to the top and stopping one before
+  where you started. Typing replaces every selection at once. Left or
+  Right drops the highlights and leaves a cursor at each spot, then
+  keeps moving them all together; Escape or a click returns to a single
+  cursor.
+
 ## v0.1.17 - 2026-08-10
 
 First round of real-use fixes.
