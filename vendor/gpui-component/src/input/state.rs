@@ -31,7 +31,7 @@ use crate::input::{
     search::{self, SearchPanel},
     text_wrapper::LineLayout,
 };
-use crate::input::cursor::multi_edit_carets;
+use crate::input::cursor::{multi_edit_carets, word_range_at};
 use crate::input::{InlineCompletion, RopeExt as _, Selection};
 use crate::{Root, history::History};
 use crate::{highlighter::DiagnosticSet, input::text_wrapper::LineItem};
@@ -87,6 +87,8 @@ actions!(
         ToggleCodeActions,
         Search,
         GoToDefinition,
+        /// zeDB patch (multi-cursor): cmd-D select-next-occurrence.
+        SelectNextOccurrence,
     ]
 );
 
@@ -165,6 +167,11 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("cmd-a", SelectAll, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-a", SelectAll, Some(CONTEXT)),
+        // zeDB patch (multi-cursor): select next occurrence of the word.
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-d", SelectNextOccurrence, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-d", SelectNextOccurrence, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
@@ -278,6 +285,10 @@ pub struct InputState {
     /// sorted and non-overlapping with the primary. Edits remap these
     /// through `Selection::mapped_through_edit`.
     pub(super) extra_selections: Vec<Selection>,
+    /// zeDB patch (multi-cursor): start offset of the most recently
+    /// added cmd-D occurrence, so the next press searches forward from
+    /// there and wraps.
+    pub(super) multi_anchor: Option<usize>,
     pub(super) search_panel: Option<Entity<SearchPanel>>,
     pub(super) searchable: bool,
     /// Range for save the selected word, use to keep word range when drag move.
@@ -386,6 +397,7 @@ impl InputState {
             history,
             selected_range: Selection::default(),
             extra_selections: Vec::new(),
+            multi_anchor: None,
             search_panel: None,
             searchable: false,
             selected_word_range: None,
@@ -1251,6 +1263,15 @@ impl InputState {
             self.unmark_text(window, cx);
         }
 
+        // zeDB patch (multi-cursor): Escape collapses back to a single
+        // cursor before any other escape behavior.
+        if self.is_multi_selection() {
+            self.extra_selections.clear();
+            self.multi_anchor = None;
+            cx.notify();
+            return;
+        }
+
         if self.clean_on_escape {
             return self.clean(window, cx);
         }
@@ -1277,6 +1298,14 @@ impl InputState {
 
         self.selecting = true;
         let offset = self.index_for_mouse_position(event.position);
+
+        // zeDB patch (multi-cursor): a plain click collapses a
+        // multi-cursor back to one (shift-click extends, handled by
+        // the normal select-to path below).
+        if self.is_multi_selection() && !event.modifiers.shift {
+            self.extra_selections.clear();
+            self.multi_anchor = None;
+        }
 
         if self.handle_click_hover_definition(event, offset, window, cx) {
             return;
@@ -1974,6 +2003,78 @@ impl InputState {
     /// zeDB patch (multi-cursor): more than the primary cursor active.
     pub(super) fn is_multi_selection(&self) -> bool {
         !self.extra_selections.is_empty()
+    }
+
+    /// zeDB patch (multi-cursor): cmd-D. First press selects the word
+    /// under the cursor; each subsequent press adds the next
+    /// occurrence of the selected text, searching forward from the
+    /// last-added one and wrapping, until every occurrence is
+    /// selected.
+    pub(super) fn select_next_occurrence(
+        &mut self,
+        _: &SelectNextOccurrence,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.mode.is_single_line() {
+            return;
+        }
+        let text = self.text.to_string();
+
+        // First press with a bare caret: select the word under it.
+        if self.selected_range.is_empty() && self.extra_selections.is_empty() {
+            if let Some(range) = word_range_at(&text, self.cursor()) {
+                self.selected_range = range.clone().into();
+                self.selection_reversed = false;
+                self.multi_anchor = Some(range.start);
+                self.pause_blink_cursor(cx);
+                cx.notify();
+            }
+            return;
+        }
+
+        // Otherwise search for the next occurrence of the primary
+        // selection's text.
+        let primary = self.selected_range;
+        let (start, end) = (primary.start.min(primary.end), primary.start.max(primary.end));
+        let needle = &text[start..end];
+        if needle.is_empty() {
+            return;
+        }
+        let occurrences: Vec<usize> = text
+            .match_indices(needle)
+            .map(|(pos, _)| pos)
+            .collect();
+        if occurrences.len() <= self.extra_selections.len() + 1 {
+            // Every occurrence is already selected.
+            return;
+        }
+        let selected: std::collections::HashSet<usize> = self
+            .selection_set()
+            .into_iter()
+            .map(|selection| selection.start.min(selection.end))
+            .collect();
+        let anchor = self.multi_anchor.unwrap_or(start);
+        let anchor_idx = occurrences
+            .iter()
+            .position(|&pos| pos == anchor)
+            .unwrap_or(0);
+        let count = occurrences.len();
+        for step in 1..=count {
+            let candidate = occurrences[(anchor_idx + step) % count];
+            if !selected.contains(&candidate) {
+                // The newly added occurrence becomes the primary so the
+                // next press continues from it; the old primary joins
+                // the extras.
+                self.extra_selections.push(self.selected_range);
+                self.selected_range = Selection::new(candidate, candidate + needle.len());
+                self.selection_reversed = false;
+                self.multi_anchor = Some(candidate);
+                self.pause_blink_cursor(cx);
+                cx.notify();
+                return;
+            }
+        }
     }
 
     /// zeDB patch (multi-cursor): replace every given byte range with

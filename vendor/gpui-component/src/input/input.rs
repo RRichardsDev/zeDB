@@ -292,6 +292,10 @@ impl RenderOnce for Input {
                     .on_action(window.listener_for(&self.state, InputState::cut))
                     .on_action(window.listener_for(&self.state, InputState::undo))
                     .on_action(window.listener_for(&self.state, InputState::redo))
+                    // zeDB patch (multi-cursor): cmd-D select next occurrence.
+                    .on_action(
+                        window.listener_for(&self.state, InputState::select_next_occurrence),
+                    )
                     .when(state.mode.is_multi_line(), |this| {
                         this.on_action(window.listener_for(&self.state, InputState::indent_inline))
                             .on_action(window.listener_for(&self.state, InputState::outdent_inline))

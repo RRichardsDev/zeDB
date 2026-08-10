@@ -73,6 +73,28 @@ impl RangeBounds<usize> for Selection {
     }
 }
 
+/// zeDB patch (multi-cursor): the identifier-style word (alphanumeric
+/// or underscore) surrounding `cursor` in `text`, or None when the
+/// cursor is not on such a character.
+pub fn word_range_at(text: &str, cursor: usize) -> Option<Range<usize>> {
+    let bytes = text.as_bytes();
+    let cursor = cursor.min(bytes.len());
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut start = cursor;
+    while start > 0 && is_word(bytes[start - 1]) {
+        start -= 1;
+    }
+    let mut end = cursor;
+    while end < bytes.len() && is_word(bytes[end]) {
+        end += 1;
+    }
+    if start == end {
+        None
+    } else {
+        Some(start..end)
+    }
+}
+
 /// zeDB patch (multi-cursor): given non-overlapping edit ranges
 /// sorted ascending by start, each replaced with `new_len` bytes, the
 /// resulting caret offset for each edit, accounting for the
