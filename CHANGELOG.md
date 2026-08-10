@@ -7,7 +7,9 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.18 - 2026-08-10
+
+Multi-cursor comes to the SQL editor.
 
 - Multi-cursor in the SQL editor. cmd-D selects the word under the
   cursor; press again to add the next occurrence, and again, wrapping
