@@ -271,6 +271,12 @@ pub struct InputState {
     /// - "Hello 世界💝" = 16
     /// - "💝" = 4
     pub(super) selected_range: Selection,
+    /// zeDB patch (multi-cursor): additional selections beyond the
+    /// primary `selected_range`. Empty in single-cursor mode, which
+    /// is every path today; cmd-D and friends populate it. Kept
+    /// sorted and non-overlapping with the primary. Edits remap these
+    /// through `Selection::mapped_through_edit`.
+    pub(super) extra_selections: Vec<Selection>,
     pub(super) search_panel: Option<Entity<SearchPanel>>,
     pub(super) searchable: bool,
     /// Range for save the selected word, use to keep word range when drag move.
@@ -378,6 +384,7 @@ impl InputState {
             blink_cursor,
             history,
             selected_range: Selection::default(),
+            extra_selections: Vec::new(),
             search_panel: None,
             searchable: false,
             selected_word_range: None,
@@ -1902,6 +1909,37 @@ impl InputState {
         );
     }
 
+    /// zeDB patch (multi-cursor): remap the extra selections through
+    /// an edit that replaced `old_len` bytes at `start` with `new_len`
+    /// bytes. The single primitive every multi-edit funnels selection
+    /// bookkeeping through (Helix's change-mapping idea). No-op in
+    /// single-cursor mode.
+    pub(super) fn map_extra_selections(&mut self, start: usize, old_len: usize, new_len: usize) {
+        if self.extra_selections.is_empty() {
+            return;
+        }
+        for selection in &mut self.extra_selections {
+            *selection = selection.mapped_through_edit(start, old_len, new_len);
+        }
+    }
+
+    /// zeDB patch (multi-cursor): every selection, extras plus the
+    /// primary, sorted by start. The read model for rendering and
+    /// multi-edit (stages 2-3).
+    #[allow(dead_code)]
+    pub(super) fn selection_set(&self) -> Vec<Selection> {
+        let mut all = self.extra_selections.clone();
+        all.push(self.selected_range);
+        all.sort_by_key(|selection| selection.start.min(selection.end));
+        all
+    }
+
+    /// zeDB patch (multi-cursor): more than the primary cursor active.
+    #[allow(dead_code)]
+    pub(super) fn is_multi_selection(&self) -> bool {
+        !self.extra_selections.is_empty()
+    }
+
     /// Replace text in range in silent.
     ///
     /// This will not trigger any UI interaction, such as auto-completion.
@@ -1984,6 +2022,9 @@ impl EntityInputHandler for InputState {
 
         let old_text = self.text.clone();
         self.text.replace(range.clone(), new_text);
+        // zeDB patch (multi-cursor): shift the extra selections to
+        // track this edit. No-op while single-cursor (extras empty).
+        self.map_extra_selections(range.start, range.end - range.start, new_text.len());
 
         let mut new_offset = (range.start + new_text.len()).min(self.text.len());
 

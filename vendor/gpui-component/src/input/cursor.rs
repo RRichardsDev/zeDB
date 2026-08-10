@@ -30,6 +30,27 @@ impl Selection {
     pub fn contains(&self, offset: usize) -> bool {
         offset >= self.start && offset < self.end
     }
+
+    /// zeDB patch (multi-cursor): map this selection's byte offsets
+    /// through an edit that replaced `old_len` bytes starting at
+    /// `start` with `new_len` bytes. Offsets before the edit are
+    /// unchanged, offsets after shift by the length delta, and an
+    /// offset inside the replaced span clamps to the end of the
+    /// inserted text. This is the single primitive every multi-edit
+    /// remaps selections through (Helix's change-mapping idea).
+    pub fn mapped_through_edit(self, start: usize, old_len: usize, new_len: usize) -> Selection {
+        let old_end = start + old_len;
+        let map = |pos: usize| -> usize {
+            if pos <= start {
+                pos
+            } else if pos >= old_end {
+                pos - old_len + new_len
+            } else {
+                start + new_len
+            }
+        };
+        Selection::new(map(self.start), map(self.end))
+    }
 }
 
 impl From<Range<usize>> for Selection {
@@ -54,6 +75,7 @@ impl RangeBounds<usize> for Selection {
 
 #[cfg(test)]
 mod tests {
+    use super::Selection;
     use crate::input::Position;
 
     #[test]
@@ -65,5 +87,21 @@ mod tests {
                 character: 2
             }
         );
+    }
+
+    #[test]
+    fn maps_selection_through_edit() {
+        // Insert 2 bytes at offset 5 (replace 0 bytes with 2).
+        let after = Selection::new(10, 14).mapped_through_edit(5, 0, 2);
+        assert_eq!((after.start, after.end), (12, 16));
+        // Edit entirely after the selection: unchanged.
+        let before = Selection::new(1, 3).mapped_through_edit(5, 0, 2);
+        assert_eq!((before.start, before.end), (1, 3));
+        // Delete 3 bytes at 5 (replace 3 with 0): later offsets shift back.
+        let deleted = Selection::new(10, 12).mapped_through_edit(5, 3, 0);
+        assert_eq!((deleted.start, deleted.end), (7, 9));
+        // An offset inside the replaced span clamps to end of insert.
+        let inside = Selection::new(6, 7).mapped_through_edit(5, 3, 4);
+        assert_eq!((inside.start, inside.end), (9, 9));
     }
 }
