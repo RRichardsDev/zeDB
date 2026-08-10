@@ -66,7 +66,12 @@ impl TextElement {
         bounds: &mut Bounds<Pixels>,
         _: &mut Window,
         cx: &mut App,
-    ) -> (Option<Bounds<Pixels>>, Point<Pixels>, Option<usize>) {
+    ) -> (
+        Option<Bounds<Pixels>>,
+        Vec<Bounds<Pixels>>,
+        Point<Pixels>,
+        Option<usize>,
+    ) {
         let state = self.state.read(cx);
 
         let line_height = last_layout.line_height;
@@ -237,13 +242,72 @@ impl TextElement {
             ));
         }
 
+        // zeDB patch (multi-cursor): a caret at the head (end) of every
+        // extra selection, in the same coordinate space, scroll, and
+        // vertical centering as the primary caret above. Empty in
+        // single-cursor mode. The y-scroll is applied at paint time via
+        // `cursor_scroll_offset`, exactly as for the primary.
+        let mut extra_cursor_bounds = Vec::new();
+        if !state.extra_selections.is_empty() {
+            let cursor_height = match state.size {
+                crate::Size::Large => 1.,
+                crate::Size::Small => 0.75,
+                _ => 0.85,
+            } * line_height;
+
+            for extra in state.extra_selections.iter() {
+                let mut target = extra.end;
+                if state.masked {
+                    target = state.text.offset_to_char_index(target);
+                }
+
+                let mut prev_lines_offset = 0;
+                let mut offset_y = px(0.);
+                let mut found: Option<Point<Pixels>> = None;
+                for (ix, wrap_line) in text_wrapper.lines.iter().enumerate() {
+                    if found.is_some() {
+                        break;
+                    }
+                    let line_origin = point(px(0.), offset_y);
+                    let in_visible_range = ix >= visible_range.start;
+                    if let Some(line) = in_visible_range
+                        .then(|| lines.get(ix.saturating_sub(visible_range.start)))
+                        .flatten()
+                    {
+                        let offset = target.saturating_sub(prev_lines_offset);
+                        if let Some(pos) = line.position_for_index(offset, line_height) {
+                            found = Some(line_origin + pos);
+                        }
+                        offset_y += line.size(line_height).height;
+                        prev_lines_offset += line.len() + 1;
+                    } else {
+                        if prev_lines_offset >= target {
+                            found = Some(line_origin);
+                        }
+                        offset_y += wrap_line.height(line_height);
+                        prev_lines_offset += wrap_line.len() + 1;
+                    }
+                }
+
+                if let Some(pos) = found {
+                    extra_cursor_bounds.push(Bounds::new(
+                        point(
+                            bounds.left() + pos.x + line_number_width + scroll_offset.x,
+                            bounds.top() + pos.y + ((line_height - cursor_height) / 2.),
+                        ),
+                        size(CURSOR_WIDTH, cursor_height),
+                    ));
+                }
+            }
+        }
+
         if let Some(deferred_scroll_offset) = state.deferred_scroll_offset {
             scroll_offset = deferred_scroll_offset;
         }
 
         bounds.origin = bounds.origin + scroll_offset;
 
-        (cursor_bounds, scroll_offset, current_row)
+        (cursor_bounds, extra_cursor_bounds, scroll_offset, current_row)
     }
 
     /// Layout the match range to a Path.
@@ -840,6 +904,10 @@ pub(super) struct PrepaintState {
     /// Size of the scrollable area by entire lines.
     scroll_size: Size<Pixels>,
     cursor_bounds: Option<Bounds<Pixels>>,
+    /// zeDB patch (multi-cursor): caret bounds for the extra cursors
+    /// beyond the primary. Empty in single-cursor mode. The y-scroll is
+    /// applied at paint via `cursor_scroll_offset`, like `cursor_bounds`.
+    extra_cursor_bounds: Vec<Bounds<Pixels>>,
     cursor_scroll_offset: Point<Pixels>,
     /// row index (zero based), no wrap, same line as the cursor.
     current_row: Option<usize>,
@@ -866,6 +934,17 @@ impl PrepaintState {
     fn cursor_bounds_with_scroll(&self) -> Option<Bounds<Pixels>> {
         self.cursor_bounds.map(|mut bounds| {
             bounds.origin.y += self.cursor_scroll_offset.y;
+            bounds
+        })
+    }
+
+    /// zeDB patch (multi-cursor): extra caret bounds adjusted for the
+    /// vertical scroll offset, mirroring `cursor_bounds_with_scroll`.
+    fn extra_cursor_bounds_with_scroll(&self) -> impl Iterator<Item = Bounds<Pixels>> + '_ {
+        let dy = self.cursor_scroll_offset.y;
+        self.extra_cursor_bounds.iter().map(move |bounds| {
+            let mut bounds = *bounds;
+            bounds.origin.y += dy;
             bounds
         })
     }
@@ -1201,7 +1280,7 @@ impl Element for TextElement {
 
         // Calculate the scroll offset to keep the cursor in view
 
-        let (cursor_bounds, cursor_scroll_offset, current_row) =
+        let (cursor_bounds, extra_cursor_bounds, cursor_scroll_offset, current_row) =
             self.layout_cursor(&last_layout, &mut bounds, window, cx);
         last_layout.cursor_bounds = cursor_bounds;
 
@@ -1269,6 +1348,7 @@ impl Element for TextElement {
             scroll_size,
             line_numbers,
             cursor_bounds,
+            extra_cursor_bounds,
             cursor_scroll_offset,
             current_row,
             selection_path,
@@ -1453,6 +1533,11 @@ impl Element for TextElement {
         // Paint blinking cursor
         if focused && show_cursor {
             if let Some(cursor_bounds) = prepaint.cursor_bounds_with_scroll() {
+                window.paint_quad(fill(cursor_bounds, cx.theme().caret));
+            }
+            // zeDB patch (multi-cursor): the extra carets blink in sync
+            // with the primary, sharing its scroll and color.
+            for cursor_bounds in prepaint.extra_cursor_bounds_with_scroll() {
                 window.paint_quad(fill(cursor_bounds, cx.theme().caret));
             }
         }

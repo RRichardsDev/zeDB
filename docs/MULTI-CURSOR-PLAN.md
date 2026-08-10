@@ -128,19 +128,27 @@ Not yet done: paste-across-N (insert uses an explicit range, stays
 single) and single-undo grouping (currently one history entry per
 sub-edit) — deferred to polish. IME stays single (guard excludes it).
 
-**Stage 4 — cmd-D.**
-New action + binding. First press: select word under primary cursor
-(reuse existing word-range logic). Subsequent: find next occurrence
-of the selected text after the last selection, wrapping to the top,
-stopping one before the start; add it to the set and scroll it into
-view. Verify: iterative select down a column of repeated identifiers,
-wrap-around, stop-before-start.
+**Stage 4 — cmd-D. DONE.**
+`SelectNextOccurrence` action + `cmd-d`/`ctrl-d` binding. First press
+selects the word under the primary cursor (`word_range_at`). Each
+subsequent press finds the next occurrence of the primary's text
+cyclically from `multi_anchor`, skipping already-selected spans, wraps
+to the top, stops one before the start; the old primary joins the
+extras and the new occurrence becomes primary. Escape and a plain
+(non-shift) click were added here as the way OUT of multi-mode so the
+stage was testable. Verified by the user down a column of repeated
+identifiers, including wrap-around.
 
-**Stage 5 — Polish.**
-Type-replaces-all already falls out of stage 3. Add: Left/Right
-collapses each selection to a cursor (start/end) keeping multi;
-Escape collapses to the single primary cursor. Verify the full UX
-spec end to end.
+**Stage 5 — Polish. DONE.**
+Type-replaces-all already fell out of stage 3. Added: a caret at the
+head of every extra cursor, computed inside `layout_cursor` with the
+same line-walk, scroll and vertical centering as the primary and
+painted in the same blink block (so they can't drift and blink in
+sync). Left/Right collapse every selection to a bare cursor
+(start/end) keeping multi, and once already collapsed they move every
+cursor together one grapheme at a time, deduping collisions. Escape
+and plain-click collapse back to a single cursor (landed in stage 4).
+Verified end to end by the user against the full UX spec.
 
 ## Risks and non-goals
 

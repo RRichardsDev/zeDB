@@ -118,6 +118,18 @@ impl InputState {
 
     pub(super) fn left(&mut self, _: &MoveLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.pause_blink_cursor(cx);
+        // zeDB patch (multi-cursor): a plain arrow drops the highlight
+        // and collapses every selection to a bare cursor at its start;
+        // once already collapsed, it moves every cursor left by one,
+        // keeping the multi-cursor set alive throughout.
+        if self.is_multi_selection() {
+            if self.is_multi_collapsed() {
+                self.move_multi_cursors(false, cx);
+            } else {
+                self.collapse_multi_to_edge(false, cx);
+            }
+            return;
+        }
         if self.selected_range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor()), None, cx);
         } else {
@@ -127,11 +139,91 @@ impl InputState {
 
     pub(super) fn right(&mut self, _: &MoveRight, _: &mut Window, cx: &mut Context<Self>) {
         self.pause_blink_cursor(cx);
+        // zeDB patch (multi-cursor): collapse every selection to a bare
+        // cursor at its end; once already collapsed, move every cursor
+        // right by one, keeping the multi-cursor set alive.
+        if self.is_multi_selection() {
+            if self.is_multi_collapsed() {
+                self.move_multi_cursors(true, cx);
+            } else {
+                self.collapse_multi_to_edge(true, cx);
+            }
+            return;
+        }
         if self.selected_range.is_empty() {
             self.move_to(self.next_boundary(self.selected_range.end), None, cx);
         } else {
             self.move_to(self.selected_range.end, None, cx)
         }
+    }
+
+    /// zeDB patch (multi-cursor): collapse the whole selection set to
+    /// bare cursors. `to_end` picks each selection's end (Right arrow);
+    /// otherwise its start (Left arrow). The primary stays primary and
+    /// the extras stay extras, so the multi-cursor survives; typing
+    /// then inserts at every cursor. The reversed flag is cleared so
+    /// the now-empty primary has no stale direction.
+    /// zeDB patch (multi-cursor): true when every cursor in the set
+    /// (primary and extras) is already a bare, empty cursor.
+    fn is_multi_collapsed(&self) -> bool {
+        self.selected_range.is_empty() && self.extra_selections.iter().all(|s| s.is_empty())
+    }
+
+    /// zeDB patch (multi-cursor): move every bare cursor by one grapheme
+    /// boundary, `forward` right or left, keeping the multi-cursor set.
+    /// Cursors that collide (or land on the primary) after the move are
+    /// deduped so a later edit doesn't fire twice at one spot.
+    fn move_multi_cursors(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let boundary = |this: &Self, off: usize| {
+            if forward {
+                this.next_boundary(off)
+            } else {
+                this.previous_boundary(off)
+            }
+        };
+        let primary = boundary(self, self.cursor());
+        let moved: Vec<usize> = self
+            .extra_selections
+            .iter()
+            .map(|s| boundary(self, s.start))
+            .collect();
+
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(primary);
+        self.extra_selections.clear();
+        for at in moved {
+            if seen.insert(at) {
+                self.extra_selections.push((at..at).into());
+            }
+        }
+        self.extra_selections.sort_by_key(|s| s.start);
+
+        self.selected_range = (primary..primary).into();
+        self.selection_reversed = false;
+        self.scroll_to(primary, None, cx);
+        self.pause_blink_cursor(cx);
+        self.update_preferred_column();
+        self.hide_context_menu(cx);
+        self.clear_inline_completion(cx);
+        cx.notify();
+    }
+
+    fn collapse_multi_to_edge(&mut self, to_end: bool, cx: &mut Context<Self>) {
+        let edge = |s: &crate::input::cursor::Selection| if to_end { s.end } else { s.start };
+        let primary = edge(&self.selected_range);
+        for selection in &mut self.extra_selections {
+            let at = edge(selection);
+            selection.start = at;
+            selection.end = at;
+        }
+        self.selected_range = (primary..primary).into();
+        self.selection_reversed = false;
+        self.scroll_to(primary, None, cx);
+        self.pause_blink_cursor(cx);
+        self.update_preferred_column();
+        self.hide_context_menu(cx);
+        self.clear_inline_completion(cx);
+        cx.notify();
     }
 
     pub(super) fn up(&mut self, action: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
