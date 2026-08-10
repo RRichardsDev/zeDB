@@ -202,7 +202,10 @@ impl Element for Popover {
                 // through to the editor; wheel scrolling stays
                 // contained to the card.
                 .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-                .p_1()
+                // zeDB patch: roomier padding so hover cards (schema
+                // db.table.column + type) don't read as cramped.
+                .px_2p5()
+                .py_1p5()
                 .text_xs()
                 .popover_style(cx)
                 .shadow_md()

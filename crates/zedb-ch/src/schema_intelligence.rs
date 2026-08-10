@@ -146,14 +146,22 @@ pub fn completions(
     let cursor = cursor.min(sql.len());
     let replace = word_range(sql, cursor);
     let prefix = &sql[replace.clone()];
-    let before = &sql[..replace.start];
+    // A word typed inside backticks (`db`.`tab|`) carries an opening
+    // backtick between it and the qualifying dot; step over it so the
+    // dot/qualifier adjacency below still resolves.
+    let context_end = if replace.start > 0 && sql.as_bytes()[replace.start - 1] == b'`' {
+        replace.start - 1
+    } else {
+        replace.start
+    };
+    let before = &sql[..context_end];
     let tokens = tokenize(before);
     let (bindings, _, _) = resolve_bindings(snapshot, default_database, &tokenize(sql));
     let mut suggestions = Vec::new();
 
     let dot_adjacent = tokens
         .last()
-        .is_some_and(|token| token.text == "." && token.range.end == replace.start);
+        .is_some_and(|token| token.text == "." && token.range.end == context_end);
     if dot_adjacent {
         let qualifier = tokens
             .get(tokens.len().saturating_sub(2))
@@ -241,6 +249,29 @@ pub fn completions(
                 }
             }
         }
+    } else {
+        // A bare (unqualified) word in a column position: offer the
+        // columns of every table in the query's scope, deduped by
+        // name. resolve_bindings ran over the whole statement, so this
+        // works even while typing the SELECT list before the FROM.
+        let mut scope_tables: Vec<&(String, String)> = bindings.aliases.values().collect();
+        scope_tables.sort();
+        scope_tables.dedup();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (database, object) in scope_tables {
+            if let Some(columns) = snapshot
+                .object(database, object)
+                .and_then(|object| object.columns.as_ref())
+            {
+                for column in columns.values() {
+                    if starts_with_case_insensitive(&column.name, prefix)
+                        && seen.insert(column.name.to_ascii_lowercase())
+                    {
+                        suggestions.push(column_suggestion(column, replace.clone()));
+                    }
+                }
+            }
+        }
     }
     suggestions.sort_by(|left, right| left.label.cmp(&right.label));
     suggestions
@@ -269,7 +300,7 @@ pub fn hover(
     {
         let column = snapshot.column(database, object, word)?;
         let mut markdown = format!(
-            "**{}.{}.{}**\n\n`{}`",
+            "**{}.{}.**_{}_\n\nType: `{}`",
             database, object, column.name, column.type_name
         );
         if !column.codec_expression.is_empty() {
@@ -313,6 +344,37 @@ pub fn hover(
                 database.objects.len()
             ),
         });
+    }
+
+    // A bare column: resolve it against the tables in scope. When
+    // exactly one of them has a column by this name, hover it as
+    // `db.table.column` + type, same as the qualified form.
+    let mut scope_tables: Vec<&(String, String)> = bindings.aliases.values().collect();
+    scope_tables.sort();
+    scope_tables.dedup();
+    let mut column_match = None;
+    for (database, object) in scope_tables {
+        if let Some(column) = snapshot.column(database, object, word) {
+            if column_match.is_some() {
+                // Ambiguous across tables; don't guess.
+                column_match = None;
+                break;
+            }
+            column_match = Some((database.clone(), object.clone(), column));
+        }
+    }
+    if let Some((database, object, column)) = column_match {
+        let mut markdown = format!(
+            "**{}.{}.**_{}_\n\nType: `{}`",
+            database, object, column.name, column.type_name
+        );
+        if !column.codec_expression.is_empty() {
+            markdown.push_str(&format!("\n\n{}", column.codec_expression));
+        }
+        if !column.comment.is_empty() {
+            markdown.push_str(&format!("\n\n{}", column.comment));
+        }
+        return Some(HoverInfo { range, markdown });
     }
 
     let object = default_database
@@ -722,7 +784,35 @@ fn tokenize(sql: &str) -> Vec<Token<'_>> {
                 index += 1;
             }
             index = (index + 2).min(bytes.len());
-        } else if matches!(bytes[index], b'\'' | b'"' | b'`') {
+        } else if bytes[index] == b'`' {
+            // Backticks quote an identifier in ClickHouse (db/table/
+            // column names with special chars). Emit it as an
+            // identifier token: `text` is the inner name so it matches
+            // schema names, `range` spans the backticks for
+            // highlighting.
+            let start = index;
+            index += 1;
+            let inner_start = index;
+            let mut inner_end = index;
+            while index < bytes.len() {
+                if bytes[index] == b'\\' {
+                    index = (index + 2).min(bytes.len());
+                    inner_end = index;
+                } else if bytes[index] == b'`' {
+                    inner_end = index;
+                    index += 1;
+                    break;
+                } else {
+                    index += 1;
+                    inner_end = index;
+                }
+            }
+            tokens.push(Token {
+                text: &sql[inner_start..inner_end.min(sql.len())],
+                range: start..index,
+                identifier: true,
+            });
+        } else if matches!(bytes[index], b'\'' | b'"') {
             let quote = bytes[index];
             index += 1;
             while index < bytes.len() {
@@ -894,6 +984,17 @@ mod tests {
     }
 
     #[test]
+    fn hover_resolves_bare_columns_from_scope() {
+        let snapshot = snapshot(Some(columns()));
+        // Unqualified column, single table in scope: resolves to
+        // db.table.column and its type.
+        let sql = "SELECT event_id FROM analytics.events";
+        let info = hover(&snapshot, None, sql, sql.find("event_id").unwrap()).unwrap();
+        assert!(info.markdown.contains("analytics.events.event_id"));
+        assert!(info.markdown.contains("UInt64"));
+    }
+
+    #[test]
     fn repro_alias_dot_mid_line() {
         let snapshot = snapshot(Some(columns()));
         let sql = "select e. from analytics.events e;";
@@ -917,6 +1018,40 @@ mod tests {
         let cursor = sql.find(". FROM").unwrap() + 1;
         let columns = completions(&snapshot, Some("analytics"), sql, cursor);
         assert_eq!(columns[0].label, "event_id");
+    }
+
+    #[test]
+    fn completes_bare_columns_from_query_scope() {
+        let snapshot = snapshot(Some(columns()));
+        // Typing the SELECT list before the FROM still resolves scope.
+        let sql = "SELECT eve FROM analytics.events";
+        let cursor = sql.find("eve ").unwrap() + 3;
+        let items = completions(&snapshot, None, sql, cursor);
+        assert!(items.iter().any(|item| item.label == "event_id"));
+        // A bare column in WHERE, table not the default database.
+        let sql = "SELECT * FROM analytics.events WHERE eve";
+        let cols = completions(&snapshot, None, sql, sql.len());
+        assert!(cols.iter().any(|item| item.label == "event_id"));
+    }
+
+    #[test]
+    fn completes_inside_backtick_quotes() {
+        let snapshot = snapshot(Some(columns()));
+        // Bare backticked table name.
+        let sql = "SELECT * FROM `ev";
+        let table = completions(&snapshot, Some("analytics"), sql, sql.len());
+        assert_eq!(table[0].label, "events");
+
+        // Backticked database qualifier, backticked table being typed.
+        let sql = "SELECT * FROM `analytics`.`ev";
+        let objects = completions(&snapshot, None, sql, sql.len());
+        assert_eq!(objects[0].label, "events");
+
+        // Backticked table qualifier, column being typed.
+        let sql = "SELECT `events`.`ev FROM events";
+        let cursor = sql.find(".`ev").unwrap() + 4;
+        let cols = completions(&snapshot, Some("analytics"), sql, cursor);
+        assert_eq!(cols[0].label, "event_id");
     }
 
     #[test]
@@ -973,6 +1108,21 @@ mod tests {
         assert!(kinds.contains(&(RecognizedKind::Object, "events")));
         assert!(kinds.contains(&(RecognizedKind::Column, "event_id")));
         assert!(!kinds.iter().any(|(_, text)| *text == "missing"));
+    }
+
+    #[test]
+    fn recognizes_backtick_quoted_names() {
+        let snapshot = snapshot(Some(columns()));
+        let sql = "SELECT e.`event_id` FROM `analytics`.`events` e";
+        let recognized = recognized_identifiers(&snapshot, None, sql);
+        // The highlighted range spans the backticks; the name matches.
+        let kinds: Vec<(RecognizedKind, &str)> = recognized
+            .iter()
+            .map(|identifier| (identifier.kind, &sql[identifier.range.clone()]))
+            .collect();
+        assert!(kinds.contains(&(RecognizedKind::Database, "`analytics`")));
+        assert!(kinds.contains(&(RecognizedKind::Object, "`events`")));
+        assert!(kinds.contains(&(RecognizedKind::Column, "`event_id`")));
     }
 
     #[test]

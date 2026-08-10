@@ -7,6 +7,25 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## v0.1.17 - 2026-08-10
+
+First round of real-use fixes.
+
+- Backtick-quoted names (`db`.`table`.`column`) are now highlighted,
+  completed, and hovered like bare ones; the tokenizer had been
+  treating them as opaque strings.
+- Column autocomplete for bare (unqualified) names: typing a column
+  offers the columns of every table in the query's scope, deduped by
+  name, and it works while you are still typing the SELECT list
+  before the FROM.
+- Hovering a column resolves it even without a table qualifier,
+  showing db.table.column (column in italic) and its type in a
+  roomier card.
+- The results grid supports multi-cell selection: cmd-A selects all,
+  click-drag and shift-click select a rectangle, and cmd-C copies a
+  region as CSV with a header row (single cells still copy their bare
+  value).
+
 ## v0.1.16 - 2026-08-10
 
 - Export current query results, from the command palette: a two-step

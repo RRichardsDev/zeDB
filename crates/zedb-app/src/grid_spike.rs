@@ -15,7 +15,7 @@ use gpui_component::Sizable as _;
 use std::collections::HashMap;
 use zedb_core::{ColumnMeta, Value};
 
-actions!(grid_spike, [Copy]);
+actions!(grid_spike, [Copy, SelectAll]);
 
 /// A header interaction asking the owning tab to rewrite the query.
 pub enum GridEvent {
@@ -74,6 +74,40 @@ const COL_WIDTH: f32 = 120.0;
 /// Resolved tree-sitter highlight runs over a displayed string.
 type HighlightRuns = Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>;
 
+/// A rectangular cell selection: an anchor (where it started) and a
+/// focus (where it currently reaches). A single click has anchor ==
+/// focus; drag and shift-click move the focus.
+#[derive(Clone, Copy)]
+struct Selection {
+    anchor: (usize, usize),
+    focus: (usize, usize),
+}
+
+impl Selection {
+    fn cell(pos: (usize, usize)) -> Self {
+        Self {
+            anchor: pos,
+            focus: pos,
+        }
+    }
+
+    fn rows(&self) -> std::ops::RangeInclusive<usize> {
+        self.anchor.0.min(self.focus.0)..=self.anchor.0.max(self.focus.0)
+    }
+
+    fn cols(&self) -> std::ops::RangeInclusive<usize> {
+        self.anchor.1.min(self.focus.1)..=self.anchor.1.max(self.focus.1)
+    }
+
+    fn contains(&self, row: usize, col: usize) -> bool {
+        self.rows().contains(&row) && self.cols().contains(&col)
+    }
+
+    fn is_single(&self) -> bool {
+        self.anchor == self.focus
+    }
+}
+
 pub struct GridSpike {
     columns: Vec<ColumnMeta>,
     rows: Vec<Vec<Value>>,
@@ -82,7 +116,9 @@ pub struct GridSpike {
     result_capped: bool,
     focus_handle: FocusHandle,
     scroll: UniformListScrollHandle,
-    selected: Option<(usize, usize)>,
+    selected: Option<Selection>,
+    /// A left-drag selection is in progress (extends focus on hover).
+    selecting: bool,
     /// Per-column widths, drag-resizable from the header dividers.
     col_widths: Vec<f32>,
     /// An active header-divider drag: (column, start width, start mouse x).
@@ -118,7 +154,10 @@ pub struct GridSpike {
 
 impl GridSpike {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        cx.bind_keys([KeyBinding::new("cmd-c", Copy, None)]);
+        cx.bind_keys([
+            KeyBinding::new("cmd-c", Copy, None),
+            KeyBinding::new("cmd-a", SelectAll, None),
+        ]);
         Self {
             columns: Vec::new(),
             rows: Vec::new(),
@@ -128,6 +167,7 @@ impl GridSpike {
             focus_handle: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             selected: None,
+            selecting: false,
             col_widths: Vec::new(),
             resizing_column: None,
             just_resized: false,
@@ -188,6 +228,7 @@ impl GridSpike {
             self.result_complete = false;
             self.result_capped = false;
             self.selected = None;
+            self.selecting = false;
             self.inspected = None;
             self.highlight_cache.clear();
             self.inspector_cache = None;
@@ -475,18 +516,62 @@ impl GridSpike {
         cx.notify();
     }
 
-    fn copy_selected(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((row, col)) = self.selected {
-            // Composites copy as SQL-pasteable literals (quoted
-            // strings); everything else copies raw, not the collapsed
-            // cell display.
-            let text = match self.rows.get(row).and_then(|row| row.get(col)) {
-                Some(value @ (Value::Array(_) | Value::Tuple(_) | Value::Map(_))) => literal(value),
-                Some(value) => value.to_string(),
-                None => String::new(),
-            };
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
+    /// One cell's clipboard text: composites as SQL-pasteable literals
+    /// (quoted strings), everything else raw (not the collapsed cell
+    /// display).
+    fn cell_clipboard(&self, row: usize, col: usize) -> String {
+        match self.rows.get(row).and_then(|row| row.get(col)) {
+            Some(value @ (Value::Array(_) | Value::Tuple(_) | Value::Map(_))) => literal(value),
+            Some(value) => value.to_string(),
+            None => String::new(),
         }
+    }
+
+    fn copy_selected(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(selection) = self.selected else {
+            return;
+        };
+        // A single cell copies its bare value; a region copies as CSV,
+        // led by the selected columns' header row, so it pastes into a
+        // spreadsheet with labels intact.
+        let text = if selection.is_single() {
+            let (row, col) = selection.focus;
+            self.cell_clipboard(row, col)
+        } else {
+            let mut lines: Vec<String> = Vec::new();
+            lines.push(
+                selection
+                    .cols()
+                    .map(|col| csv_field(&self.header(col)))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+            for row in selection.rows() {
+                lines.push(
+                    selection
+                        .cols()
+                        .map(|col| csv_field(&self.cell_clipboard(row, col)))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                );
+            }
+            lines.join("\n")
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
+    fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
+        let rows = self.rows.len();
+        let cols = self.columns.len();
+        if rows == 0 || cols == 0 {
+            return;
+        }
+        self.selected = Some(Selection {
+            anchor: (0, 0),
+            focus: (rows - 1, cols - 1),
+        });
+        self.inspected = None;
+        cx.notify();
     }
 
     fn width(&self, column: usize) -> f32 {
@@ -1077,6 +1162,16 @@ fn literal_pretty(value: &Value, indent: usize, out: &mut String) {
     out.push_str(close);
 }
 
+/// RFC-4180 CSV field: quote when it contains a comma, quote, CR, or
+/// LF, doubling any interior quotes.
+fn csv_field(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
 /// Every '...'-quoted string in the text, unescaped.
 fn quoted_strings(text: &str) -> Vec<String> {
     let mut values = Vec::new();
@@ -1124,7 +1219,7 @@ impl Render for GridSpike {
                     .map(|row| {
                         let cells: Vec<_> = (0..cols)
                             .map(|col| {
-                                let is_selected = selected == Some((row, col));
+                                let is_selected = selected.is_some_and(|s| s.contains(row, col));
                                 let is_null = this.cell_is_null(row, col);
                                 let expandable = this.cell_expandable(row, col);
                                 let temporal = this.cell_temporal_parts(row, col);
@@ -1151,10 +1246,55 @@ impl Render for GridSpike {
                                     .when(is_null, |d| d.text_color(theme::text_dim()).italic())
                                     .when(is_selected, |d| d.bg(rgb(0x2f5f8f)))
                                     .when(expandable, |d| d.cursor_pointer())
+                                    // Mouse-down starts (or, with shift,
+                                    // extends) a rectangular selection;
+                                    // hovering during a drag stretches it.
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(
+                                            move |this: &mut GridSpike,
+                                                  event: &MouseDownEvent,
+                                                  _,
+                                                  cx| {
+                                                if event.modifiers.shift {
+                                                    if let Some(selection) = this.selected.as_mut()
+                                                    {
+                                                        selection.focus = (row, col);
+                                                    } else {
+                                                        this.selected =
+                                                            Some(Selection::cell((row, col)));
+                                                    }
+                                                } else {
+                                                    this.selected =
+                                                        Some(Selection::cell((row, col)));
+                                                }
+                                                this.selecting = true;
+                                                cx.notify();
+                                            },
+                                        ),
+                                    )
+                                    .on_mouse_move(cx.listener(
+                                        move |this: &mut GridSpike, _, _, cx| {
+                                            if this.selecting {
+                                                if let Some(selection) = this.selected.as_mut() {
+                                                    if selection.focus != (row, col) {
+                                                        selection.focus = (row, col);
+                                                        cx.notify();
+                                                    }
+                                                }
+                                            }
+                                        },
+                                    ))
                                     .on_click(cx.listener(move |this: &mut GridSpike, _, _, cx| {
-                                        this.selected = Some((row, col));
-                                        this.inspected = expandable.then_some((row, col));
-                                        cx.notify();
+                                        // A plain click (no drag) opens the
+                                        // inspector on an expandable cell.
+                                        if this
+                                            .selected
+                                            .is_some_and(|s| s.is_single() && s.focus == (row, col))
+                                        {
+                                            this.inspected = expandable.then_some((row, col));
+                                            cx.notify();
+                                        }
                                     }))
                                     .map(|d| match temporal {
                                         Some((date, time)) => d
@@ -1245,8 +1385,15 @@ impl Render for GridSpike {
             .text_color(theme::text_dim())
             .child(fetch_status)
             .child(match self.selected {
-                Some((r, c)) => format!("selected {r}:{c} (cmd-c copies)"),
-                None => "click a cell to select".to_string(),
+                Some(selection) if selection.is_single() => {
+                    let (r, c) = selection.focus;
+                    format!("selected {r}:{c} (cmd-c copies)")
+                }
+                Some(selection) => {
+                    let cells = (selection.rows().count()) * (selection.cols().count());
+                    format!("{cells} cells selected (cmd-c copies)")
+                }
+                None => "click or drag to select \u{b7} cmd-a for all".to_string(),
             });
 
         // Mirror the list's horizontal offset, clamped to its scrollable
@@ -1576,6 +1723,7 @@ impl Render for GridSpike {
                 }
             }))
             .on_action(cx.listener(Self::copy_selected))
+            .on_action(cx.listener(Self::select_all))
             // The list consumes wheel events; repaint so the header can
             // mirror its horizontal offset.
             .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
@@ -1600,6 +1748,8 @@ impl Render for GridSpike {
                             .insert(Self::width_key(&this.columns), this.col_widths.clone());
                         cx.notify();
                     }
+                    // End any in-progress drag selection.
+                    this.selecting = false;
                 }),
             )
             .child(self.header_row(scroll_x, cx))

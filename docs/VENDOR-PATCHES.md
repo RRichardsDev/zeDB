@@ -99,3 +99,10 @@ through the affected UI.
   bug, 2026-08-09). The card is informational: clicks pass through to
   the editor; wheel scrolling stays contained via a scroll-wheel
   propagation stop.
+
+## 8. Hover card padding
+
+- `src/input/popovers/hover_popover.rs` (content div, same block as
+  patch 7)
+- The stock `.p_1()` made schema hover cards (db.table.column + type)
+  read as cramped; widened to `.px_2p5().py_1p5()`.
