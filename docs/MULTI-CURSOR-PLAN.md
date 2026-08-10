@@ -70,13 +70,15 @@ Vendored `gpui-component`, all paths relative to
 
 Port Helix's two ideas, minimally:
 
-1. **Selection set.** Replace `selected_range: Selection` with
-   `selections: Vec<Selection>` plus a `primary: usize` index. Keep
-   a `fn selected_range(&self) -> Selection` accessor returning the
-   primary, so the ~63 existing single-selection call sites keep
-   working unchanged in stage 1. Invariant: selections stay sorted
-   and non-overlapping (merge on overlap), primary tracked across
-   edits.
+1. **Selection set.** Keep `selected_range: Selection` as the primary
+   and add `extra_selections: Vec<Selection>` for the others.
+   (Refinement adopted in stage 1: this beats a `Vec<Selection>` +
+   `primary: usize` because it leaves the ~63 existing
+   single-selection call sites untouched, so stage 1 is provably
+   behavior-identical with extras empty.) `selection_set()` returns
+   extras + primary sorted; `is_multi_selection()` reports more than
+   one. Invariant: extras stay sorted and non-overlapping with the
+   primary.
 
 2. **Change mapping.** A single helper that, given an edit as a set
    of `(range, replacement)` changes, (a) applies them to the rope
@@ -93,14 +95,13 @@ only if a later stage needs it (block selection etc. — out of scope).
 
 ## Stages (each a real checkpoint; editor stays usable throughout)
 
-**Stage 1 — Selection model, behavior-identical.**
-`selected_range: Selection` → `selections: Vec<Selection>` +
-`primary`. Route every existing read/write through a primary
-accessor/mutator. Add the change-mapping helper and make
-`replace_text_in_range` use it (with a one-element change list).
-Goal: the editor behaves EXACTLY as today; nothing visible changes.
-Verify: full manual editing pass (type, select, backspace, paste,
-IME, undo) feels identical; existing tests pass.
+**Stage 1 — Selection model, behavior-identical. DONE (9cd27c3).**
+Added `extra_selections: Vec<Selection>` beside `selected_range`, the
+tested `Selection::mapped_through_edit` primitive, and
+`map_extra_selections` wired into `replace_text_in_range`. Extras
+empty everywhere, so behavior is unchanged; verified by workspace
+tests and a manual editing pass. `selection_set` /
+`is_multi_selection` in place for stage 2.
 
 **Stage 2 — Render N.**
 `element.rs` paint loop emits a caret and selection rect per
