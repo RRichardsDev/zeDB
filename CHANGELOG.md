@@ -7,7 +7,7 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.19 - 2026-08-10
 
 - Multi-cursor edits with many cursors no longer stall the editor: a
   keystroke now does its document-wide work (re-highlight, etc.) once
