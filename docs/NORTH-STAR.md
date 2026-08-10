@@ -65,6 +65,8 @@ Why first-in-class: no generic tool models compression at all. The
 storage tab already fetches sizes; this is the per-column twin with a
 recommendation attached.
 
+**This is now Phase 8; the full tiered plan is `docs/PHASE-8.md`.**
+
 Rough build: extend the storage/columns query to join
 `system.parts_columns`, add a cardinality probe (cache it, it is the
 expensive part), and a small rules engine for the codec suggestion.
