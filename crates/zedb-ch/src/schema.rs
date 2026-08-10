@@ -221,6 +221,39 @@ impl ChClient {
         parse_columns(result)
     }
 
+    /// Approximate distinct count per column in one table scan
+    /// (`uniqCombined`), aligned to the given column order. Opt-in from
+    /// the UI because it reads the whole table; callers run it off the
+    /// main thread. Feeds the codec advisor (a low distinct-ratio column
+    /// is a `LowCardinality` candidate).
+    pub async fn column_cardinalities(
+        &self,
+        database: &str,
+        object: &str,
+        columns: &[String],
+    ) -> Result<Vec<u64>> {
+        if columns.is_empty() {
+            return Ok(Vec::new());
+        }
+        let db = escape_identifier(database);
+        let table = escape_identifier(object);
+        let exprs = columns
+            .iter()
+            .map(|column| format!("uniqCombined({})", escape_identifier(column)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let result = self
+            .query(&format!("SELECT {exprs} FROM {db}.{table}"))
+            .await?;
+        let row = result
+            .rows
+            .first()
+            .ok_or_else(|| ChError::Decode("cardinality probe returned no rows".into()))?;
+        (0..columns.len())
+            .map(|index| Ok(optional_u64_at(row, index, "column cardinality")?.unwrap_or(0)))
+            .collect()
+    }
+
     pub async fn object_details(&self, database: &str, object: &str) -> Result<ObjectDetails> {
         let database = escape_string(database);
         let object = escape_string(object);
@@ -297,6 +330,14 @@ fn parse_cache_columns(result: QueryResult) -> Result<Vec<ColumnRecord>> {
 
 fn escape_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// Backtick-quote an identifier (database, table, column) for use in a
+/// query, doubling any embedded backtick. ClickHouse allows arbitrary
+/// characters in quoted identifiers, so this must be used wherever a
+/// name is interpolated as an identifier rather than a string literal.
+fn escape_identifier(value: &str) -> String {
+    format!("`{}`", value.replace('`', "``"))
 }
 
 fn parse_databases(result: QueryResult) -> Result<Vec<DatabaseMeta>> {

@@ -14,6 +14,7 @@ mod query_history;
 mod rt;
 mod schema_intelligence_ui;
 mod settings_sync;
+mod storage_advisor;
 mod theme;
 mod type_highlight;
 mod updates;
@@ -353,6 +354,13 @@ struct SelectedSchemaObject {
     /// Table-wide compression totals; None until loaded, or for objects
     /// with no parts (views, dictionaries).
     storage: Option<TableStorage>,
+    /// Per-column approximate distinct counts (aligned to `columns`),
+    /// filled on demand by the opt-in cardinality probe. None until run.
+    cardinalities: Option<Vec<u64>>,
+    /// The cardinality probe is scanning the table.
+    cardinality_loading: bool,
+    /// The probe failed (e.g. a column type `uniqCombined` rejects).
+    cardinality_error: Option<String>,
     ddl_editor: Entity<InputState>,
     engine_editor: Entity<InputState>,
     tab: ObjectInspectorTab,
@@ -488,6 +496,10 @@ struct Workspace {
     schema_databases: Vec<DatabaseNode>,
     schema_error: Option<String>,
     selected_schema_object: Option<SelectedSchemaObject>,
+    /// Cardinality-probe results kept for this session, keyed by
+    /// (connection, database, object). Once a table has been analyzed
+    /// its distinct counts auto-load on reopen without re-prompting.
+    cardinality_cache: HashMap<(String, String, String), Vec<u64>>,
     notice: Option<String>,
     notice_warning: bool,
     notice_flash_id: u64,
@@ -790,6 +802,7 @@ impl Workspace {
                 schema_databases: Vec::new(),
                 schema_error: None,
                 selected_schema_object: None,
+                cardinality_cache: HashMap::new(),
                 notice: None,
                 notice_warning: false,
                 notice_flash_id: 0,
@@ -864,6 +877,7 @@ impl Workspace {
                 schema_databases: Vec::new(),
                 schema_error: None,
                 selected_schema_object: None,
+                cardinality_cache: HashMap::new(),
                 notice: Some(format!("Could not load connections: {error}")),
                 notice_warning: false,
                 notice_flash_id: 0,
@@ -3397,6 +3411,92 @@ impl Workspace {
         .detach();
     }
 
+    /// Opt-in cardinality probe (Phase 8, Tier 2): scan the selected
+    /// table once for each column's approximate distinct count, off the
+    /// main thread, and store it on the selection. Feeds the codec
+    /// advisor. Guarded so a stale result (selection changed while the
+    /// scan ran) is dropped.
+    fn analyze_cardinality(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let (connection_name, config, database_name, object_name, column_names) = {
+            let Some(selected) = &self.selected_schema_object else {
+                return;
+            };
+            if selected.cardinality_loading || selected.columns.is_empty() {
+                return;
+            }
+            let Some(connected) = &self.connected else {
+                return;
+            };
+            (
+                connected.name.clone(),
+                connected.client_config.clone(),
+                selected.database.clone(),
+                selected.object.name.clone(),
+                selected
+                    .columns
+                    .iter()
+                    .map(|column| column.name.clone())
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        if let Some(selected) = &mut self.selected_schema_object {
+            selected.cardinality_loading = true;
+            selected.cardinality_error = None;
+        }
+        cx.notify();
+
+        let task = rt::tokio().spawn({
+            let database_name = database_name.clone();
+            let object_name = object_name.clone();
+            async move {
+                ChClient::new(config)
+                    .column_cardinalities(&database_name, &object_name, &column_names)
+                    .await
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                    != Some(connection_name.as_str())
+                {
+                    return;
+                }
+                let Some(selected) = &mut this.selected_schema_object else {
+                    return;
+                };
+                if selected.database != database_name || selected.object.name != object_name {
+                    return;
+                }
+                selected.cardinality_loading = false;
+                let to_cache = match result {
+                    Ok(Ok(cardinalities)) => {
+                        selected.cardinalities = Some(cardinalities.clone());
+                        Some(cardinalities)
+                    }
+                    Ok(Err(error)) => {
+                        selected.cardinality_error = Some(error.to_string());
+                        None
+                    }
+                    Err(error) => {
+                        selected.cardinality_error = Some(error.to_string());
+                        None
+                    }
+                };
+                // The `selected` borrow ends here; keep the result for the
+                // session so reopening this table auto-loads it.
+                if let Some(cardinalities) = to_cache {
+                    this.cardinality_cache
+                        .insert((connection_name, database_name, object_name), cardinalities);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn toggle_schema_database(
         &mut self,
         database_index: usize,
@@ -3499,6 +3599,16 @@ impl Workspace {
         let connection_name = connected.name.clone();
         let config = connected.client_config.clone();
         let object_name = object.name.clone();
+        // Auto-load cardinality if this table was analyzed earlier this
+        // session, so it shows without re-prompting.
+        let cached_cardinalities = self
+            .cardinality_cache
+            .get(&(
+                connection_name.clone(),
+                database_name.clone(),
+                object_name.clone(),
+            ))
+            .cloned();
         let window_handle = window.window_handle();
         let ddl_editor = cx.new(|cx| InputState::new(window, cx).code_editor("sql"));
         let engine_editor = cx.new(|cx| {
@@ -3513,6 +3623,9 @@ impl Workspace {
             columns: Vec::new(),
             details: None,
             storage: None,
+            cardinalities: cached_cardinalities,
+            cardinality_loading: false,
+            cardinality_error: None,
             ddl_editor: ddl_editor.clone(),
             engine_editor: engine_editor.clone(),
             tab,
@@ -5664,6 +5777,10 @@ impl Workspace {
             .selected_schema_object
             .as_ref()
             .expect("schema object panel requires a selection");
+        let cardinalities = selected.cardinalities.clone();
+        let advisor_db = selected.database.clone();
+        let advisor_table = selected.object.name.clone();
+        let advisor_rows = selected.object.total_rows.unwrap_or(0);
         let column_rows = selected
             .columns
             .iter()
@@ -5696,6 +5813,27 @@ impl Workspace {
                 } else {
                     column.codec.clone()
                 };
+                // Storage advice (Phase 8, Tier 2), computed once the
+                // cardinality probe has run. None before then.
+                let distinct_count = cardinalities
+                    .as_ref()
+                    .and_then(|values| values.get(index))
+                    .copied();
+                let advice = distinct_count.map(|distinct| {
+                    storage_advisor::advise(
+                        &storage_advisor::ColumnFacts {
+                            name: &column.name,
+                            type_name: &column.type_name,
+                            codec: &column.codec,
+                            distinct,
+                            total_rows: advisor_rows,
+                            compressed_bytes: column.compressed_bytes,
+                            uncompressed_bytes: column.uncompressed_bytes,
+                        },
+                        &advisor_db,
+                        &advisor_table,
+                    )
+                });
                 div()
                     .id(("schema-column", index))
                     .h(px(30.))
@@ -5771,6 +5909,77 @@ impl Workspace {
                             // the plain "—" placeholder passes through dim.
                             .child(type_highlight::styled(&codec)),
                     )
+                    // SUGGESTION (Phase 8, Tier 2): the advisor's verdict.
+                    // Actionable ones are clickable and copy their ALTER;
+                    // the distinct count and reason ride along in a tooltip.
+                    .when_some(advice, |row, advice| {
+                        // The analysis lane: a green tick (hover = why it is
+                        // fine) when there is nothing to do, or an action
+                        // icon that opens the query editor with the ALTER
+                        // (hover = what it will do and why) when there is.
+                        let base = || {
+                            div()
+                                .w(px(90.))
+                                .flex_none()
+                                .border_l_1()
+                                .border_color(theme::border())
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                        };
+                        let evidence = distinct_count
+                            .map(|distinct| {
+                                format!("{} distinct values", Self::format_count(distinct))
+                            })
+                            .unwrap_or_default();
+                        let cell = match advice {
+                            storage_advisor::Advice::Good(reason)
+                            | storage_advisor::Advice::Leave(reason) => base()
+                                .id(("advice", index))
+                                .child(
+                                    svg()
+                                        .path("icons/verify.svg")
+                                        .size(px(14.))
+                                        .text_color(theme::success()),
+                                )
+                                .tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(reason.clone())
+                                        .build(window, cx)
+                                })
+                                .into_any_element(),
+                            storage_advisor::Advice::Suggest {
+                                label,
+                                reason,
+                                alter,
+                            } => {
+                                let tooltip = format!(
+                                    "Suggest {label}: {reason} ({evidence}).\n\
+                                     Click to open the query editor with:\n{alter}"
+                                );
+                                base()
+                                    .id(("advice", index))
+                                    .cursor_pointer()
+                                    .rounded(px(3.))
+                                    .hover(|cell| cell.bg(theme::hover()))
+                                    .child(
+                                        svg()
+                                            .path("icons/query-plus.svg")
+                                            .size(px(14.))
+                                            .text_color(theme::accent()),
+                                    )
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_query_tab_with(&alter, window, cx);
+                                    }))
+                                    .tooltip(move |window, cx| {
+                                        gpui_component::tooltip::Tooltip::new(tooltip.clone())
+                                            .build(window, cx)
+                                    })
+                                    .into_any_element()
+                            }
+                            storage_advisor::Advice::Unknown => base().into_any_element(),
+                        };
+                        row.child(cell)
+                    })
             })
             .collect::<Vec<_>>();
 
@@ -5938,6 +6147,59 @@ impl Workspace {
                 .min_h_0()
                 .flex()
                 .flex_col()
+                // Opt-in cardinality prompt (Phase 8, Tier 2). Shows until
+                // the probe has run; the result is cached for the session,
+                // so a re-opened table skips the prompt and auto-loads.
+                .when(
+                    selected.cardinalities.is_none() && !selected.columns.is_empty(),
+                    |body| {
+                        let loading = selected.cardinality_loading;
+                        body.child(
+                            div()
+                                .flex_none()
+                                .px_3()
+                                .py_2()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .border_b_1()
+                                .border_color(theme::border())
+                                .bg(theme::bg_sunken())
+                                .child(div().text_xs().text_color(theme::text_dim()).child(
+                                    "Analyse per-column cardinality to suggest better \
+                                             codecs and types. Scans the table once.",
+                                ))
+                                .child(if loading {
+                                    div()
+                                        .px_3()
+                                        .py_1()
+                                        .text_xs()
+                                        .text_color(theme::text_dim())
+                                        .child("Analysing\u{2026}")
+                                        .into_any_element()
+                                } else {
+                                    div()
+                                        .id("analyze-cardinality")
+                                        .px_3()
+                                        .py_1()
+                                        .rounded(px(4.))
+                                        .border_1()
+                                        .border_color(theme::success())
+                                        .text_xs()
+                                        .text_color(theme::success())
+                                        .cursor_pointer()
+                                        .hover(|button| {
+                                            button.bg(theme::success()).text_color(theme::bg())
+                                        })
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.analyze_cardinality(window, cx)
+                                        }))
+                                        .child("Analyse")
+                                        .into_any_element()
+                                }),
+                        )
+                    },
+                )
                 .child(
                     div()
                         .h(px(28.))
@@ -5982,7 +6244,24 @@ impl Workspace {
                                 .text_right()
                                 .child("RATIO"),
                         )
-                        .child(div().flex_1().min_w(px(230.)).pl_4().child("CODEC")),
+                        .child(div().flex_1().min_w(px(230.)).pl_4().child("CODEC"))
+                        // ADVICE is the analysis lane, set off from the
+                        // data columns by a divider and the accent color so
+                        // "the data" and "the analysis" read as separate.
+                        // Appears once the probe has run.
+                        .when(selected.cardinalities.is_some(), |header| {
+                            header.child(
+                                div()
+                                    .w(px(90.))
+                                    .flex_none()
+                                    .border_l_1()
+                                    .border_color(theme::border())
+                                    .flex()
+                                    .justify_center()
+                                    .text_color(theme::accent())
+                                    .child("ADVICE"),
+                            )
+                        }),
                 )
                 // Per-column bytes only exist for Wide parts; when the
                 // table is entirely Compact, explain the empty columns

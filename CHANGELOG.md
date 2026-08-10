@@ -18,6 +18,15 @@ GitHub release notes.
 - Fixed a schema-explorer bug where filtering showed matching databases
   with an expanded arrow but no objects, forcing a second click to load
   them; matches now populate from the warmed cache immediately.
+- The Columns tab gained a storage advisor. An opt-in "Analyse" scans
+  the table once for each column's distinct-value count, then an Advice
+  lane flags each column: a green tick where storage is already fine
+  (hover explains why), or an action icon where a codec or type change
+  would help. Clicking the action icon opens a new query-editor tab with
+  the suggested ALTER, ready to review and run. The suggestions are
+  rule-based (e.g. low-cardinality string to LowCardinality, timestamps
+  to Delta coding), not AI, and the scan result is cached for the
+  session.
 
 ## v0.1.20 - 2026-08-10
 
