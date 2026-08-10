@@ -7,6 +7,18 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- The schema inspector's Columns tab now shows per-column storage: the
+  compressed and uncompressed size, the compression ratio, and the
+  codec (colored like types). The table header gains an overall
+  compression ratio. Per-column sizes exist only for Wide parts, so
+  a table stored entirely in Compact parts shows the table ratio plus
+  a note explaining the per-column columns are blank.
+- Fixed a schema-explorer bug where filtering showed matching databases
+  with an expanded arrow but no objects, forcing a second click to load
+  them; matches now populate from the warmed cache immediately.
+
 ## v0.1.20 - 2026-08-10
 
 - Copying cells from the results grid now pastes cleanly into Excel,

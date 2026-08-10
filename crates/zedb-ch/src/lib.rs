@@ -35,6 +35,6 @@ pub use pin::{
 };
 pub use schema::{
     distributed_sharding_key, ColumnInfo, DatabaseMeta, ObjectDetails, SchemaObjectKind,
-    SchemaObjectMeta,
+    SchemaObjectMeta, TableStorage,
 };
 pub use types::{parse_type, ChType};

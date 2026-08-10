@@ -45,7 +45,7 @@ use tokio::task::AbortHandle;
 use zedb_ch::{
     schema_cache::{CachedObjectKind, SchemaCache},
     ChClient, ChConfig, ColumnInfo, DatabaseMeta, ObjectDetails, QueryStreamEvent,
-    QueryStreamSummary, SchemaObjectKind, SchemaObjectMeta,
+    QueryStreamSummary, SchemaObjectKind, SchemaObjectMeta, TableStorage,
 };
 use zedb_core::{
     load_connections, load_preferences, save_connections, save_preferences, ConnectionConfig,
@@ -350,6 +350,9 @@ struct SelectedSchemaObject {
     loading: bool,
     columns: Vec<ColumnInfo>,
     details: Option<ObjectDetails>,
+    /// Table-wide compression totals; None until loaded, or for objects
+    /// with no parts (views, dictionaries).
+    storage: Option<TableStorage>,
     ddl_editor: Entity<InputState>,
     engine_editor: Entity<InputState>,
     tab: ObjectInspectorTab,
@@ -597,8 +600,29 @@ impl Workspace {
         .detach();
         let schema_filter = Self::input("", "Filter schema", false, cx);
         cx.observe(&schema_filter, |this: &mut Self, _, cx| {
+            // A filter auto-expands every matching database. Pull their
+            // objects from the warmed cache now so they render populated
+            // straight away; without this the database shows an expanded
+            // chevron over an empty list and the load only fires on the
+            // next click (the double-click bug). Cache reads only, so no
+            // network and bounded to already-warmed databases.
+            let snapshot = this.schema_cache.as_ref().map(|cache| cache.snapshot());
             for database in &mut this.schema_databases {
                 database.filter_collapsed = false;
+                if database.objects.is_none() {
+                    if let Some(cached) = snapshot
+                        .as_ref()
+                        .and_then(|snap| snap.database(&database.meta.name))
+                    {
+                        database.objects = Some(
+                            cached
+                                .objects
+                                .values()
+                                .map(schema_object_from_cache)
+                                .collect(),
+                        );
+                    }
+                }
             }
             cx.notify()
         })
@@ -3488,6 +3512,7 @@ impl Workspace {
             loading: true,
             columns: Vec::new(),
             details: None,
+            storage: None,
             ddl_editor: ddl_editor.clone(),
             engine_editor: engine_editor.clone(),
             tab,
@@ -3508,13 +3533,14 @@ impl Workspace {
                 let client = ChClient::new(config);
                 tokio::join!(
                     client.list_columns(&database_name, &object_name),
-                    client.object_details(&database_name, &object_name)
+                    client.object_details(&database_name, &object_name),
+                    client.table_storage(&database_name, &object_name)
                 )
             }
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            if let Ok((_, Ok(details))) = &result {
+            if let Ok((_, Ok(details), _)) = &result {
                 let ddl = details.create_table_query.clone();
                 let engine = format_engine_definition(&details.engine_full);
                 cx.update_window(window_handle, |_, window, cx| {
@@ -3537,11 +3563,15 @@ impl Workspace {
                 }
                 selected.loading = false;
                 match result {
-                    Ok((Ok(columns), Ok(details))) => {
+                    Ok((Ok(columns), Ok(details), storage)) => {
                         selected.columns = columns;
                         selected.details = Some(details);
+                        // Storage is supplementary; a failure here (e.g.
+                        // no access to system.parts) must not fail the
+                        // whole load, so drop it to None rather than error.
+                        selected.storage = storage.ok().flatten();
                     }
-                    Ok((Err(error), _)) | Ok((_, Err(error))) => {
+                    Ok((Err(error), _, _)) | Ok((_, Err(error), _)) => {
                         selected.error = Some(error.to_string());
                     }
                     Err(error) => selected.error = Some(error.to_string()),
@@ -5639,6 +5669,33 @@ impl Workspace {
             .iter()
             .enumerate()
             .map(|(index, column)| {
+                // Per-column storage (Phase 8, Tier 1). 0 compressed
+                // bytes means the object holds no data (a view, or an
+                // empty table); show a dash rather than "0 B / NaNx".
+                let has_data = column.compressed_bytes > 0;
+                let compressed = if has_data {
+                    Self::format_bytes(column.compressed_bytes)
+                } else {
+                    "\u{2014}".to_string()
+                };
+                let uncompressed = if column.uncompressed_bytes > 0 {
+                    Self::format_bytes(column.uncompressed_bytes)
+                } else {
+                    "\u{2014}".to_string()
+                };
+                let ratio = if has_data {
+                    format!(
+                        "{:.1}x",
+                        column.uncompressed_bytes as f64 / column.compressed_bytes as f64
+                    )
+                } else {
+                    "\u{2014}".to_string()
+                };
+                let codec = if column.codec.is_empty() {
+                    "\u{2014}".to_string()
+                } else {
+                    column.codec.clone()
+                };
                 div()
                     .id(("schema-column", index))
                     .h(px(30.))
@@ -5650,8 +5707,11 @@ impl Workspace {
                     .border_color(theme::border())
                     .when(index % 2 == 1, |row| row.bg(rgb(0x1f2329)))
                     .child(
+                        // Preferred width, but allowed to shrink (and
+                        // truncate) on a narrow window so the storage
+                        // columns and codec are not pushed off the edge.
                         div()
-                            .w_1_3()
+                            .w(px(220.))
                             .min_w_0()
                             .overflow_hidden()
                             .whitespace_nowrap()
@@ -5660,12 +5720,56 @@ impl Workspace {
                     )
                     .child(
                         div()
-                            .flex_1()
+                            .w(px(300.))
                             .min_w_0()
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_color(theme::text_dim())
                             .child(type_highlight::styled(&column.type_name)),
+                    )
+                    .child(
+                        div()
+                            .w(px(100.))
+                            .flex_none()
+                            .pl_4()
+                            .text_right()
+                            .text_color(theme::text())
+                            .child(compressed),
+                    )
+                    .child(
+                        div()
+                            .w(px(100.))
+                            .flex_none()
+                            .pl_4()
+                            .text_right()
+                            .text_color(theme::text_dim())
+                            .child(uncompressed),
+                    )
+                    .child(
+                        div()
+                            .w(px(80.))
+                            .flex_none()
+                            .pl_4()
+                            .text_right()
+                            .text_color(theme::text_dim())
+                            .child(ratio),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            // A floor so CODEC keeps a usable width and it
+                            // is COLUMN/TYPE that shrink on a narrow window,
+                            // rather than the codec clipping off the edge.
+                            .min_w(px(230.))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .pl_4()
+                            .text_color(theme::text_dim())
+                            // Codec expressions read like nested type
+                            // calls (CODEC(Delta(8), ZSTD(1))), so the
+                            // type colorer highlights them the same way;
+                            // the plain "—" placeholder passes through dim.
+                            .child(type_highlight::styled(&codec)),
                     )
             })
             .collect::<Vec<_>>();
@@ -5846,8 +5950,66 @@ impl Workspace {
                         .border_color(theme::border())
                         .text_xs()
                         .text_color(theme::text_dim())
-                        .child(div().w_1_3().child("COLUMN"))
-                        .child(div().flex_1().child("TYPE")),
+                        .child(
+                            div()
+                                .w(px(220.))
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child("COLUMN"),
+                        )
+                        .child(div().w(px(300.)).min_w_0().overflow_hidden().child("TYPE"))
+                        .child(
+                            div()
+                                .w(px(100.))
+                                .flex_none()
+                                .pl_4()
+                                .text_right()
+                                .child("COMPRESSED"),
+                        )
+                        .child(
+                            div()
+                                .w(px(100.))
+                                .flex_none()
+                                .pl_4()
+                                .text_right()
+                                .child("UNCOMP."),
+                        )
+                        .child(
+                            div()
+                                .w(px(80.))
+                                .flex_none()
+                                .pl_4()
+                                .text_right()
+                                .child("RATIO"),
+                        )
+                        .child(div().flex_1().min_w(px(230.)).pl_4().child("CODEC")),
+                )
+                // Per-column bytes only exist for Wide parts; when the
+                // table is entirely Compact, explain the empty columns
+                // rather than leaving a wall of dashes (Phase 8).
+                .when_some(
+                    selected
+                        .storage
+                        .as_ref()
+                        .filter(|storage| storage.wide_parts == 0 && storage.compact_parts > 0),
+                    |body, storage| {
+                        body.child(
+                            div()
+                                .flex_none()
+                                .px_3()
+                                .py_1()
+                                .bg(theme::bg_sidebar())
+                                .border_b_1()
+                                .border_color(theme::border())
+                                .text_xs()
+                                .text_color(theme::text_dim())
+                                .child(format!(
+                                    "Per-column sizes need Wide parts; all {} parts are Compact \
+                                     (see the table ratio above).",
+                                    storage.compact_parts
+                                )),
+                        )
+                    },
                 )
                 .child(
                     div()
@@ -6052,6 +6214,32 @@ impl Workspace {
                                 } else {
                                     size.into_any_element()
                                 })
+                            })
+                            .when_some(selected.storage.as_ref(), |row, storage| {
+                                // Table-wide compression, always available
+                                // (Phase 8). Per-column sizes need Wide parts;
+                                // this ratio does not.
+                                let ratio = storage.uncompressed_bytes as f64
+                                    / storage.compressed_bytes.max(1) as f64;
+                                let raw = Self::format_bytes(storage.uncompressed_bytes);
+                                row.child(
+                                    div()
+                                        .id("object-compression")
+                                        .flex()
+                                        .gap_1()
+                                        .child(div().text_color(theme::text()).child("Ratio:"))
+                                        .child(
+                                            div()
+                                                .text_color(theme::text_dim())
+                                                .child(format!("{ratio:.2}x")),
+                                        )
+                                        .tooltip(move |window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(format!(
+                                                "{raw} uncompressed"
+                                            ))
+                                            .build(window, cx)
+                                        }),
+                                )
                             }),
                     ),
             )

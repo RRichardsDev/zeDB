@@ -42,6 +42,17 @@ pub struct SchemaObjectMeta {
 pub struct ColumnInfo {
     pub name: String,
     pub type_name: String,
+    /// Compressed bytes for this column across active parts
+    /// (`system.columns.data_compressed_bytes`). 0 for objects that
+    /// hold no data (views, empty tables).
+    pub compressed_bytes: u64,
+    /// Uncompressed bytes across active parts
+    /// (`system.columns.data_uncompressed_bytes`).
+    pub uncompressed_bytes: u64,
+    /// The column's compression codec expression
+    /// (`system.columns.compression_codec`), e.g. `CODEC(ZSTD(1))`;
+    /// empty when the column uses the table/server default.
+    pub codec: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +62,20 @@ pub struct ObjectDetails {
     pub sorting_key: String,
     pub primary_key: String,
     pub create_table_query: String,
+}
+
+/// Table-wide storage totals from the local node's active parts.
+/// Part-level compressed/uncompressed bytes are populated for every
+/// part type, so the compression ratio is always available, unlike the
+/// per-column bytes in `ColumnInfo`, which ClickHouse only tracks for
+/// Wide parts. The part-type counts let the UI explain when per-column
+/// sizes are missing because the parts are all Compact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableStorage {
+    pub compressed_bytes: u64,
+    pub uncompressed_bytes: u64,
+    pub wide_parts: u64,
+    pub compact_parts: u64,
 }
 
 impl ChClient {
@@ -145,12 +170,49 @@ impl ChClient {
         ))
     }
 
+    /// Table-wide compression from the local node's active parts. Part
+    /// bytes are tracked for every part type (Compact included), so this
+    /// is the always-available compression figure even when per-column
+    /// sizes are not. Returns None for objects with no parts (views,
+    /// dictionaries, empty tables).
+    pub async fn table_storage(
+        &self,
+        database: &str,
+        object: &str,
+    ) -> Result<Option<TableStorage>> {
+        let database = escape_string(database);
+        let object = escape_string(object);
+        let result = self
+            .query(&format!(
+                "SELECT sum(data_compressed_bytes), sum(data_uncompressed_bytes), \
+                        countIf(part_type = 'Wide'), countIf(part_type = 'Compact') \
+                 FROM system.parts \
+                 WHERE database = '{database}' AND table = '{object}' AND active"
+            ))
+            .await?;
+        let Some(row) = result.rows.first() else {
+            return Ok(None);
+        };
+        let compressed = optional_u64_at(row, 0, "compressed bytes")?.unwrap_or(0);
+        if compressed == 0 {
+            return Ok(None);
+        }
+        Ok(Some(TableStorage {
+            compressed_bytes: compressed,
+            uncompressed_bytes: optional_u64_at(row, 1, "uncompressed bytes")?.unwrap_or(0),
+            wide_parts: optional_u64_at(row, 2, "wide part count")?.unwrap_or(0),
+            compact_parts: optional_u64_at(row, 3, "compact part count")?.unwrap_or(0),
+        }))
+    }
+
     pub async fn list_columns(&self, database: &str, object: &str) -> Result<Vec<ColumnInfo>> {
         let database = escape_string(database);
         let object = escape_string(object);
         let result = self
             .query(&format!(
-                "SELECT name, type \
+                "SELECT name, type, \
+                        data_compressed_bytes, data_uncompressed_bytes, \
+                        compression_codec \
                  FROM system.columns \
                  WHERE database = '{database}' AND table = '{object}' \
                  ORDER BY position"
@@ -284,6 +346,9 @@ fn parse_columns(result: QueryResult) -> Result<Vec<ColumnInfo>> {
             Ok(ColumnInfo {
                 name: string_at(&row, 0, "column name")?,
                 type_name: string_at(&row, 1, "column type")?,
+                compressed_bytes: optional_u64_at(&row, 2, "compressed bytes")?.unwrap_or(0),
+                uncompressed_bytes: optional_u64_at(&row, 3, "uncompressed bytes")?.unwrap_or(0),
+                codec: string_at(&row, 4, "compression codec")?,
             })
         })
         .collect()

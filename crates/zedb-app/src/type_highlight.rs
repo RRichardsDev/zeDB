@@ -21,6 +21,10 @@ pub fn collapse(type_name: &str) -> String {
 }
 
 /// Container and modifier types: the structure around a payload.
+/// `CODEC` is here too: the columns tab reuses this colorer for codec
+/// expressions (`CODEC(Delta(8), ZSTD(1))`), where the `CODEC` wrapper
+/// is the structural keyword. It never appears in a type string, so
+/// listing it does not affect type coloring.
 const CONTAINERS: &[&str] = &[
     "Array",
     "Map",
@@ -32,6 +36,7 @@ const CONTAINERS: &[&str] = &[
     "SimpleAggregateFunction",
     "Variant",
     "Dynamic",
+    "CODEC",
 ];
 
 /// Highlight runs over a (single-line) type string: container types
