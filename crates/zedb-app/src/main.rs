@@ -664,6 +664,21 @@ impl Workspace {
                         cx.stop_propagation();
                         return;
                     }
+                    // cmd-. forces the schema completion menu open in the
+                    // active query editor, even with no prefix typed.
+                    if event.keystroke.modifiers.platform
+                        && event.keystroke.key == "."
+                        && this.show_query_editor
+                    {
+                        if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                            let editor = tab.editor.clone();
+                            editor.update(cx, |editor, cx| {
+                                editor.show_completion_menu(window, cx);
+                            });
+                            cx.stop_propagation();
+                            return;
+                        }
+                    }
                     // Tab cycles the connection form's fields.
                     if event.keystroke.key == "tab"
                         && this.form.is_some()

@@ -15,9 +15,13 @@ First round of real-use fixes.
   completed, and hovered like bare ones; the tokenizer had been
   treating them as opaque strings.
 - Column autocomplete for bare (unqualified) names: typing a column
-  offers the columns of every table in the query's scope, deduped by
-  name, and it works while you are still typing the SELECT list
-  before the FROM.
+  offers the columns of the tables in the current statement, deduped
+  by name, and it works while you are still typing the SELECT list
+  before the FROM. Suggestions, hover, and go-to are scoped to the
+  statement under the cursor, so other queries in the editor no
+  longer leak their tables in.
+- cmd-. opens the schema completion menu on demand, even before any
+  table or column letter is typed.
 - Hovering a column resolves it even without a table qualifier,
   showing db.table.column (column in italic) and its type in a
   roomier card.

@@ -2020,7 +2020,7 @@ impl EntityInputHandler for InputState {
         self.update_search(cx);
         self.mode.update_auto_grow(&self.text_wrapper);
         if !self.silent_replace_text {
-            self.handle_completion_trigger(&range, &new_text, window, cx);
+            self.handle_completion_trigger(&range, &new_text, false, window, cx);
         }
         cx.emit(InputEvent::Change);
         cx.notify();

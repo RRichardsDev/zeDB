@@ -115,13 +115,23 @@ impl InputState {
             return;
         };
         let range = cursor..cursor;
-        self.handle_completion_trigger(&range, &last.to_string(), window, cx);
+        self.handle_completion_trigger(&range, &last.to_string(), false, window, cx);
+    }
+
+    /// zeDB patch: open the completion menu on demand (a manual
+    /// trigger like cmd-.), regardless of the character before the
+    /// cursor, so suggestions appear before any table/column letter is
+    /// typed.
+    pub fn show_completion_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let cursor = self.cursor();
+        self.handle_completion_trigger(&(cursor..cursor), "", true, window, cx);
     }
 
     pub(crate) fn handle_completion_trigger(
         &mut self,
         range: &Range<usize>,
         new_text: &str,
+        force: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -140,7 +150,7 @@ impl InputState {
         let start = range.end;
         let new_offset = self.cursor();
 
-        if !provider.is_completion_trigger(start, new_text, cx) {
+        if !force && !provider.is_completion_trigger(start, new_text, cx) {
             return;
         }
 

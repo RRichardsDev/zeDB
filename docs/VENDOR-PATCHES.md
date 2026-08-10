@@ -106,3 +106,13 @@ through the affected UI.
   patch 7)
 - The stock `.p_1()` made schema hover cards (db.table.column + type)
   read as cramped; widened to `.px_2p5().py_1p5()`.
+
+## 9. Manual completion trigger
+
+- `src/input/lsp/completions.rs` (`show_completion_menu`,
+  `handle_completion_trigger` gains a `force` param) and its two
+  callers in `completions.rs` / `state.rs`
+- `show_completion_menu` opens the completion menu at the cursor
+  regardless of the character before it, so a manual trigger (zeDB
+  binds cmd-.) surfaces schema suggestions before any table/column
+  letter is typed. `force` skips the `is_completion_trigger` gate.

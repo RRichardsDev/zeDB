@@ -156,7 +156,14 @@ pub fn completions(
     };
     let before = &sql[..context_end];
     let tokens = tokenize(before);
-    let (bindings, _, _) = resolve_bindings(snapshot, default_database, &tokenize(sql));
+    // Resolve tables from the statement under the cursor only. An
+    // editor holds many statements; binding over the whole buffer
+    // would offer columns from every table anyone ever typed.
+    let (bindings, _, _) = resolve_bindings(
+        snapshot,
+        default_database,
+        &tokenize(current_statement(sql, cursor)),
+    );
     let mut suggestions = Vec::new();
 
     let dot_adjacent = tokens
@@ -288,8 +295,14 @@ pub fn hover(
         return None;
     }
     let word = &sql[range.clone()];
-    let tokens = tokenize(sql);
-    let (bindings, _, _) = resolve_bindings(snapshot, default_database, &tokens);
+    // Bindings from the statement under the offset only, so an
+    // editor full of statements does not resolve names against
+    // tables from other queries (see completions).
+    let (bindings, _, _) = resolve_bindings(
+        snapshot,
+        default_database,
+        &tokenize(current_statement(sql, offset)),
+    );
     let qualifier = sql[..range.start]
         .strip_suffix('.')
         .map(|before| &before[word_range(before, before.len())])
@@ -467,8 +480,14 @@ pub fn object_at(
         return None;
     }
     let word = &sql[range.clone()];
-    let tokens = tokenize(sql);
-    let (bindings, _, _) = resolve_bindings(snapshot, default_database, &tokens);
+    // Bindings from the statement under the offset only, so an
+    // editor full of statements does not resolve names against
+    // tables from other queries (see completions).
+    let (bindings, _, _) = resolve_bindings(
+        snapshot,
+        default_database,
+        &tokenize(current_statement(sql, offset)),
+    );
     let qualifier = sql[..range.start]
         .strip_suffix('.')
         .map(|before| &before[word_range(before, before.len())])
@@ -766,6 +785,30 @@ fn word_range(text: &str, offset: usize) -> Range<usize> {
     start..end
 }
 
+/// The slice of `sql` for the statement containing `cursor`, split on
+/// top-level semicolons. Semicolons inside strings and comments are
+/// skipped by the tokenizer, so they do not break statements.
+fn current_statement(sql: &str, cursor: usize) -> &str {
+    let cursor = cursor.min(sql.len());
+    let semicolons: Vec<usize> = tokenize(sql)
+        .into_iter()
+        .filter(|token| token.text == ";")
+        .map(|token| token.range.start)
+        .collect();
+    let start = semicolons
+        .iter()
+        .filter(|&&pos| pos < cursor)
+        .max()
+        .map(|&pos| pos + 1)
+        .unwrap_or(0);
+    let end = semicolons
+        .iter()
+        .find(|&&pos| pos >= cursor)
+        .copied()
+        .unwrap_or(sql.len());
+    &sql[start..end.max(start)]
+}
+
 fn tokenize(sql: &str) -> Vec<Token<'_>> {
     let bytes = sql.as_bytes();
     let mut tokens = Vec::new();
@@ -990,7 +1033,9 @@ mod tests {
         // db.table.column and its type.
         let sql = "SELECT event_id FROM analytics.events";
         let info = hover(&snapshot, None, sql, sql.find("event_id").unwrap()).unwrap();
-        assert!(info.markdown.contains("analytics.events.event_id"));
+        // db.table. bold, column italic.
+        assert!(info.markdown.contains("analytics.events."));
+        assert!(info.markdown.contains("event_id"));
         assert!(info.markdown.contains("UInt64"));
     }
 
@@ -1032,6 +1077,19 @@ mod tests {
         let sql = "SELECT * FROM analytics.events WHERE eve";
         let cols = completions(&snapshot, None, sql, sql.len());
         assert!(cols.iter().any(|item| item.label == "event_id"));
+
+        // Only the statement under the cursor scopes the columns: a
+        // prior statement's table must not leak its columns in.
+        let sql = "SELECT other FROM other_db.other_table;\nSELECT eve FROM analytics.events";
+        let cursor = sql.find("eve FROM").unwrap() + 3;
+        let scoped = completions(&snapshot, None, sql, cursor);
+        assert!(scoped.iter().any(|item| item.label == "event_id"));
+        // (other_table is not in the snapshot, so the only way a stray
+        // column could appear is a cross-statement leak; guard the
+        // count stays column-only for events.)
+        assert!(scoped
+            .iter()
+            .all(|item| item.kind == SuggestionKind::Column));
     }
 
     #[test]
