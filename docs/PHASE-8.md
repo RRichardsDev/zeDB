@@ -10,11 +10,17 @@ Status: PLANNED. Not started.
 
 ## Non-negotiables
 
-- **All logic, no AI.** The advisor is a deterministic rules engine, not
-  a model. No prompt plumbing, no agent hand-off. This is the product
-  spine (`docs/PRODUCT-PRINCIPLES.md`): explainable recommendations the
-  user chooses to apply, never a black box. It also makes the feature
-  smaller.
+- **Rules are the driver; AI is optional, never the main thing.** The
+  advisor is a deterministic rules engine and must work fully with zero
+  AI, that is the default and the core. An **optional** agent hand-off is
+  welcome for users who want it, exactly like the error bar's "ask agent"
+  flow (silent, opt-in, their own agent): e.g. "explain this suggestion"
+  or "ask my agent about this column." It is off by default, never
+  required, and never the driver. This keeps the product spine
+  (`docs/PRODUCT-PRINCIPLES.md`): explainable recommendations the user
+  chooses to apply, hands-on first, with the agent available where they
+  were already reaching for it, not an upsell. Building the rules first
+  also keeps the core feature small.
 - **Nothing heavy on the main thread.** Any work that touches data (the
   cardinality probe, any codec trial) runs through the existing async
   ClickHouse query path and delivers results back to the entity; it must
