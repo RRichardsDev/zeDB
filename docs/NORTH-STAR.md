@@ -98,6 +98,8 @@ hop from the EXPLAIN work already shipped. The existing "ask your agent"
 error flow is the template for an optional "explain this slow query"
 hand-off.
 
+**This is now Phase 9 (Part A); the plan is `docs/PHASE-9.md`.**
+
 ### 3. Make the invisible MergeTree machinery visible
 
 Parts, merges, mutations, TTL: opaque in every other tool.
@@ -115,6 +117,8 @@ Parts, merges, mutations, TTL: opaque in every other tool.
 Why first-in-class: this is the storage-side twin of the ops view,
 which already fans across shards. Same read-and-render muscle.
 
+**This is now Phase 9 (Part B); the plan is `docs/PHASE-9.md`.**
+
 ### 4. Materialized-view & projection DAG
 
 MVs and projections are ClickHouse's secret weapon and totally opaque
@@ -124,12 +128,17 @@ what is stale. We already render trees (EXPLAIN, schema); this is the
 same rendering with a dependency query behind it
 (`system.tables.dependencies_table`, MV `as_select`).
 
+**This is now Phase 9 (Part C); the plan is `docs/PHASE-9.md`.**
+
 ### 5. Live tail
 
 ClickHouse eats logs and events. A `tail -f` on a table: poll new rows
 by a monotonic key, or `WATCH` a live view. Turns the explorer into a
 real-time console. The streaming execution path is already built for
 exactly this cadence.
+
+**This is now Phase 10; the plan (with the poll-over-HTTP decision) is
+`docs/PHASE-10.md`.**
 
 ### 6. ClickHouse-correct migrations (the drift -> migration roadmap)
 
