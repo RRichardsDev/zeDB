@@ -2103,13 +2103,20 @@ impl InputState {
 
         let carets = multi_edit_carets(&ranges, new_text.len());
 
-        // Apply right-to-left so each edit's byte offsets are still
-        // valid; clear extras first so the per-edit remap is a no-op
-        // and the guard in replace_text_in_range does not re-enter.
-        self.extra_selections.clear();
+        // Batched multi-edit. Running the full per-edit machinery of
+        // `replace_text_in_range` once per cursor (tree-sitter reparse,
+        // lsp update, search rescan, a whole-rope history clone, and an
+        // InputEvent::Change) made large multi-cursor edits stall the
+        // main thread: N cursors x M keystrokes of O(document) work.
+        // Instead apply the N text changes with only the cheap,
+        // per-edit-necessary incremental line rewrap, then run the
+        // expensive document-wide work exactly ONCE below. Edits go
+        // right-to-left so each range stays valid as earlier text moves.
+        let new_rope = Rope::from(new_text);
+        let old_text = self.text.clone();
         for range in ranges.iter().rev() {
-            let range_utf16 = self.range_to_utf16(range);
-            self.replace_text_in_range_silent(Some(range_utf16), new_text, window, cx);
+            self.text.replace(range.clone(), new_text);
+            self.text_wrapper.update(&self.text, range, &new_rope, cx);
         }
 
         let mut carets = carets;
@@ -2120,6 +2127,22 @@ impl InputState {
             .into_iter()
             .map(|caret| Selection::new(caret, caret))
             .collect();
+
+        // One history entry for the whole multi-edit, so a single undo
+        // reverts every cursor's change together (previously N entries).
+        self.push_history(&old_text, &(0..old_text.len()), &self.text.to_string());
+        self.history.end_grouping();
+
+        if let Some(diagnostics) = self.mode.diagnostics_mut() {
+            diagnostics.reset(&self.text)
+        }
+        // The expensive work, once for the whole edit.
+        self.mode.rehighlight_all(&self.text);
+        self.lsp.update(&self.text, window, cx);
+        self.update_preferred_column();
+        self.update_search(cx);
+        self.mode.update_auto_grow(&self.text_wrapper);
+        cx.emit(InputEvent::Change);
         cx.notify();
     }
 

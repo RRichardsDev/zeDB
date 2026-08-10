@@ -7,6 +7,13 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Multi-cursor edits with many cursors no longer stall the editor: a
+  keystroke now does its document-wide work (re-highlight, etc.) once
+  for the whole edit instead of once per cursor. A multi-cursor edit
+  is also a single undo now, reverting every cursor together.
+
 ## v0.1.18 - 2026-08-10
 
 Multi-cursor comes to the SQL editor.

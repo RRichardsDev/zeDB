@@ -134,7 +134,13 @@ under `src/input/`:
 - `state.rs`: `extra_selections: Vec<Selection>` beside the primary
   `selected_range`, plus `multi_anchor`. `selection_set`,
   `is_multi_selection`, `map_extra_selections`, `multi_replace_ranges`
-  (one logical edit across every selection), the `SelectNextOccurrence`
+  (one logical edit across every selection: it applies the N text
+  changes with only the cheap incremental line rewrap per edit, then
+  runs the expensive document-wide work (reparse via `rehighlight_all`,
+  lsp, search, one whole-doc history entry, one Change event) ONCE, so
+  a big multi-edit is O(document) per keystroke, not O(cursors x
+  document); also gives a single undo across all cursors), the
+  `SelectNextOccurrence`
   action + `cmd-d`/`ctrl-d` binding and its `select_next_occurrence`
   handler, backspace/delete fan-out, and the Escape / plain-click
   collapse back to one cursor. `replace_text_in_range` guards for
@@ -143,6 +149,9 @@ under `src/input/`:
   cursor (`collapse_multi_to_edge`), then once collapsed move every
   cursor together one grapheme at a time (`move_multi_cursors`,
   `is_multi_collapsed`), deduping collisions.
+- `mode.rs`: `rehighlight_all` re-highlights the whole document in one
+  pass reusing the compiled query (patch #5's `replace_all`), for the
+  batched multi-edit above.
 - `element.rs`: a caret at the head of every extra cursor, computed in
   `layout_cursor` with the same line-walk / scroll / vertical centering
   as the primary, carried on `PrepaintState.extra_cursor_bounds` and

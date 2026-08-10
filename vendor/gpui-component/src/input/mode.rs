@@ -246,6 +246,28 @@ impl InputMode {
         }
     }
 
+    /// zeDB patch (multi-cursor): re-highlight the whole document in one
+    /// pass, reusing the already-compiled query (patch #5's
+    /// `replace_all`), no per-edit incremental InputEdit. The batched
+    /// multi-cursor edit applies N text changes and then calls this once
+    /// instead of running `update_highlighter` per cursor.
+    pub(super) fn rehighlight_all(&mut self, text: &Rope) {
+        if let InputMode::CodeEditor {
+            language,
+            highlighter,
+            ..
+        } = self
+        {
+            let mut highlighter = highlighter.borrow_mut();
+            if highlighter.is_none() {
+                highlighter.replace(SyntaxHighlighter::new(language));
+            }
+            if let Some(highlighter) = highlighter.as_mut() {
+                highlighter.replace_all(text);
+            }
+        }
+    }
+
     #[allow(unused)]
     pub(super) fn diagnostics(&self) -> Option<&DiagnosticSet> {
         match self {
