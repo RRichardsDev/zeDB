@@ -7,7 +7,7 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.20 - 2026-08-10
 
 - Copying cells from the results grid now pastes cleanly into Excel,
   Google Sheets, and Numbers: the default copy (cmd-C) is tab-separated,
