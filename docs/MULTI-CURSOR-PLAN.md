@@ -103,13 +103,16 @@ empty everywhere, so behavior is unchanged; verified by workspace
 tests and a manual editing pass. `selection_set` /
 `is_multi_selection` in place for stage 2.
 
-**Stage 2 — Render N.**
-`element.rs` paint loop emits a caret and selection rect per
-selection instead of one. Still only ever one selection in the vec,
-so it still looks identical, but the renderer is now capable. Verify:
-seed a second selection in a test/debug path and confirm two carets
-and two highlights paint at the right places, including across
-wrapped/scrolled lines.
+**Stage 2 — Render N highlights. DONE.**
+Added `layout_extra_selections` (reuses `layout_match_range`) and an
+`extra_selection_paths` field on `PrepaintState`, painted with the
+selection color next to the primary. Verified by temporarily seeding
+two extra selections: two highlights painted at the right offsets;
+seed then reverted. Refinement: **per-cursor caret rendering is
+deferred to stage 5**, where collapsed bare cursors first exist.
+During cmd-D the extras are non-empty words, so the highlight is what
+you see; the caret/scroll math is avoided here to keep stage 2
+low-risk.
 
 **Stage 3 — Edit across N.**
 insert / backspace / delete / delete-to-word / paste build their

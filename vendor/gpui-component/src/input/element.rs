@@ -473,6 +473,46 @@ impl TextElement {
         Self::layout_match_range(range, &last_layout, bounds)
     }
 
+    /// zeDB patch (multi-cursor): highlight paths for every non-empty
+    /// extra selection, using the same range->path machinery as the
+    /// primary. Bare (collapsed) extra cursors render in a later
+    /// stage; during cmd-D the extras are non-empty words.
+    fn layout_extra_selections(
+        &self,
+        last_layout: &LastLayout,
+        bounds: &mut Bounds<Pixels>,
+        cx: &mut App,
+    ) -> Vec<Path<Pixels>> {
+        let state = self.state.read(cx);
+        if state.extra_selections.is_empty() {
+            return Vec::new();
+        }
+        let masked = state.masked;
+        let selections = state.extra_selections.clone();
+        let mut paths = Vec::new();
+        for selection in selections {
+            if selection.is_empty() {
+                continue;
+            }
+            let (mut start, mut end) = if selection.start < selection.end {
+                (selection.start, selection.end)
+            } else {
+                (selection.end, selection.start)
+            };
+            if masked {
+                let state = self.state.read(cx);
+                start = state.text.offset_to_char_index(start);
+                end = state.text.offset_to_char_index(end);
+            }
+            let range = start.max(last_layout.visible_range_offset.start)
+                ..end.min(last_layout.visible_range_offset.end);
+            if let Some(path) = Self::layout_match_range(range, last_layout, bounds) {
+                paths.push(path);
+            }
+        }
+        paths
+    }
+
     /// Calculate the visible range of lines in the viewport.
     ///
     /// Returns
@@ -804,6 +844,9 @@ pub(super) struct PrepaintState {
     /// row index (zero based), no wrap, same line as the cursor.
     current_row: Option<usize>,
     selection_path: Option<Path<Pixels>>,
+    /// zeDB patch (multi-cursor): highlight paths for the extra
+    /// selections beyond the primary. Empty in single-cursor mode.
+    extra_selection_paths: Vec<Path<Pixels>>,
     hover_highlight_path: Option<Path<Pixels>>,
     search_match_paths: Vec<(Path<Pixels>, bool)>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
@@ -1164,6 +1207,7 @@ impl Element for TextElement {
 
         let search_match_paths = self.layout_search_matches(&last_layout, &mut bounds, cx);
         let selection_path = self.layout_selections(&last_layout, &mut bounds, cx);
+        let extra_selection_paths = self.layout_extra_selections(&last_layout, &mut bounds, cx);
         let hover_highlight_path = self.layout_hover_highlight(&last_layout, &mut bounds, cx);
         let document_color_paths =
             self.layout_document_colors(&document_colors, &last_layout, &bounds);
@@ -1228,6 +1272,7 @@ impl Element for TextElement {
             cursor_scroll_offset,
             current_row,
             selection_path,
+            extra_selection_paths,
             search_match_paths,
             hover_highlight_path,
             hover_definition_hitbox,
@@ -1346,6 +1391,11 @@ impl Element for TextElement {
             }
 
             if let Some(path) = prepaint.selection_path.take() {
+                window.paint_path(path, cx.theme().selection);
+            }
+
+            // zeDB patch (multi-cursor): the extra selections' highlights.
+            for path in prepaint.extra_selection_paths.drain(..) {
                 window.paint_path(path, cx.theme().selection);
             }
 
