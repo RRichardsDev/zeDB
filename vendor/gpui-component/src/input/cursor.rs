@@ -73,9 +73,25 @@ impl RangeBounds<usize> for Selection {
     }
 }
 
+/// zeDB patch (multi-cursor): given non-overlapping edit ranges
+/// sorted ascending by start, each replaced with `new_len` bytes, the
+/// resulting caret offset for each edit, accounting for the
+/// cumulative length shift of the edits to its left. The analytic
+/// counterpart to applying the edits right-to-left.
+pub fn multi_edit_carets(ranges: &[Range<usize>], new_len: usize) -> Vec<usize> {
+    let mut carets = Vec::with_capacity(ranges.len());
+    let mut delta: isize = 0;
+    for range in ranges {
+        let start = (range.start as isize + delta).max(0) as usize;
+        carets.push(start + new_len);
+        delta += new_len as isize - (range.end - range.start) as isize;
+    }
+    carets
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Selection;
+    use super::{multi_edit_carets, Selection};
     use crate::input::Position;
 
     #[test]
@@ -103,5 +119,15 @@ mod tests {
         // An offset inside the replaced span clamps to end of insert.
         let inside = Selection::new(6, 7).mapped_through_edit(5, 3, 4);
         assert_eq!((inside.start, inside.end), (9, 9));
+    }
+
+    #[test]
+    fn multi_edit_carets_account_for_left_shift() {
+        // Type "x" (len 1) over two 6-byte words at 7 and 20.
+        assert_eq!(multi_edit_carets(&[7..13, 20..26], 1), vec![8, 16]);
+        // Delete (len 0) two single chars at 3 and 9.
+        assert_eq!(multi_edit_carets(&[3..4, 9..10], 0), vec![3, 8]);
+        // Insert at carets (empty ranges): each shifts the next.
+        assert_eq!(multi_edit_carets(&[2..2, 5..5], 3), vec![5, 11]);
     }
 }

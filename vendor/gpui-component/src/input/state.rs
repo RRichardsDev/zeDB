@@ -31,6 +31,7 @@ use crate::input::{
     search::{self, SearchPanel},
     text_wrapper::LineLayout,
 };
+use crate::input::cursor::multi_edit_carets;
 use crate::input::{InlineCompletion, RopeExt as _, Selection};
 use crate::{Root, history::History};
 use crate::{highlighter::DiagnosticSet, input::text_wrapper::LineItem};
@@ -1052,6 +1053,25 @@ impl InputState {
     }
 
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        // zeDB patch (multi-cursor): each cursor deletes its own char
+        // (or its selection), then multi-replace with empty.
+        if self.is_multi_selection() {
+            let ranges = self
+                .selection_set()
+                .into_iter()
+                .map(|selection| {
+                    let range = Range::from(selection);
+                    if range.is_empty() {
+                        self.previous_boundary(range.start)..range.start
+                    } else {
+                        range
+                    }
+                })
+                .collect();
+            self.multi_replace_ranges(ranges, "", window, cx);
+            self.pause_blink_cursor(cx);
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.previous_boundary(self.cursor()), cx)
         }
@@ -1060,6 +1080,23 @@ impl InputState {
     }
 
     pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_multi_selection() {
+            let ranges = self
+                .selection_set()
+                .into_iter()
+                .map(|selection| {
+                    let range = Range::from(selection);
+                    if range.is_empty() {
+                        range.end..self.next_boundary(range.end)
+                    } else {
+                        range
+                    }
+                })
+                .collect();
+            self.multi_replace_ranges(ranges, "", window, cx);
+            self.pause_blink_cursor(cx);
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.next_boundary(self.cursor()), cx)
         }
@@ -1935,9 +1972,54 @@ impl InputState {
     }
 
     /// zeDB patch (multi-cursor): more than the primary cursor active.
-    #[allow(dead_code)]
     pub(super) fn is_multi_selection(&self) -> bool {
         !self.extra_selections.is_empty()
+    }
+
+    /// zeDB patch (multi-cursor): replace every given byte range with
+    /// `new_text` in one logical edit, leaving a caret at the end of
+    /// each. Ranges are normalized, sorted, and deduped. The text is
+    /// mutated right-to-left so earlier offsets stay valid, while the
+    /// resulting carets are computed analytically
+    /// (`multi_edit_carets`). The primary is the first caret; the rest
+    /// become the extra cursors.
+    pub(super) fn multi_replace_ranges(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+        new_text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut ranges: Vec<Range<usize>> = ranges
+            .into_iter()
+            .map(|range| range.start.min(range.end)..range.start.max(range.end))
+            .collect();
+        ranges.sort_by_key(|range| range.start);
+        ranges.dedup();
+        if ranges.is_empty() {
+            return;
+        }
+
+        let carets = multi_edit_carets(&ranges, new_text.len());
+
+        // Apply right-to-left so each edit's byte offsets are still
+        // valid; clear extras first so the per-edit remap is a no-op
+        // and the guard in replace_text_in_range does not re-enter.
+        self.extra_selections.clear();
+        for range in ranges.iter().rev() {
+            let range_utf16 = self.range_to_utf16(range);
+            self.replace_text_in_range_silent(Some(range_utf16), new_text, window, cx);
+        }
+
+        let mut carets = carets;
+        let primary = carets.remove(0);
+        self.selected_range = (primary..primary).into();
+        self.selection_reversed = false;
+        self.extra_selections = carets
+            .into_iter()
+            .map(|caret| Selection::new(caret, caret))
+            .collect();
+        cx.notify();
     }
 
     /// Replace text in range in silent.
@@ -2010,6 +2092,27 @@ impl EntityInputHandler for InputState {
         }
 
         self.pause_blink_cursor(cx);
+
+        // zeDB patch (multi-cursor): when this edit targets "the
+        // current selection" (no explicit range, no IME), fan it out
+        // to every cursor so typing replaces them all. An edit at an
+        // explicit different range stays single.
+        if self.is_multi_selection() && self.ime_marked_range.is_none() {
+            let targets_primary = range_utf16
+                .as_ref()
+                .map(|range_utf16| self.range_from_utf16(range_utf16))
+                .map(|range| range == Range::from(self.selected_range))
+                .unwrap_or(true);
+            if targets_primary {
+                let ranges = self
+                    .selection_set()
+                    .into_iter()
+                    .map(Range::from)
+                    .collect();
+                self.multi_replace_ranges(ranges, new_text, window, cx);
+                return;
+            }
+        }
 
         let range = range_utf16
             .as_ref()

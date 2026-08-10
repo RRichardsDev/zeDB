@@ -114,13 +114,19 @@ During cmd-D the extras are non-empty words, so the highlight is what
 you see; the caret/scroll math is avoided here to keep stage 2
 low-risk.
 
-**Stage 3 — Edit across N.**
-insert / backspace / delete / delete-to-word / paste build their
-change list over all selections and go through the mapping helper;
-cursors land correctly after. Suspend IME composition while there is
-more than one selection (IME only makes sense with one). Verify:
-with two seeded selections, typing/backspace/paste updates both and
-offsets stay correct.
+**Stage 3 — Edit across N. DONE.**
+`multi_replace_ranges` replaces every selection's range with the new
+text in one logical edit: text mutated right-to-left (offsets stay
+valid), carets computed analytically by the unit-tested
+`multi_edit_carets`, primary = first caret, rest become extras. The
+monolith `replace_text_in_range` guards for "targets the current
+selection" (no explicit range / no IME) and fans out; backspace and
+delete expand each cursor to its neighbor char then multi-replace.
+Verified with a temporary word-occurrence seed: typing replaced all,
+backspace deleted all, offsets correct; scaffolding reverted.
+Not yet done: paste-across-N (insert uses an explicit range, stays
+single) and single-undo grouping (currently one history entry per
+sub-edit) — deferred to polish. IME stays single (guard excludes it).
 
 **Stage 4 — cmd-D.**
 New action + binding. First press: select word under primary cursor
