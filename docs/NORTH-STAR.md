@@ -156,6 +156,14 @@ first-in-class on its own. This is where the migration-manager half of
 the product and the explorer half meet: the storage and query advisors
 (1 and 2) produce the very `ALTER`s this would stage safely.
 
+**Held as vision only, deliberately not a phase yet.** Starting
+2026-08-11 the `analytics-clickhouse-ddl` repo goes into production
+battle-testing; the real kinks in the migration chain will surface
+there and get ported into zeDB. This feature's requirements should be
+driven by that lived experience, not designed ahead of it. Revisit
+promoting it to a phase once the production kinks are known. Phases 8-10
+cover the explorer differentiators (1-5); this one waits.
+
 ## Where to start
 
 **#1 and #2** are the highest reward for the least new infrastructure,
