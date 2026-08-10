@@ -6799,6 +6799,21 @@ impl Render for Workspace {
                     grid.update(cx, |grid, cx| grid.header_sort_action(action, cx));
                 }
             }))
+            // The grid's right-click Copy / Copy as CSV menu dispatches
+            // to the window root, so handle it here and delegate to the
+            // active tab's grid (cmd-C is handled on the grid itself).
+            .on_action(cx.listener(|this, _: &grid_spike::Copy, _, cx| {
+                if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                    let grid = tab.result_grid.clone();
+                    grid.update(cx, |grid, cx| grid.copy_selected(cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &grid_spike::CopyAsCsv, _, cx| {
+                if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                    let grid = tab.result_grid.clone();
+                    grid.update(cx, |grid, cx| grid.copy_selected_csv(cx));
+                }
+            }))
             .on_action(
                 cx.listener(|this, action: &grid_spike::HeaderFilter, window, cx| {
                     this.open_column_filter(action.column.clone(), window, cx)

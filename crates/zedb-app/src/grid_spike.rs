@@ -15,7 +15,7 @@ use gpui_component::Sizable as _;
 use std::collections::HashMap;
 use zedb_core::{ColumnMeta, Value};
 
-actions!(grid_spike, [Copy, SelectAll]);
+actions!(grid_spike, [Copy, CopyAsCsv, SelectAll]);
 
 /// A header interaction asking the owning tab to rewrite the query.
 pub enum GridEvent {
@@ -527,36 +527,52 @@ impl GridSpike {
         }
     }
 
-    fn copy_selected(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(selection) = self.selected else {
-            return;
-        };
-        // A single cell copies its bare value; a region copies as CSV,
-        // led by the selected columns' header row, so it pastes into a
-        // spreadsheet with labels intact.
-        let text = if selection.is_single() {
+    /// Build the clipboard text for the current selection with the
+    /// given field delimiter. A single cell copies its bare value; a
+    /// region is led by the selected columns' header row so it pastes
+    /// into a spreadsheet with labels intact.
+    fn selection_delimited(&self, selection: Selection, delim: char) -> String {
+        if selection.is_single() {
             let (row, col) = selection.focus;
-            self.cell_clipboard(row, col)
-        } else {
-            let mut lines: Vec<String> = Vec::new();
+            return self.cell_clipboard(row, col);
+        }
+        let mut lines: Vec<String> = Vec::new();
+        lines.push(
+            selection
+                .cols()
+                .map(|col| delimited_field(&self.header(col), delim))
+                .collect::<Vec<_>>()
+                .join(&delim.to_string()),
+        );
+        for row in selection.rows() {
             lines.push(
                 selection
                     .cols()
-                    .map(|col| csv_field(&self.header(col)))
+                    .map(|col| delimited_field(&self.cell_clipboard(row, col), delim))
                     .collect::<Vec<_>>()
-                    .join(","),
+                    .join(&delim.to_string()),
             );
-            for row in selection.rows() {
-                lines.push(
-                    selection
-                        .cols()
-                        .map(|col| csv_field(&self.cell_clipboard(row, col)))
-                        .collect::<Vec<_>>()
-                        .join(","),
-                );
-            }
-            lines.join("\n")
+        }
+        lines.join("\n")
+    }
+
+    /// Default copy (cmd-C): tab-separated, so it pastes straight into
+    /// Excel / Sheets / Numbers columns (a plain paste splits on tab,
+    /// not comma). Real CSV files come from Export; "Copy as CSV" on the
+    /// right-click menu covers the explicit-CSV case.
+    pub fn copy_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(selection) = self.selected else {
+            return;
         };
+        let text = self.selection_delimited(selection, '\t');
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
+    pub fn copy_selected_csv(&mut self, cx: &mut Context<Self>) {
+        let Some(selection) = self.selected else {
+            return;
+        };
+        let text = self.selection_delimited(selection, ',');
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
@@ -1164,8 +1180,12 @@ fn literal_pretty(value: &Value, indent: usize, out: &mut String) {
 
 /// RFC-4180 CSV field: quote when it contains a comma, quote, CR, or
 /// LF, doubling any interior quotes.
-fn csv_field(value: &str) -> String {
-    if value.contains([',', '"', '\n', '\r']) {
+/// One field for a `delim`-separated row. Quote (RFC-4180 style, which
+/// Excel honors on paste too) only when the value contains the
+/// delimiter, a quote, or a newline. Used for both TSV (tab) and CSV
+/// (comma).
+fn delimited_field(value: &str, delim: char) -> String {
+    if value.contains([delim, '"', '\n', '\r']) {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value.to_string()
@@ -1296,6 +1316,26 @@ impl Render for GridSpike {
                                             cx.notify();
                                         }
                                     }))
+                                    // Right-click selects the cell if it is
+                                    // outside the current selection, then opens
+                                    // the copy menu; an existing region is kept
+                                    // so the menu copies the whole region.
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(move |this: &mut GridSpike, _, window, cx| {
+                                            let inside =
+                                                this.selected.is_some_and(|s| s.contains(row, col));
+                                            if !inside {
+                                                this.selected = Some(Selection::cell((row, col)));
+                                            }
+                                            window.focus(&this.focus_handle);
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .context_menu(move |menu, _, _| {
+                                        menu.menu("Copy", Box::new(Copy))
+                                            .menu("Copy as CSV", Box::new(CopyAsCsv))
+                                    })
                                     .map(|d| match temporal {
                                         Some((date, time)) => d
                                             .flex()
@@ -1722,7 +1762,8 @@ impl Render for GridSpike {
                     cx.notify();
                 }
             }))
-            .on_action(cx.listener(Self::copy_selected))
+            .on_action(cx.listener(|this, _: &Copy, _, cx| this.copy_selected(cx)))
+            .on_action(cx.listener(|this, _: &CopyAsCsv, _, cx| this.copy_selected_csv(cx)))
             .on_action(cx.listener(Self::select_all))
             // The list consumes wheel events; repaint so the header can
             // mirror its horizontal offset.

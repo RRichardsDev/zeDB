@@ -7,6 +7,15 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Copying cells from the results grid now pastes cleanly into Excel,
+  Google Sheets, and Numbers: the default copy (cmd-C) is tab-separated,
+  which spreadsheets split into columns on a plain paste (comma-separated
+  text did not). Right-click a cell for a menu with Copy and Copy as CSV
+  when you specifically want the comma format; right-clicking a cell
+  outside the current selection selects it first.
+
 ## v0.1.19 - 2026-08-10
 
 - Multi-cursor edits with many cursors no longer stall the editor: a
