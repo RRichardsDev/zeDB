@@ -41,11 +41,12 @@ Status: PLANNED. Not started.
   column's distinct estimate in a single scan. `uniqCombined` is
   approximate and cheap-ish; still a full scan, so opt-in + cached +
   async. Distinct-ratio = distinct / total_rows.
-- **Real measurement (Tier 3, optional)**: trial a candidate codec by
-  creating a temp table with that codec, inserting a sample, and reading
-  back the compressed size. Turns a heuristic estimate into a measured
-  one. Also off-thread. This is where the real complexity lives; not
-  needed to ship.
+- **Real measurement (Tier 3)**: trial a candidate codec by creating a
+  temp table with that codec, inserting a sample, and reading back the
+  compressed size. Turns a heuristic estimate into a measured one. Also
+  off-thread. This is where the real complexity lives, but it is part of
+  Phase 8, not a someday-maybe: the advisor's numbers should ultimately
+  be measured, not guessed.
 
 ## The rules engine (pure logic)
 
@@ -67,7 +68,11 @@ Start with a few high-confidence rules only:
 Size-drop estimate in Tier 2 is heuristic and must be labelled as such
 ("typically ~Nx"); Tier 3 replaces it with a measured number.
 
-## Tiers (each shippable on its own)
+## Tiers (all three are Phase 8; each is shippable on its own)
+
+Phase 8 delivers all three. They are sequenced, not optional: ship Tier
+1, then Tier 2, then Tier 3, each releasable on its way so the phase
+lands in usable increments rather than one big drop.
 
 **Tier 1 — see your compression.** One `system.columns` query; render
 compressed / uncompressed / ratio / codec in the existing columns tab.
@@ -78,9 +83,13 @@ cached) and the rules engine with copyable `ALTER` DDL. The "whoa." The
 rules are little code; the effort is honest thresholds.
 
 **Tier 3 — measured, not estimated.** Codec trial via temp table for
-real size numbers. Optional, later. Where the complexity is.
+real size numbers, replacing Tier 2's heuristic estimates with measured
+ones. This is where the complexity is, and it is what makes the advisor
+trustworthy rather than hand-wavy, so the phase is not done until it
+lands.
 
-Recommended first bite: **Tier 1** in one sitting, ship it, then Tier 2.
+Sequencing: **Tier 1** first (one sitting, ship it), then Tier 2, then
+Tier 3.
 
 ## Threading
 
