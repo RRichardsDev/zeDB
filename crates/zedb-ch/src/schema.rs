@@ -254,6 +254,85 @@ impl ChClient {
             .collect()
     }
 
+    /// Measure the actual size difference between a column's current
+    /// definition and a proposed one (Phase 8, Tier 3). Builds a throwaway
+    /// table with two columns, `base` and `cand`, holding the same sample
+    /// of the column's data under each definition, reads back their
+    /// compressed sizes, and drops the table. Returns how many times
+    /// smaller `cand` is than `base` (e.g. 4.8 for "4.8x smaller"), or None
+    /// if it cannot be measured. WRITES to the server, so callers must
+    /// gate this to writable connections. The table is forced to Wide parts
+    /// so per-column bytes are populated, and dropped even on failure.
+    pub async fn measure_codec_savings(
+        &self,
+        database: &str,
+        object: &str,
+        column: &str,
+        base_def: &str,
+        cand_def: &str,
+        trial_name: &str,
+    ) -> Result<Option<f64>> {
+        // A sample large enough to be representative but cheap to write.
+        const SAMPLE_ROWS: u64 = 200_000;
+        let db = escape_identifier(database);
+        let table = escape_identifier(object);
+        let col = escape_identifier(column);
+        let trial = escape_identifier(trial_name);
+        let drop_sql = format!("DROP TABLE IF EXISTS {db}.{trial}");
+
+        // DDL/DML must use `execute` (no result), not `query`: `query`
+        // decodes the response as RowBinary and would error on the empty
+        // body a CREATE/INSERT/DROP returns, aborting before cleanup and
+        // orphaning the table. Only the measurement SELECT uses `query`.
+        //
+        // Clean up any leftover from an interrupted run, then build.
+        let _ = self.execute(&drop_sql).await;
+        self.execute(&format!(
+            "CREATE TABLE {db}.{trial} (base {base_def}, cand {cand_def}) \
+             ENGINE = MergeTree ORDER BY tuple() \
+             SETTINGS min_bytes_for_wide_part = 0"
+        ))
+        .await?;
+
+        let measured = async {
+            self.execute(&format!(
+                "INSERT INTO {db}.{trial} \
+                 SELECT {col}, {col} FROM {db}.{table} LIMIT {SAMPLE_ROWS}"
+            ))
+            .await?;
+            self.query(&format!(
+                "SELECT column, sum(column_data_compressed_bytes) \
+                 FROM system.parts_columns \
+                 WHERE database = '{}' AND table = '{}' AND active \
+                 GROUP BY column",
+                escape_string(database),
+                escape_string(trial_name)
+            ))
+            .await
+        }
+        .await;
+
+        // Always drop the trial table, even if the measurement failed.
+        let _ = self.execute(&drop_sql).await;
+
+        let result = measured?;
+        let mut base_bytes = 0u64;
+        let mut cand_bytes = 0u64;
+        for row in &result.rows {
+            let name = string_at(row, 0, "trial column name")?;
+            let bytes = optional_u64_at(row, 1, "trial column bytes")?.unwrap_or(0);
+            match name.as_str() {
+                "base" => base_bytes = bytes,
+                "cand" => cand_bytes = bytes,
+                _ => {}
+            }
+        }
+        if cand_bytes == 0 || base_bytes == 0 {
+            return Ok(None);
+        }
+        Ok(Some(base_bytes as f64 / cand_bytes as f64))
+    }
+
     pub async fn object_details(&self, database: &str, object: &str) -> Result<ObjectDetails> {
         let database = escape_string(database);
         let object = escape_string(object);

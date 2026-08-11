@@ -229,6 +229,11 @@ struct ConnectedCluster {
     active_node: usize,
     active_endpoint: String,
     client_config: ChConfig,
+    /// When set, schema-changing actions (applying a storage suggestion)
+    /// run `ON CLUSTER <name>` so they reach every node, not just the
+    /// active one. None = the active node only. Chosen from the node
+    /// selector, defaults to node scope.
+    apply_cluster: Option<String>,
 }
 
 #[derive(Clone)]
@@ -260,6 +265,14 @@ fn differentiating_cluster(
 #[action(no_json, no_register)]
 struct SelectNode {
     index: usize,
+}
+
+/// Choose the apply scope from the node selector: `Some(cluster)` runs
+/// schema changes `ON CLUSTER`, `None` returns to the active node only.
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct SetApplyCluster {
+    cluster: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -361,6 +374,17 @@ struct SelectedSchemaObject {
     cardinality_loading: bool,
     /// The probe failed (e.g. a column type `uniqCombined` rejects).
     cardinality_error: Option<String>,
+    /// Waiting for the user to confirm that analysing may write temporary
+    /// tables (only asked on writable connections, where measurement runs).
+    cardinality_confirming: bool,
+    /// Measured savings per column index (Tier 3): how many times smaller
+    /// the suggested definition is than the current one. Filled in the
+    /// background after analysis, only on writable connections.
+    measured: HashMap<usize, f64>,
+    /// The column index whose suggestion is currently being applied.
+    applying: Option<usize>,
+    /// The in-flight apply has run long enough to show a spinner.
+    applying_slow: bool,
     ddl_editor: Entity<InputState>,
     engine_editor: Entity<InputState>,
     tab: ObjectInspectorTab,
@@ -500,6 +524,14 @@ struct Workspace {
     /// (connection, database, object). Once a table has been analyzed
     /// its distinct counts auto-load on reopen without re-prompting.
     cardinality_cache: HashMap<(String, String, String), Vec<u64>>,
+    /// Measured codec savings for the session (Tier 3), keyed like the
+    /// cardinality cache: (connection, database, object) -> {column
+    /// index -> times-smaller}. Auto-loads on reopen.
+    measured_cache: HashMap<(String, String, String), HashMap<usize, f64>>,
+    /// A suggestion (column index + statements) awaiting confirmation
+    /// before it runs, because the table is large enough that applying
+    /// rewrites a lot of data. Rendered as a confirm overlay.
+    pending_apply: Option<(usize, Vec<String>)>,
     notice: Option<String>,
     notice_warning: bool,
     notice_flash_id: u64,
@@ -803,6 +835,8 @@ impl Workspace {
                 schema_error: None,
                 selected_schema_object: None,
                 cardinality_cache: HashMap::new(),
+                measured_cache: HashMap::new(),
+                pending_apply: None,
                 notice: None,
                 notice_warning: false,
                 notice_flash_id: 0,
@@ -878,6 +912,8 @@ impl Workspace {
                 schema_error: None,
                 selected_schema_object: None,
                 cardinality_cache: HashMap::new(),
+                measured_cache: HashMap::new(),
+                pending_apply: None,
                 notice: Some(format!("Could not load connections: {error}")),
                 notice_warning: false,
                 notice_flash_id: 0,
@@ -3021,6 +3057,7 @@ impl Workspace {
                         read_only: connection.read_only,
                         driver: connection.driver.clone(),
                     },
+                    apply_cluster: None,
                 });
                 this.password_cache
                     .insert(name.clone(), connected_password.clone());
@@ -3226,6 +3263,15 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Set (or clear) the cluster the schema-apply actions target with
+    /// `ON CLUSTER`. Chosen from the node selector.
+    fn set_apply_cluster(&mut self, cluster: Option<String>, cx: &mut Context<Self>) {
+        if let Some(connected) = self.connected.as_mut() {
+            connected.apply_cluster = cluster;
+            cx.notify();
+        }
+    }
+
     fn select_node(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(connected_name) = self
             .connected
@@ -3264,6 +3310,8 @@ impl Workspace {
         connected.active_node = node.node_index;
         connected.active_endpoint = node.endpoint.clone();
         connected.client_config.url = node.endpoint;
+        // Picking a specific node returns apply scope to that node.
+        connected.apply_cluster = None;
         // Same shard (or unknown topology): switching is invisible for
         // data. A different shard is worth one honest sentence.
         self.notice = Some(
@@ -3411,6 +3459,42 @@ impl Workspace {
         .detach();
     }
 
+    /// Entry point for the Analyse button. On a writable connection the
+    /// measurement step writes temporary tables, so ask for confirmation
+    /// first; on a read-only connection nothing is written, so run the
+    /// (read-only) scan straight away.
+    fn request_analyze(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let writable = self
+            .connected
+            .as_ref()
+            .map(|cluster| cluster.name.clone())
+            .map(|name| self.connection_is_writable(&name))
+            .unwrap_or(false);
+        if writable {
+            if let Some(selected) = &mut self.selected_schema_object {
+                selected.cardinality_confirming = true;
+            }
+            cx.notify();
+        } else {
+            self.analyze_cardinality(window, cx);
+        }
+    }
+
+    /// The user confirmed the write; clear the prompt and run.
+    fn confirm_analyze(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(selected) = &mut self.selected_schema_object {
+            selected.cardinality_confirming = false;
+        }
+        self.analyze_cardinality(window, cx);
+    }
+
+    fn cancel_analyze(&mut self, cx: &mut Context<Self>) {
+        if let Some(selected) = &mut self.selected_schema_object {
+            selected.cardinality_confirming = false;
+        }
+        cx.notify();
+    }
+
     /// Opt-in cardinality probe (Phase 8, Tier 2): scan the selected
     /// table once for each column's approximate distinct count, off the
     /// main thread, and store it on the selection. Feeds the codec
@@ -3489,12 +3573,142 @@ impl Workspace {
                 if let Some(cardinalities) = to_cache {
                     this.cardinality_cache
                         .insert((connection_name, database_name, object_name), cardinalities);
+                    // Cardinality is known; measure the actual savings of
+                    // the actionable suggestions (Tier 3), writable
+                    // connections only.
+                    this.measure_suggestions(cx);
                 }
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    /// True when the named connection allows writes (needed for the
+    /// Tier 3 measurement, which builds a throwaway table).
+    fn connection_is_writable(&self, name: &str) -> bool {
+        self.connections
+            .iter()
+            .find(|connection| connection.name.as_str() == name)
+            .map(|connection| !connection.read_only)
+            .unwrap_or(false)
+    }
+
+    /// Measure the actual size savings of each actionable suggestion for
+    /// the current selection (Phase 8, Tier 3). Runs one throwaway-table
+    /// trial per suggested column, off the main thread, and stores the
+    /// result. Only on writable connections; a no-op otherwise.
+    fn measure_suggestions(&mut self, cx: &mut Context<Self>) {
+        let (connection_name, config, database, table) = {
+            let Some(selected) = &self.selected_schema_object else {
+                return;
+            };
+            let Some(connected) = &self.connected else {
+                return;
+            };
+            (
+                connected.name.clone(),
+                connected.client_config.clone(),
+                selected.database.clone(),
+                selected.object.name.clone(),
+            )
+        };
+        if !self.connection_is_writable(&connection_name) {
+            return;
+        }
+
+        // Collect the actionable columns and how to build their trials.
+        let jobs: Vec<(usize, String, String, String)> = {
+            let Some(selected) = &self.selected_schema_object else {
+                return;
+            };
+            let Some(cardinalities) = &selected.cardinalities else {
+                return;
+            };
+            let total_rows = selected.object.total_rows.unwrap_or(0);
+            selected
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !selected.measured.contains_key(index))
+                .filter_map(|(index, column)| {
+                    let distinct = cardinalities.get(index).copied().unwrap_or(0);
+                    let advice = storage_advisor::advise(
+                        &storage_advisor::ColumnFacts {
+                            name: &column.name,
+                            type_name: &column.type_name,
+                            codec: &column.codec,
+                            distinct,
+                            total_rows,
+                            compressed_bytes: column.compressed_bytes,
+                            uncompressed_bytes: column.uncompressed_bytes,
+                        },
+                        &database,
+                        &table,
+                        // Trial defs are cluster-independent.
+                        None,
+                    );
+                    if let storage_advisor::Advice::Suggest {
+                        base_def, cand_def, ..
+                    } = advice
+                    {
+                        Some((index, column.name.clone(), base_def, cand_def))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        for (index, column_name, base_def, cand_def) in jobs {
+            let config = config.clone();
+            let database = database.clone();
+            let table = table.clone();
+            let connection_name = connection_name.clone();
+            // Globally-unique trial-table name so concurrent trials (even
+            // two tables in the same database) never drop each other's.
+            static TRIAL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let seq = TRIAL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let trial_name = format!("_zedb_codec_trial_{seq}");
+            let task_database = database.clone();
+            let task_table = table.clone();
+            let task = rt::tokio().spawn(async move {
+                ChClient::new(config)
+                    .measure_codec_savings(
+                        &task_database,
+                        &task_table,
+                        &column_name,
+                        &base_def,
+                        &cand_def,
+                        &trial_name,
+                    )
+                    .await
+            });
+            cx.spawn(async move |this, cx| {
+                let result = task.await;
+                this.update(cx, |this, cx| {
+                    if let Ok(Ok(Some(ratio))) = result {
+                        this.measured_cache
+                            .entry((connection_name.clone(), database.clone(), table.clone()))
+                            .or_default()
+                            .insert(index, ratio);
+                        if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                            == Some(connection_name.as_str())
+                        {
+                            if let Some(selected) = &mut this.selected_schema_object {
+                                if selected.database == database && selected.object.name == table {
+                                    selected.measured.insert(index, ratio);
+                                }
+                            }
+                        }
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        }
     }
 
     fn toggle_schema_database(
@@ -3601,14 +3815,17 @@ impl Workspace {
         let object_name = object.name.clone();
         // Auto-load cardinality if this table was analyzed earlier this
         // session, so it shows without re-prompting.
-        let cached_cardinalities = self
-            .cardinality_cache
-            .get(&(
-                connection_name.clone(),
-                database_name.clone(),
-                object_name.clone(),
-            ))
-            .cloned();
+        let cache_key = (
+            connection_name.clone(),
+            database_name.clone(),
+            object_name.clone(),
+        );
+        let cached_cardinalities = self.cardinality_cache.get(&cache_key).cloned();
+        let cached_measured = self
+            .measured_cache
+            .get(&cache_key)
+            .cloned()
+            .unwrap_or_default();
         let window_handle = window.window_handle();
         let ddl_editor = cx.new(|cx| InputState::new(window, cx).code_editor("sql"));
         let engine_editor = cx.new(|cx| {
@@ -3626,6 +3843,10 @@ impl Workspace {
             cardinalities: cached_cardinalities,
             cardinality_loading: false,
             cardinality_error: None,
+            cardinality_confirming: false,
+            measured: cached_measured,
+            applying: None,
+            applying_slow: false,
             ddl_editor: ddl_editor.clone(),
             engine_editor: engine_editor.clone(),
             tab,
@@ -4171,6 +4392,284 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The environment tier of the active connection (prod/staging/dev).
+    fn active_tier(&self) -> Option<EnvTier> {
+        let name = self
+            .connected
+            .as_ref()
+            .map(|cluster| cluster.name.as_str())?;
+        self.connections
+            .iter()
+            .find(|connection| connection.name == name)
+            .map(|connection| connection.tier)
+    }
+
+    /// Left-click on an advice icon. Applying rewrites data, so the policy
+    /// is: never apply in place on **production** (open the editor to run
+    /// deliberately); on a read-only connection there is nowhere to apply
+    /// (open the editor); on writable staging/dev apply in place, but if
+    /// the table is large first confirm, since it rewrites a lot of data.
+    fn request_apply(
+        &mut self,
+        index: usize,
+        apply: Vec<String>,
+        editor_sql: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let is_prod = self.active_tier() == Some(EnvTier::Production);
+        let writable = self
+            .connected
+            .as_ref()
+            .map(|cluster| cluster.name.clone())
+            .map(|name| self.connection_is_writable(&name))
+            .unwrap_or(false);
+        if is_prod || !writable {
+            self.open_query_tab_with(&editor_sql, window, cx);
+            return;
+        }
+        const LARGE_TABLE_BYTES: u64 = 1_000_000_000; // ~1 GB
+        let large = self
+            .selected_schema_object
+            .as_ref()
+            .and_then(|selected| selected.object.total_bytes)
+            .is_some_and(|bytes| bytes > LARGE_TABLE_BYTES);
+        if large {
+            self.pending_apply = Some((index, apply));
+            cx.notify();
+        } else {
+            self.apply_suggestion(index, apply, window, cx);
+        }
+    }
+
+    fn confirm_apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((index, apply)) = self.pending_apply.take() {
+            self.apply_suggestion(index, apply, window, cx);
+        }
+    }
+
+    fn cancel_apply(&mut self, cx: &mut Context<Self>) {
+        self.pending_apply = None;
+        cx.notify();
+    }
+
+    /// Right-click on an advice icon: open the suggestion in the query
+    /// editor. Does nothing on production (per the apply policy).
+    fn open_suggestion_in_editor(
+        &mut self,
+        editor_sql: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_tier() == Some(EnvTier::Production) {
+            return;
+        }
+        self.open_query_tab_with(&editor_sql, window, cx);
+    }
+
+    /// A small spinning indicator for a slow in-place apply, a rotating
+    /// refresh icon (gpui-component's Spinner needs an asset the app does
+    /// not serve, so this reuses the whitelisted icon).
+    fn advice_spinner() -> impl IntoElement {
+        use gpui::{percentage, Animation, AnimationExt as _, Transformation};
+        use gpui_component::Sizable as _;
+        gpui_component::Icon::empty()
+            .path("icons/refresh.svg")
+            .with_size(gpui_component::Size::Small)
+            .text_color(theme::text_dim())
+            .with_animation(
+                "advice-spin",
+                Animation::new(Duration::from_secs(1)).repeat(),
+                |icon, delta| icon.transform(Transformation::rotate(percentage(delta))),
+            )
+    }
+
+    /// The large-table apply confirmation (Phase 8, Tier 3). Deferred so
+    /// it paints above everything, with an occluding backdrop that dims
+    /// the window and dismisses on an outside click.
+    fn apply_confirm_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let size = self
+            .selected_schema_object
+            .as_ref()
+            .and_then(|selected| selected.object.total_bytes)
+            .map(Self::format_bytes)
+            .unwrap_or_default();
+        gpui::deferred(
+            div()
+                .id("apply-confirm")
+                .occlude()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::rgba(0x00000088))
+                .on_click(cx.listener(|this, _, _, cx| this.cancel_apply(cx)))
+                .child(
+                    div()
+                        .id("apply-dialog")
+                        .occlude()
+                        .w(px(440.))
+                        .p_4()
+                        .rounded(px(6.))
+                        .bg(theme::bg())
+                        .border_1()
+                        .border_color(theme::border())
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .child(div().text_color(theme::text()).child("Apply this change?"))
+                        .child(div().text_xs().text_color(theme::text_dim()).child(format!(
+                            "This rewrites the whole table (about {size}). It can take a while \
+                         and use significant resources. Continue?"
+                        )))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id("apply-cancel")
+                                        .px_3()
+                                        .py_1()
+                                        .rounded(px(4.))
+                                        .text_xs()
+                                        .text_color(theme::text_dim())
+                                        .cursor_pointer()
+                                        .hover(|button| {
+                                            button.bg(theme::hover()).text_color(theme::text())
+                                        })
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.cancel_apply(cx)),
+                                        )
+                                        .child("Cancel"),
+                                )
+                                .child(
+                                    div()
+                                        .id("apply-continue")
+                                        .group("apply-continue")
+                                        .px_3()
+                                        .py_1()
+                                        .rounded(px(4.))
+                                        .border_1()
+                                        .border_color(theme::warning())
+                                        .text_xs()
+                                        .text_color(theme::warning())
+                                        .cursor_pointer()
+                                        .hover(|button| {
+                                            button
+                                                .bg(theme::warning())
+                                                .border_color(theme::warning())
+                                        })
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.confirm_apply(window, cx)
+                                        }))
+                                        .child(
+                                            div()
+                                                .group_hover("apply-continue", |label| {
+                                                    label.text_color(rgb(0x14171c))
+                                                })
+                                                .child("Continue"),
+                                        ),
+                                ),
+                        ),
+                ),
+        )
+    }
+
+    /// Run a suggestion's statements in order on the current connection,
+    /// off the main thread, then re-fetch just this table's columns and
+    /// storage and update them in place. Updating in place (rather than
+    /// re-selecting the object) keeps cardinality/measurement and avoids
+    /// flashing the whole pane through a loading state: only the changed
+    /// column's numbers and advice repaint.
+    fn apply_suggestion(
+        &mut self,
+        index: usize,
+        apply: Vec<String>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(connected) = &self.connected else {
+            return;
+        };
+        let connection_name = connected.name.clone();
+        let config = connected.client_config.clone();
+        let Some(selected) = &mut self.selected_schema_object else {
+            return;
+        };
+        let database = selected.database.clone();
+        let object_name = selected.object.name.clone();
+        selected.applying = Some(index);
+        selected.applying_slow = false;
+        cx.notify();
+
+        // Show a spinner only if the apply runs past this, so quick ones
+        // do not flicker.
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_secs(3)).await;
+            this.update(cx, |this, cx| {
+                if let Some(selected) = &mut this.selected_schema_object {
+                    if selected.applying == Some(index) {
+                        selected.applying_slow = true;
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+
+        let task = rt::tokio().spawn({
+            let database = database.clone();
+            let object_name = object_name.clone();
+            async move {
+                let client = ChClient::new(config);
+                for statement in &apply {
+                    client.execute(statement).await?;
+                }
+                let columns = client.list_columns(&database, &object_name).await?;
+                let storage = client
+                    .table_storage(&database, &object_name)
+                    .await
+                    .ok()
+                    .flatten();
+                Ok::<_, zedb_ch::ChError>((columns, storage))
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                    != Some(connection_name.as_str())
+                {
+                    return;
+                }
+                if let Some(selected) = &mut this.selected_schema_object {
+                    selected.applying = None;
+                    selected.applying_slow = false;
+                }
+                match result {
+                    Ok(Ok((columns, storage))) => {
+                        if let Some(selected) = &mut this.selected_schema_object {
+                            if selected.database == database && selected.object.name == object_name
+                            {
+                                selected.columns = columns;
+                                selected.storage = storage;
+                            }
+                        }
+                        this.flash_notice("Applied", cx);
+                    }
+                    _ => this.flash_warning("Could not apply the change", cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn schedule_schema_analysis(
         &mut self,
         tab_id: usize,
@@ -4466,6 +4965,26 @@ impl Workspace {
         // `line` is past the last line (e.g. a line-wise selection ending at
         // the final line); the loop overcounts by one virtual newline.
         offset.saturating_sub(1)
+    }
+
+    /// A neutral, self-clearing status message (e.g. "Applied").
+    fn flash_notice(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.notice = Some(message.into());
+        self.notice_warning = false;
+        self.notice_flash_id += 1;
+        let flash_id = self.notice_flash_id;
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_secs(2)).await;
+            this.update(cx, |this, cx| {
+                if this.notice_flash_id == flash_id {
+                    this.notice = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     fn flash_warning(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
@@ -5190,23 +5709,44 @@ impl Workspace {
             .get(connected.active_node)
             .map(|node| node.name.clone())
             .unwrap_or_else(|| "Select node".into());
+        // Clusters the connected node belongs to. Picking one runs
+        // schema-apply actions ON CLUSTER instead of just this node.
+        let clusters = self.ops_cluster_options();
+        let apply_cluster = connected.apply_cluster.clone();
+        // In cluster scope the label reads the cluster, not the node.
+        let label = match &apply_cluster {
+            Some(name) => format!("Cluster: {name}"),
+            None => active_name,
+        };
         let action_context = self.query_tabs[self.active_query_tab]
             .editor
             .focus_handle(cx);
 
         Some(
             Button::new("active-node-selector")
-                .label(active_name)
+                .label(label)
                 .dropdown_caret(true)
                 .compact()
                 .outline()
                 .dropdown_menu(move |menu: PopupMenu, _, _| {
-                    nodes.iter().cloned().fold(
+                    let mut menu = nodes.iter().cloned().fold(
                         menu.action_context(action_context.clone()).min_w(px(180.)),
                         |menu, (index, name, reachable)| {
                             menu.menu_with_enable(name, Box::new(SelectNode { index }), reachable)
                         },
-                    )
+                    );
+                    if !clusters.is_empty() {
+                        menu = menu.separator();
+                        for cluster in &clusters {
+                            menu = menu.menu(
+                                format!("Cluster: {cluster}"),
+                                Box::new(SetApplyCluster {
+                                    cluster: Some(cluster.clone()),
+                                }),
+                            );
+                        }
+                    }
+                    menu
                 }),
         )
     }
@@ -5778,9 +6318,17 @@ impl Workspace {
             .as_ref()
             .expect("schema object panel requires a selection");
         let cardinalities = selected.cardinalities.clone();
+        let measured = selected.measured.clone();
+        let applying = selected.applying;
+        let applying_slow = selected.applying_slow;
         let advisor_db = selected.database.clone();
         let advisor_table = selected.object.name.clone();
         let advisor_rows = selected.object.total_rows.unwrap_or(0);
+        // In cluster scope the generated statements run ON CLUSTER.
+        let advisor_cluster = self
+            .connected
+            .as_ref()
+            .and_then(|connected| connected.apply_cluster.clone());
         let column_rows = selected
             .columns
             .iter()
@@ -5832,6 +6380,7 @@ impl Workspace {
                         },
                         &advisor_db,
                         &advisor_table,
+                        advisor_cluster.as_deref(),
                     )
                 });
                 div()
@@ -5919,7 +6468,7 @@ impl Workspace {
                         // (hover = what it will do and why) when there is.
                         let base = || {
                             div()
-                                .w(px(90.))
+                                .w(px(110.))
                                 .flex_none()
                                 .border_l_1()
                                 .border_color(theme::border())
@@ -5950,14 +6499,41 @@ impl Workspace {
                             storage_advisor::Advice::Suggest {
                                 label,
                                 reason,
-                                alter,
+                                apply,
+                                editor_sql,
+                                ..
+                            } if applying == Some(index) && applying_slow => {
+                                // A slow in-place apply is in progress.
+                                let _ = (label, reason, apply, editor_sql);
+                                base().child(Self::advice_spinner()).into_any_element()
+                            }
+                            storage_advisor::Advice::Suggest {
+                                label,
+                                reason,
+                                apply,
+                                editor_sql,
+                                ..
                             } => {
+                                // The measured savings from the Tier 3 trial,
+                                // once it lands (writable connections only).
+                                let saving = measured.get(&index).copied();
+                                let saving_label = saving
+                                    .map(|ratio| format!("{ratio:.1}\u{00d7}"))
+                                    .unwrap_or_default();
+                                let measured_line = saving
+                                    .map(|ratio| {
+                                        format!("\nMeasured {ratio:.1}x smaller on a sample.")
+                                    })
+                                    .unwrap_or_default();
                                 let tooltip = format!(
-                                    "Suggest {label}: {reason} ({evidence}).\n\
-                                     Click to open the query editor with:\n{alter}"
+                                    "Suggest {label}: {reason} ({evidence}).{measured_line}\n\
+                                     Left-click to apply \u{00b7} right-click to open in the \
+                                     query editor:\n{editor_sql}"
                                 );
+                                let editor_left = editor_sql.clone();
                                 base()
                                     .id(("advice", index))
+                                    .gap_1()
                                     .cursor_pointer()
                                     .rounded(px(3.))
                                     .hover(|cell| cell.bg(theme::hover()))
@@ -5967,9 +6543,38 @@ impl Workspace {
                                             .size(px(14.))
                                             .text_color(theme::accent()),
                                     )
+                                    .when(!saving_label.is_empty(), |cell| {
+                                        cell.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme::accent())
+                                                .child(saving_label),
+                                        )
+                                    })
+                                    // Left-click: apply in place (staging/dev),
+                                    // or open the editor (prod / read-only), or
+                                    // confirm first on a large table.
                                     .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.open_query_tab_with(&alter, window, cx);
+                                        this.request_apply(
+                                            index,
+                                            apply.clone(),
+                                            editor_left.clone(),
+                                            window,
+                                            cx,
+                                        );
                                     }))
+                                    // Right-click: open in the query editor
+                                    // (nothing on production).
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.open_suggestion_in_editor(
+                                                editor_sql.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    )
                                     .tooltip(move |window, cx| {
                                         gpui_component::tooltip::Tooltip::new(tooltip.clone())
                                             .build(window, cx)
@@ -6154,6 +6759,42 @@ impl Workspace {
                     selected.cardinalities.is_none() && !selected.columns.is_empty(),
                     |body| {
                         let loading = selected.cardinality_loading;
+                        let confirming = selected.cardinality_confirming;
+                        // On a writable connection the measurement step
+                        // writes a temporary table, so the prompt asks
+                        // before running. The ghost green primary button:
+                        // green outline that fills on hover. The label sits
+                        // in a child driven by group-hover, so it flips to
+                        // dark on the green fill (a plain hover text_color
+                        // does not repaint the text child in this gpui).
+                        let ghost = |id: &'static str, label: &'static str| {
+                            div()
+                                .id(id)
+                                .group(id)
+                                .px_3()
+                                .py_1()
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(theme::success())
+                                .text_xs()
+                                .text_color(theme::success())
+                                .cursor_pointer()
+                                .hover(|button| {
+                                    button.bg(theme::success()).border_color(theme::success())
+                                })
+                                .child(
+                                    div()
+                                        .group_hover(id, |label| label.text_color(rgb(0x14171c)))
+                                        .child(label),
+                                )
+                        };
+                        let message = if confirming {
+                            "Measuring the suggestions creates a temporary table on the \
+                             server (dropped afterwards). Continue?"
+                        } else {
+                            "Analyse per-column cardinality to suggest better codecs and \
+                             types. Scans the table once."
+                        };
                         body.child(
                             div()
                                 .flex_none()
@@ -6165,10 +6806,7 @@ impl Workspace {
                                 .border_b_1()
                                 .border_color(theme::border())
                                 .bg(theme::bg_sunken())
-                                .child(div().text_xs().text_color(theme::text_dim()).child(
-                                    "Analyse per-column cardinality to suggest better \
-                                             codecs and types. Scans the table once.",
-                                ))
+                                .child(div().text_xs().text_color(theme::text_dim()).child(message))
                                 .child(if loading {
                                     div()
                                         .px_3()
@@ -6177,24 +6815,40 @@ impl Workspace {
                                         .text_color(theme::text_dim())
                                         .child("Analysing\u{2026}")
                                         .into_any_element()
-                                } else {
+                                } else if confirming {
                                     div()
-                                        .id("analyze-cardinality")
-                                        .px_3()
-                                        .py_1()
-                                        .rounded(px(4.))
-                                        .border_1()
-                                        .border_color(theme::success())
-                                        .text_xs()
-                                        .text_color(theme::success())
-                                        .cursor_pointer()
-                                        .hover(|button| {
-                                            button.bg(theme::success()).text_color(theme::bg())
-                                        })
+                                        .flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .id("cancel-analyze")
+                                                .px_3()
+                                                .py_1()
+                                                .rounded(px(4.))
+                                                .text_xs()
+                                                .text_color(theme::text_dim())
+                                                .cursor_pointer()
+                                                .hover(|button| {
+                                                    button
+                                                        .bg(theme::hover())
+                                                        .text_color(theme::text())
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.cancel_analyze(cx)
+                                                }))
+                                                .child("Cancel"),
+                                        )
+                                        .child(ghost("confirm-analyze", "Continue").on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.confirm_analyze(window, cx)
+                                            }),
+                                        ))
+                                        .into_any_element()
+                                } else {
+                                    ghost("analyze-cardinality", "Analyse")
                                         .on_click(cx.listener(|this, _, window, cx| {
-                                            this.analyze_cardinality(window, cx)
+                                            this.request_analyze(window, cx)
                                         }))
-                                        .child("Analyse")
                                         .into_any_element()
                                 }),
                         )
@@ -6252,7 +6906,7 @@ impl Workspace {
                         .when(selected.cardinalities.is_some(), |header| {
                             header.child(
                                 div()
-                                    .w(px(90.))
+                                    .w(px(110.))
                                     .flex_none()
                                     .border_l_1()
                                     .border_color(theme::border())
@@ -7249,6 +7903,9 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, action: &SelectNode, _, cx| this.select_node(action.index, cx)),
             )
+            .on_action(cx.listener(|this, action: &SetApplyCluster, _, cx| {
+                this.set_apply_cluster(action.cluster.clone(), cx)
+            }))
             .on_action(cx.listener(|this, action: &DuplicateConnection, _, cx| {
                 this.duplicate_connection(action.index, cx)
             }))
@@ -7426,6 +8083,9 @@ impl Render for Workspace {
             )
             .when(self.export.is_some(), |root| {
                 root.child(self.export_overlay(cx))
+            })
+            .when(self.pending_apply.is_some(), |root| {
+                root.child(self.apply_confirm_overlay(cx))
             })
             .when(self.palette.open, |root| {
                 root.child(self.command_palette_overlay(cx))

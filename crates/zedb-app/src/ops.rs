@@ -333,7 +333,7 @@ impl Workspace {
     /// Clusters the connected node reported membership of; the scope
     /// dropdown's options. The implicit per-node "default" cluster is
     /// not a topology.
-    fn ops_cluster_options(&self) -> Vec<String> {
+    pub(crate) fn ops_cluster_options(&self) -> Vec<String> {
         let Some(connected) = &self.connected else {
             return Vec::new();
         };

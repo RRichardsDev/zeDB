@@ -22,12 +22,21 @@ pub struct ColumnFacts<'a> {
 pub enum Advice {
     /// Already in good shape; `label` names why (e.g. "LowCardinality").
     Good(String),
-    /// An actionable change: `label` is the short verdict, `reason` the
-    /// one-line why, `alter` the ready-to-run statement.
+    /// An actionable change. `label` is the short verdict, `reason` the
+    /// one-line why. `apply` is the statement(s) to run in order to make
+    /// the change take effect on existing data (a type change is one
+    /// `ALTER` that mutates the column; a codec change is the `ALTER`
+    /// plus an `OPTIMIZE ... FINAL`, since a codec only affects new and
+    /// merged parts otherwise). `editor_sql` is the same, formatted with
+    /// comments for the query editor. `base_def`/`cand_def` are the
+    /// current and proposed column definitions used by the Tier 3 trial.
     Suggest {
         label: String,
         reason: String,
-        alter: String,
+        apply: Vec<String>,
+        editor_sql: String,
+        base_def: String,
+        cand_def: String,
     },
     /// Nothing worth changing; `reason` explains (e.g. "high cardinality").
     Leave(String),
@@ -64,28 +73,62 @@ fn base_type(type_name: &str) -> &str {
     }
 }
 
-fn modify_type(db: &str, table: &str, col: &str, new_type: &str) -> String {
+/// The optional `ON CLUSTER '<name>'` clause: present in cluster scope so
+/// the change reaches every node, empty for a single node.
+fn on_cluster(cluster: Option<&str>) -> String {
+    match cluster {
+        Some(name) => format!(
+            " ON CLUSTER '{}'",
+            name.replace('\\', "\\\\").replace('\'', "\\'")
+        ),
+        None => String::new(),
+    }
+}
+
+fn modify_type(db: &str, table: &str, cluster: Option<&str>, col: &str, new_type: &str) -> String {
     format!(
-        "ALTER TABLE {}.{} MODIFY COLUMN {} {};",
+        "ALTER TABLE {}.{}{} MODIFY COLUMN {} {};",
         escape_ident(db),
         escape_ident(table),
+        on_cluster(cluster),
         escape_ident(col),
         new_type
     )
 }
 
-fn modify_codec(db: &str, table: &str, col: &str, codec: &str) -> String {
+/// A column definition (`type [CODEC(...)]`) for the trial table.
+fn col_def(type_str: &str, codec: &str) -> String {
+    let type_str = type_str.trim();
+    if codec.trim().is_empty() {
+        type_str.to_string()
+    } else {
+        format!("{type_str} {}", codec.trim())
+    }
+}
+
+fn modify_codec(db: &str, table: &str, cluster: Option<&str>, col: &str, codec: &str) -> String {
     format!(
-        "ALTER TABLE {}.{} MODIFY COLUMN {} CODEC({});",
+        "ALTER TABLE {}.{}{} MODIFY COLUMN {} CODEC({});",
         escape_ident(db),
         escape_ident(table),
+        on_cluster(cluster),
         escape_ident(col),
         codec
     )
 }
 
-/// Advise on one column. `db`/`table` are used to build the `ALTER`.
-pub fn advise(f: &ColumnFacts, db: &str, table: &str) -> Advice {
+fn optimize_final(db: &str, table: &str, cluster: Option<&str>) -> String {
+    format!(
+        "OPTIMIZE TABLE {}.{}{} FINAL;",
+        escape_ident(db),
+        escape_ident(table),
+        on_cluster(cluster)
+    )
+}
+
+/// Advise on one column. `db`/`table`/`cluster` build the statements;
+/// `cluster` is `Some` in cluster scope so they run `ON CLUSTER`.
+pub fn advise(f: &ColumnFacts, db: &str, table: &str, cluster: Option<&str>) -> Advice {
     if f.total_rows == 0 || f.compressed_bytes == 0 {
         return Advice::Unknown;
     }
@@ -100,10 +143,14 @@ pub fn advise(f: &ColumnFacts, db: &str, table: &str) -> Advice {
     // LowCardinality over a large distinct set churns the dictionary and
     // usually costs more than it saves: recommend the plain inner type.
     if is_low_card && f.distinct > LOW_CARDINALITY_MAX_DISTINCT {
+        let alter = modify_type(db, table, cluster, f.name, base);
         return Advice::Suggest {
             label: "drop LowCardinality".into(),
             reason: format!("{} distinct is too many for a dictionary", f.distinct),
-            alter: modify_type(db, table, f.name, base),
+            apply: vec![alter.clone()],
+            editor_sql: alter,
+            base_def: col_def(f.type_name, f.codec),
+            cand_def: col_def(base, f.codec),
         };
     }
     if is_low_card {
@@ -112,15 +159,15 @@ pub fn advise(f: &ColumnFacts, db: &str, table: &str) -> Advice {
 
     // A low-cardinality string benefits from dictionary encoding.
     if is_stringy && f.distinct <= LOW_CARDINALITY_MAX_DISTINCT && distinct_ratio < 0.5 {
+        let wrapped = format!("LowCardinality({})", f.type_name.trim());
+        let alter = modify_type(db, table, cluster, f.name, &wrapped);
         return Advice::Suggest {
             label: "LowCardinality".into(),
             reason: format!("only {} distinct values", f.distinct),
-            alter: modify_type(
-                db,
-                table,
-                f.name,
-                &format!("LowCardinality({})", f.type_name.trim()),
-            ),
+            apply: vec![alter.clone()],
+            editor_sql: alter,
+            base_def: col_def(f.type_name, f.codec),
+            cand_def: col_def(&wrapped, f.codec),
         };
     }
 
@@ -129,10 +176,25 @@ pub fn advise(f: &ColumnFacts, db: &str, table: &str) -> Advice {
         if has_delta {
             return Advice::Good("already uses delta coding".into());
         }
+        // A codec change only affects new and merged parts; existing data
+        // is recompressed by OPTIMIZE ... FINAL (a whole-table rewrite),
+        // so both statements are needed to realise the saving.
+        let alter = modify_codec(db, table, cluster, f.name, "DoubleDelta, ZSTD(1)");
+        let optimize = optimize_final(db, table, cluster);
+        let editor_sql = format!(
+            "{alter}\n\
+             -- A codec change only affects new and merged parts. Recompress\n\
+             -- existing data with OPTIMIZE ... FINAL (rewrites the whole table;\n\
+             -- run in a low-traffic window):\n\
+             {optimize}"
+        );
         return Advice::Suggest {
             label: "Delta + ZSTD".into(),
             reason: "timestamps compress well with delta coding".into(),
-            alter: modify_codec(db, table, f.name, "DoubleDelta, ZSTD(1)"),
+            apply: vec![alter, optimize],
+            editor_sql,
+            base_def: col_def(f.type_name, f.codec),
+            cand_def: col_def(f.type_name, "CODEC(DoubleDelta, ZSTD(1))"),
         };
     }
 
@@ -167,12 +229,19 @@ mod tests {
 
     #[test]
     fn low_cardinality_string_is_suggested() {
-        let advice = advise(&facts("String", "", 200), "db", "t");
+        let advice = advise(&facts("String", "", 200), "db", "t", None);
         match advice {
-            Advice::Suggest { label, alter, .. } => {
+            Advice::Suggest {
+                label,
+                editor_sql,
+                apply,
+                ..
+            } => {
                 assert_eq!(label, "LowCardinality");
-                assert!(alter.contains("MODIFY COLUMN `col` LowCardinality(String)"));
-                assert!(alter.contains("ALTER TABLE `db`.`t`"));
+                assert!(editor_sql.contains("MODIFY COLUMN `col` LowCardinality(String)"));
+                assert!(editor_sql.contains("ALTER TABLE `db`.`t`"));
+                // A type change is a single mutation, no OPTIMIZE needed.
+                assert_eq!(apply.len(), 1);
             }
             _ => panic!("expected a LowCardinality suggestion"),
         }
@@ -180,10 +249,10 @@ mod tests {
 
     #[test]
     fn nullable_string_wraps_correctly() {
-        let advice = advise(&facts("Nullable(String)", "", 50), "db", "t");
+        let advice = advise(&facts("Nullable(String)", "", 50), "db", "t", None);
         match advice {
-            Advice::Suggest { alter, .. } => {
-                assert!(alter.contains("LowCardinality(Nullable(String))"));
+            Advice::Suggest { editor_sql, .. } => {
+                assert!(editor_sql.contains("LowCardinality(Nullable(String))"));
             }
             _ => panic!("expected a suggestion"),
         }
@@ -193,7 +262,7 @@ mod tests {
     fn high_cardinality_string_is_left_alone() {
         // 1M distinct of 1M rows: an id/hash column.
         assert!(matches!(
-            advise(&facts("String", "", 1_000_000), "db", "t"),
+            advise(&facts("String", "", 1_000_000), "db", "t", None),
             Advice::Leave(_)
         ));
     }
@@ -201,18 +270,25 @@ mod tests {
     #[test]
     fn existing_low_cardinality_is_good() {
         assert!(matches!(
-            advise(&facts("LowCardinality(String)", "", 5), "db", "t"),
+            advise(&facts("LowCardinality(String)", "", 5), "db", "t", None),
             Advice::Good(_)
         ));
     }
 
     #[test]
     fn low_cardinality_with_too_many_distinct_is_dropped() {
-        let advice = advise(&facts("LowCardinality(String)", "", 500_000), "db", "t");
+        let advice = advise(
+            &facts("LowCardinality(String)", "", 500_000),
+            "db",
+            "t",
+            None,
+        );
         match advice {
-            Advice::Suggest { label, alter, .. } => {
+            Advice::Suggest {
+                label, editor_sql, ..
+            } => {
                 assert_eq!(label, "drop LowCardinality");
-                assert!(alter.contains("MODIFY COLUMN `col` String"));
+                assert!(editor_sql.contains("MODIFY COLUMN `col` String"));
             }
             _ => panic!("expected a drop-LowCardinality suggestion"),
         }
@@ -220,11 +296,20 @@ mod tests {
 
     #[test]
     fn temporal_without_delta_is_suggested_delta() {
-        let advice = advise(&facts("DateTime", "", 900_000), "db", "t");
+        let advice = advise(&facts("DateTime", "", 900_000), "db", "t", None);
         match advice {
-            Advice::Suggest { label, alter, .. } => {
+            Advice::Suggest {
+                label,
+                editor_sql,
+                apply,
+                ..
+            } => {
                 assert_eq!(label, "Delta + ZSTD");
-                assert!(alter.contains("CODEC(DoubleDelta, ZSTD(1))"));
+                assert!(editor_sql.contains("CODEC(DoubleDelta, ZSTD(1))"));
+                // A codec change must also recompress existing data.
+                assert!(editor_sql.contains("OPTIMIZE TABLE `db`.`t` FINAL"));
+                assert_eq!(apply.len(), 2);
+                assert!(apply[1].contains("OPTIMIZE TABLE `db`.`t` FINAL"));
             }
             _ => panic!("expected a delta suggestion"),
         }
@@ -236,16 +321,39 @@ mod tests {
             advise(
                 &facts("DateTime", "CODEC(DoubleDelta, ZSTD(1))", 900_000),
                 "db",
-                "t"
+                "t",
+                None
             ),
             Advice::Good(_)
         ));
     }
 
     #[test]
+    fn cluster_scope_adds_on_cluster() {
+        // Type change: ON CLUSTER on the single ALTER.
+        match advise(&facts("String", "", 200), "db", "t", Some("my_cluster")) {
+            Advice::Suggest {
+                apply, editor_sql, ..
+            } => {
+                assert!(apply[0].contains("ON CLUSTER 'my_cluster'"));
+                assert!(editor_sql.contains("ON CLUSTER 'my_cluster'"));
+            }
+            _ => panic!("expected a suggestion"),
+        }
+        // Codec change: ON CLUSTER on both the ALTER and the OPTIMIZE.
+        match advise(&facts("DateTime", "", 900_000), "db", "t", Some("c")) {
+            Advice::Suggest { apply, .. } => {
+                assert!(apply[0].contains("ON CLUSTER 'c'"));
+                assert!(apply[1].contains("OPTIMIZE TABLE `db`.`t` ON CLUSTER 'c' FINAL"));
+            }
+            _ => panic!("expected a delta suggestion"),
+        }
+    }
+
+    #[test]
     fn empty_table_is_unknown() {
         let mut f = facts("String", "", 0);
         f.total_rows = 0;
-        assert!(matches!(advise(&f, "db", "t"), Advice::Unknown));
+        assert!(matches!(advise(&f, "db", "t", None), Advice::Unknown));
     }
 }

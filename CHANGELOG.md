@@ -19,14 +19,25 @@ GitHub release notes.
   with an expanded arrow but no objects, forcing a second click to load
   them; matches now populate from the warmed cache immediately.
 - The Columns tab gained a storage advisor. An opt-in "Analyse" scans
-  the table once for each column's distinct-value count, then an Advice
-  lane flags each column: a green tick where storage is already fine
-  (hover explains why), or an action icon where a codec or type change
-  would help. Clicking the action icon opens a new query-editor tab with
-  the suggested ALTER, ready to review and run. The suggestions are
+  the table once for each column's distinct-value count (with a
+  confirmation first on a writable connection, since it may create a
+  temporary table), then an Advice lane flags each column: a green tick
+  where storage is already fine (hover explains why), or an action icon
+  where a codec or type change would help. The suggestions are
   rule-based (e.g. low-cardinality string to LowCardinality, timestamps
   to Delta coding), not AI, and the scan result is cached for the
-  session.
+  session. On a writable connection each suggestion is measured against
+  a sample and shows how many times smaller the change would make the
+  column (e.g. "22x").
+- Suggestions can be applied. Left-click applies in place on a
+  staging/dev connection (with a confirmation first when the table is
+  large, since it rewrites data); on production it never applies in
+  place but opens the query editor instead. Right-click always opens the
+  editor with the full script. Codec changes include the
+  `OPTIMIZE ... FINAL` needed to recompress existing data, and when the
+  node selector is set to a cluster scope the statements run
+  `ON CLUSTER` so they reach every node. Applying updates the changed
+  column in place, with a spinner if it runs long.
 
 ## v0.1.20 - 2026-08-10
 
