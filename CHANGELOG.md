@@ -7,6 +7,18 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Fixed cmd-c not copying from the SQL editor: the results grid bound
+  cmd-c (and cmd-a) globally, shadowing the editor's own copy / select-all
+  whenever a grid existed. They are now scoped to the focused grid, and
+  clicking a grid cell takes focus so its cmd-c / cmd-a still work.
+- The agent transcript can be highlighted across messages: a single drag
+  now selects text spanning several messages and cmd-c copies the whole
+  range, instead of being trapped inside one message bubble.
+- Our messages in the agent transcript now render as a bordered box
+  matching the composer, visually distinct from the agent's replies.
+
 ## v0.1.21 - 2026-08-11
 
 Phase 8: column storage intelligence. The schema inspector learns to

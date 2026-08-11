@@ -2138,10 +2138,16 @@ fn render_entry(
     cx: &mut Context<Workspace>,
 ) -> gpui::AnyElement {
     match entry {
+        // Our messages echo the composer's look: a rounded, thin-bordered
+        // box over the panel background, distinct from the borderless AI
+        // replies.
         ThreadEntry::User(text) => div()
-            .p_2()
+            .px_3()
+            .py_2()
             .rounded(px(4.))
-            .bg(theme::selected())
+            .border_1()
+            .border_color(theme::border())
+            .bg(theme::bg())
             .text_color(theme::text())
             .child(
                 TextView::markdown(("agent-user", index), text.clone(), window, cx)

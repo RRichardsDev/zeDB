@@ -163,3 +163,41 @@ Invariants: extras stay sorted and non-overlapping with the primary;
 IME stays single-selection (the fan-out guard excludes it). When a
 crates.io gpui-component ships real multi-selection, reassess whether
 this whole patch can be dropped.
+
+## 11. Cross-view text selection (`TextView`)
+
+Upstream `TextView` selection is strictly per-element: each selectable
+view owns local start/end points and a drag can only highlight within
+one view, so a highlight cannot span sibling messages (the agent
+transcript renders each message as its own `TextView`). This patch
+makes one drag span every selectable `TextView` painted in a frame and
+`cmd-c` copy the whole range in document order. Sites:
+
+- `src/global_state.rs`: a shared `TextSelection { anchor, active,
+  anchor_view, selecting }` in window coordinates, plus a paint-order
+  registry of selectable views (`selection_views`). Helpers:
+  `start/update/end/clear_text_selection`, `has_text_selection`,
+  `register_selection_view`.
+- `src/text/text_view.rs`:
+  - `TextViewState`: dropped the local `is_selecting`; `start/update/
+    end_selection` replaced by `set_selection_band`, which mirrors the
+    shared window-coord band into the view's local frame. Because
+    `selection_bounds` re-adds `bounds.origin`, every view hit-tests its
+    window-absolute glyphs against the identical band, and the existing
+    multi-line `point_in_text_selection` vertical clip decides each
+    view's slice for free.
+  - `paint`: derives each selectable view's selection from the shared
+    band and registers it. Mouse wiring now drives the global state: a
+    bubble-phase press inside a view starts a fresh selection anchored
+    there; a capture-phase press outside a view clears (capture runs for
+    all views before any bubble start, so empty-space clears and a press
+    on another message clears-then-re-anchors, order-independently);
+    only the anchor view drives move/up (window events reach it after
+    the cursor leaves its bounds).
+  - `on_action_copy`: concatenates `selection_text()` across the
+    registered views (skipping empty), joined by newlines, falling back
+    to the focused view alone.
+
+Why it stays scoped in practice: only agent-transcript messages set
+`.selectable(true)`, so the shared band only ever groups those. When a
+crates.io gpui-component ships document-spanning selection, drop this.

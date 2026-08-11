@@ -17,6 +17,11 @@ use zedb_core::{ColumnMeta, Value};
 
 actions!(grid_spike, [Copy, CopyAsCsv, SelectAll]);
 
+/// Key context for the results grid. Scoping cmd-c / cmd-a to this
+/// (rather than binding them globally) keeps them from shadowing the
+/// SQL editor's own cmd-c / cmd-a, which live in the "Input" context.
+const CONTEXT: &str = "DataGrid";
+
 /// A header interaction asking the owning tab to rewrite the query.
 pub enum GridEvent {
     /// The complete desired sort, in priority order; empty clears it.
@@ -155,8 +160,8 @@ pub struct GridSpike {
 impl GridSpike {
     pub fn new(cx: &mut Context<Self>) -> Self {
         cx.bind_keys([
-            KeyBinding::new("cmd-c", Copy, None),
-            KeyBinding::new("cmd-a", SelectAll, None),
+            KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
+            KeyBinding::new("cmd-a", SelectAll, Some(CONTEXT)),
         ]);
         Self {
             columns: Vec::new(),
@@ -1274,7 +1279,7 @@ impl Render for GridSpike {
                                         cx.listener(
                                             move |this: &mut GridSpike,
                                                   event: &MouseDownEvent,
-                                                  _,
+                                                  window,
                                                   cx| {
                                                 if event.modifiers.shift {
                                                     if let Some(selection) = this.selected.as_mut()
@@ -1289,6 +1294,10 @@ impl Render for GridSpike {
                                                         Some(Selection::cell((row, col)));
                                                 }
                                                 this.selecting = true;
+                                                // Take keyboard focus so the
+                                                // grid's (now focus-scoped)
+                                                // cmd-c / cmd-a reach it.
+                                                window.focus(&this.focus_handle);
                                                 cx.notify();
                                             },
                                         ),
@@ -1755,6 +1764,7 @@ impl Render for GridSpike {
             .bg(theme::bg())
             .text_color(theme::text())
             .text_sm()
+            .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" && this.inspected.take().is_some() {

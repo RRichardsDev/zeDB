@@ -225,8 +225,6 @@ pub(crate) struct TextViewState {
     bounds: Bounds<Pixels>,
     /// The local (in TextView) position of the selection.
     selection_positions: (Option<Point<Pixels>>, Option<Point<Pixels>>),
-    /// Is current in selection.
-    is_selecting: bool,
     is_selectable: bool,
     list_state: ListState,
 }
@@ -241,7 +239,6 @@ impl TextViewState {
             focus_handle: Some(focus_handle),
             bounds: Bounds::default(),
             selection_positions: (None, None),
-            is_selecting: false,
             is_selectable: false,
             list_state: ListState::new(0, gpui::ListAlignment::Top, px(1000.)),
         }
@@ -259,24 +256,18 @@ impl TextViewState {
 
     fn clear_selection(&mut self) {
         self.selection_positions = (None, None);
-        self.is_selecting = false;
     }
 
-    fn start_selection(&mut self, pos: Point<Pixels>) {
-        let pos = pos - self.bounds.origin;
-        self.selection_positions = (Some(pos), Some(pos));
-        self.is_selecting = true;
-    }
-
-    fn update_selection(&mut self, pos: Point<Pixels>) {
-        let pos = pos - self.bounds.origin;
-        if let (Some(start), Some(_)) = self.selection_positions {
-            self.selection_positions = (Some(start), Some(pos))
-        }
-    }
-
-    fn end_selection(&mut self) {
-        self.is_selecting = false;
+    /// zeDB patch: mirror the shared cross-view selection band (in window
+    /// coordinates) into this view's local frame. `selection_bounds` adds
+    /// `bounds.origin` back, so every view ends up hit-testing its
+    /// window-absolute glyphs against the identical band; vertical
+    /// clipping in `point_in_text_selection` decides each view's slice.
+    fn set_selection_band(&mut self, anchor: Point<Pixels>, active: Point<Pixels>) {
+        self.selection_positions = (
+            Some(anchor - self.bounds.origin),
+            Some(active - self.bounds.origin),
+        );
     }
 
     pub(crate) fn has_selection(&self) -> bool {
@@ -517,11 +508,33 @@ impl TextView {
     }
 
     fn on_action_copy(state: &Entity<TextViewState>, cx: &mut App) {
-        let Some(selected_text) = state.read(cx).selection_text() else {
-            return;
+        // zeDB patch: assemble the selection across every selectable view
+        // (in paint / document order) so a highlight spanning several
+        // messages copies whole. Falls back to the focused view alone when
+        // no cross-view registry is present.
+        let views = GlobalState::global(cx).selection_views().to_vec();
+        let mut parts: Vec<String> = Vec::new();
+        for view in views {
+            if let Some(view) = view.upgrade() {
+                if let Some(text) = view.read(cx).selection_text() {
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        parts.push(text.to_string());
+                    }
+                }
+            }
+        }
+
+        let selected_text = if parts.is_empty() {
+            state.read(cx).selection_text().map(|t| t.trim().to_string())
+        } else {
+            Some(parts.join("\n"))
         };
 
-        cx.write_to_clipboard(ClipboardItem::new_string(selected_text.trim().to_string()));
+        let Some(selected_text) = selected_text.filter(|t| !t.is_empty()) else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(selected_text));
     }
 
     /// Set custom block actions for code blocks.
@@ -693,11 +706,24 @@ impl Element for TextView {
         let entity_id = window.current_view();
         let is_selectable = self.selectable;
 
+        // zeDB patch: drive this view's local selection from the shared
+        // cross-view band so a highlight can span sibling messages, and
+        // register the view (in paint order) for cross-view copy.
+        let state_id = self.state.entity_id();
         self.state.update(cx, |state, _| {
             state.parent_entity = Some(entity_id);
             state.update_bounds(bounds);
             state.is_selectable = is_selectable;
         });
+
+        if is_selectable {
+            let selection = GlobalState::global(cx).text_selection();
+            self.state.update(cx, |state, _| match selection {
+                Some(sel) => state.set_selection_band(sel.anchor, sel.active),
+                None => state.clear_selection(),
+            });
+            GlobalState::global_mut(cx).register_selection_view(self.state.downgrade());
+        }
 
         GlobalState::global_mut(cx)
             .text_view_state_stack
@@ -706,69 +732,54 @@ impl Element for TextView {
         GlobalState::global_mut(cx).text_view_state_stack.pop();
 
         if self.selectable {
-            let is_selecting = self.state.read(cx).is_selecting;
-            let has_selection = self.state.read(cx).has_selection();
+            let selection = GlobalState::global(cx).text_selection();
+            let selecting = selection.map(|sel| sel.selecting).unwrap_or(false);
+            let is_anchor = selection
+                .map(|sel| sel.selecting && sel.anchor_view == state_id)
+                .unwrap_or(false);
+            let has_selection = GlobalState::global(cx).has_text_selection();
 
-            window.on_mouse_event({
-                let state = self.state.clone();
-                move |event: &MouseDownEvent, phase, _, cx| {
-                    if !bounds.contains(&event.position) || !phase.bubble() {
-                        return;
-                    }
-
-                    state.update(cx, |state, _| {
-                        state.start_selection(event.position);
-                    });
-                    cx.notify(entity_id);
+            // A press inside this view starts a fresh selection anchored here.
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                if !phase.bubble() || !bounds.contains(&event.position) {
+                    return;
                 }
+                GlobalState::global_mut(cx).start_text_selection(event.position, state_id);
+                cx.notify(entity_id);
             });
 
-            if is_selecting {
-                // move to update end position.
-                window.on_mouse_event({
-                    let state = self.state.clone();
-                    move |event: &MouseMoveEvent, phase, _, cx| {
-                        if !phase.bubble() {
-                            return;
-                        }
-
-                        state.update(cx, |state, _| {
-                            state.update_selection(event.position);
-                        });
-                        cx.notify(entity_id);
+            // A press that lands outside this view clears the shared
+            // selection in the capture phase, which runs for every view
+            // before any view's bubble-phase start handler. So a press on
+            // empty space clears, while a press on another message clears
+            // then that message re-anchors: order-independent.
+            if has_selection {
+                window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                    if phase.bubble() || bounds.contains(&event.position) {
+                        return;
                     }
-                });
-
-                // up to end selection
-                window.on_mouse_event({
-                    let state = self.state.clone();
-                    move |_: &MouseUpEvent, phase, _, cx| {
-                        if !phase.bubble() {
-                            return;
-                        }
-
-                        state.update(cx, |state, _| {
-                            state.end_selection();
-                        });
-                        cx.notify(entity_id);
-                    }
+                    GlobalState::global_mut(cx).clear_text_selection();
+                    cx.notify(entity_id);
                 });
             }
 
-            if has_selection {
-                // down outside to clear selection
-                window.on_mouse_event({
-                    let state = self.state.clone();
-                    move |event: &MouseDownEvent, _, _, cx| {
-                        if bounds.contains(&event.position) {
-                            return;
-                        }
-
-                        state.update(cx, |state, _| {
-                            state.clear_selection();
-                        });
-                        cx.notify(entity_id);
+            // Only the anchor view drives the drag; window mouse events
+            // reach it even once the cursor leaves its bounds.
+            if selecting && is_anchor {
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    if !phase.bubble() {
+                        return;
                     }
+                    GlobalState::global_mut(cx).update_text_selection(event.position);
+                    cx.notify(entity_id);
+                });
+
+                window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                    if !phase.bubble() {
+                        return;
+                    }
+                    GlobalState::global_mut(cx).end_text_selection();
+                    cx.notify(entity_id);
                 });
             }
         }
