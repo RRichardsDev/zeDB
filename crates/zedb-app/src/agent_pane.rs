@@ -272,6 +272,9 @@ impl Workspace {
     pub(crate) fn agent_toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.agent.open = !self.agent.open;
         if self.agent.open {
+            // The agent pane and the history/saved drawer both dock right;
+            // opening one closes the other so they never fight for space.
+            self.show_history = false;
             self.agent_refresh_registry();
             self.agent_focus_composer(window, cx);
         }

@@ -156,8 +156,6 @@ impl Workspace {
             self.flash_warning(format!("Could not save query: {error}"), cx);
         }
         self.settings_sync_tick(cx);
-        // Show it where it landed.
-        self.history_tab = HistoryTab::Saved;
         cx.notify();
     }
 
@@ -473,6 +471,7 @@ impl Workspace {
                         };
                         let name = saved.name.clone();
                         let hover_sql = saved.sql.clone();
+                        let advise_sql = saved.sql.clone();
                         let delete_name = saved.name.clone();
                         let favorite_name = saved.name.clone();
                         let rename_name = saved.name.clone();
@@ -627,6 +626,31 @@ impl Workspace {
                                                     ),
                                                 ));
                                                 cx.notify();
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        action_button(
+                                            ("advise-saved", index),
+                                            "icons/advise.svg",
+                                            false,
+                                            theme::text_dim(),
+                                        )
+                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(
+                                                "Run & advise on this query",
+                                            )
+                                            .build(window, cx)
+                                        })
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                cx.stop_propagation();
+                                                this.advise_saved_query(
+                                                    advise_sql.clone(),
+                                                    window,
+                                                    cx,
+                                                );
                                             }),
                                         ),
                                     )

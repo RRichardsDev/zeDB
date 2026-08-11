@@ -9,6 +9,25 @@ GitHub release notes.
 
 ## Unreleased
 
+- New query advisor (Phase 9): the Saved tab's Advise button runs a saved
+  query and, from its EXPLAIN plan and run stats, flags when the primary
+  key isn't filtering it (scanned a lot to return a little). The fix is
+  copyable DDL that names the real WHERE column and picks the skip-index
+  type from the column's type and a cardinality probe: minmax for ranges,
+  set(0) for low-cardinality equality, bloom_filter (with a tighter 0.01
+  rate for very high cardinality) otherwise. Each finding has copy /
+  open-in-editor actions and, when an agent is remembered, an optional
+  silent hand-off that routes the fix into the editor. A clean query shows
+  a short "looks fine" note.
+- Fixed a crash where any non-ASCII character (accent, em-dash, arrow,
+  emoji, a backtick-quoted non-ASCII name) typed or pasted into the SQL
+  editor aborted the app: the completion tokenizer sliced mid-character.
+- Query tabs no longer push the toolbar (max rows, Execute, Run, history)
+  off-screen: the toolbar keeps its place and the tabs scroll (shift-wheel
+  over the tab strip) when there are too many to fit.
+- Opening the agent panel now closes the history/saved drawer (they share
+  the right dock), and bookmarking a query no longer switches the drawer
+  to the Saved tab.
 - Connection rows are quieter at rest: instead of full pills they wear a
   small triangle in the environment color and a square in the read/write
   color, and hovering the row swaps the full ENV / READ-ONLY / WRITE
