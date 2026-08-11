@@ -1866,8 +1866,8 @@ impl Workspace {
                                             .group_hover("connection-row", |marks| {
                                                 marks.invisible()
                                             })
-                                            .child(Self::tier_glyph(connection.tier))
-                                            .child(Self::write_glyph(connection.read_only)),
+                                            .child(Self::write_glyph(connection.read_only))
+                                            .child(Self::tier_glyph(connection.tier)),
                                     ),
                             ),
                     )
