@@ -9,6 +9,10 @@ GitHub release notes.
 
 ## Unreleased
 
+- Connection rows are quieter at rest: instead of full pills they wear a
+  small triangle in the environment color and a square in the read/write
+  color, and hovering the row swaps the full ENV / READ-ONLY / WRITE
+  pills back in.
 - Fixed cmd-c not copying from the SQL editor: the results grid bound
   cmd-c (and cmd-a) globally, shadowing the editor's own copy / select-all
   whenever a grid existed. They are now scoped to the focused grid, and

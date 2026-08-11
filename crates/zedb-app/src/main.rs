@@ -1761,6 +1761,27 @@ impl Workspace {
             })
     }
 
+    /// The at-rest environment mark: a small triangle in the tier's
+    /// accent color, shown when a connection row is not hovered.
+    fn tier_glyph(tier: EnvTier) -> impl IntoElement {
+        let (_, foreground) = Self::tier_colors(tier);
+        div()
+            .text_size(px(9.))
+            .text_color(rgb(foreground))
+            .child("\u{25B2}")
+    }
+
+    /// The at-rest write-posture mark: a small square, dim when
+    /// read-only, alert-colored when writes are open.
+    fn write_glyph(read_only: bool) -> impl IntoElement {
+        let color = if read_only {
+            theme::text_dim()
+        } else {
+            theme::alert()
+        };
+        div().text_size(px(8.)).text_color(color).child("\u{25A0}")
+    }
+
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self
             .connections
@@ -1775,6 +1796,7 @@ impl Workspace {
                     == Some(connection.name.as_str());
                 div()
                     .id(("connection", index))
+                    .group("connection-row")
                     .w_full()
                     .px_2()
                     .py_2()
@@ -1812,12 +1834,41 @@ impl Workspace {
                             .text_color(theme::text())
                             .child(connection.name.clone())
                             .child(
+                                // At rest the row wears only two small
+                                // marks: a triangle in the environment
+                                // color and a square in the read/write
+                                // color. Hovering the row swaps in the
+                                // full pills. The pills stay in flow
+                                // (invisible) so they reserve the width and
+                                // the layout does not shift on hover.
                                 div()
+                                    .relative()
                                     .flex()
                                     .items_center()
-                                    .gap_1()
-                                    .child(Self::write_badge_small(connection.read_only))
-                                    .child(Self::tier_badge_small(connection.tier)),
+                                    .justify_end()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .invisible()
+                                            .group_hover("connection-row", |pills| pills.visible())
+                                            .child(Self::write_badge_small(connection.read_only))
+                                            .child(Self::tier_badge_small(connection.tier)),
+                                    )
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .right_0()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(3.))
+                                            .group_hover("connection-row", |marks| {
+                                                marks.invisible()
+                                            })
+                                            .child(Self::tier_glyph(connection.tier))
+                                            .child(Self::write_glyph(connection.read_only)),
+                                    ),
                             ),
                     )
                     .child(
