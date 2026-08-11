@@ -7,37 +7,51 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.21 - 2026-08-11
 
-- The schema inspector's Columns tab now shows per-column storage: the
-  compressed and uncompressed size, the compression ratio, and the
-  codec (colored like types). The table header gains an overall
-  compression ratio. Per-column sizes exist only for Wide parts, so
-  a table stored entirely in Compact parts shows the table ratio plus
-  a note explaining the per-column columns are blank.
+Phase 8: column storage intelligence. The schema inspector learns to
+show how each column is stored, advise on savings, and apply the change.
+
+### Per-column storage
+
+- The Columns tab shows per-column storage: compressed and uncompressed
+  size, the compression ratio, and the codec (colored like types). The
+  table header gains an overall compression ratio. Per-column sizes
+  exist only for Wide parts, so a table stored entirely in Compact parts
+  shows the table ratio plus a note explaining the per-column columns
+  are blank.
+
+### Storage advisor
+
+- An opt-in "Analyse" scans the table once for each column's
+  distinct-value count (with a confirmation first on a writable
+  connection, since it may create a temporary table), then an Advice
+  lane flags each column: a green tick where storage is already fine
+  (hover explains why), or an action icon where a codec or type change
+  would help. The suggestions are rule-based (e.g. low-cardinality
+  string to LowCardinality, timestamps to Delta coding), not AI, and the
+  scan result is cached for the session.
+- On a writable connection each suggestion is measured against a sample
+  and shows how many times smaller the change would make the column
+  (e.g. "22x").
+
+### Applying suggestions
+
+- Left-click applies a suggestion in place on a staging/dev connection
+  (with a confirmation first when the table is large, since it rewrites
+  data); on production it never applies in place but opens the query
+  editor instead. Right-click always opens the editor with the full
+  script. Codec changes include the `OPTIMIZE ... FINAL` needed to
+  recompress existing data, and when the node selector is set to a
+  cluster scope the statements run `ON CLUSTER` so they reach every
+  node. Applying updates the changed column in place, with a spinner if
+  it runs long.
+
+### Fixes
+
 - Fixed a schema-explorer bug where filtering showed matching databases
   with an expanded arrow but no objects, forcing a second click to load
   them; matches now populate from the warmed cache immediately.
-- The Columns tab gained a storage advisor. An opt-in "Analyse" scans
-  the table once for each column's distinct-value count (with a
-  confirmation first on a writable connection, since it may create a
-  temporary table), then an Advice lane flags each column: a green tick
-  where storage is already fine (hover explains why), or an action icon
-  where a codec or type change would help. The suggestions are
-  rule-based (e.g. low-cardinality string to LowCardinality, timestamps
-  to Delta coding), not AI, and the scan result is cached for the
-  session. On a writable connection each suggestion is measured against
-  a sample and shows how many times smaller the change would make the
-  column (e.g. "22x").
-- Suggestions can be applied. Left-click applies in place on a
-  staging/dev connection (with a confirmation first when the table is
-  large, since it rewrites data); on production it never applies in
-  place but opens the query editor instead. Right-click always opens the
-  editor with the full script. Codec changes include the
-  `OPTIMIZE ... FINAL` needed to recompress existing data, and when the
-  node selector is set to a cluster scope the statements run
-  `ON CLUSTER` so they reach every node. Applying updates the changed
-  column in place, with a spinner if it runs long.
 
 ## v0.1.20 - 2026-08-10
 
