@@ -7,56 +7,57 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.22 - 2026-08-12
 
-- The schema inspector gains Dependencies and Projections tabs (Phase 9).
-  Dependencies draws the materialized-view lineage as source -> view ->
-  target chains with this object emphasized; every other node is clickable
-  to walk the graph both ways, and a referenced table that no longer
-  exists is flagged as a broken pipeline. Projections lists each
-  projection's definition (aggregate query or ORDER BY) and size, with a
-  one-line explanation of what a projection is. Moving between tables keeps
-  the tab you were on.
-- The schema inspector gains a Parts tab (Phase 9): active parts grouped
-  by partition, each with its part count, rows, compressed / uncompressed
-  size, ratio and max merge level, plus a "too many parts" warning when a
-  single partition has enough active parts to slow reads and inserts.
-  Loads on demand from the connected node's system.parts, with a refresh.
-  While the tab is open it also shows merges in progress (system.merges),
-  auto-refreshing every couple of seconds with a live progress bar,
-  parts-merged, rows written and memory; mutations are tagged.
-- New query advisor (Phase 9): the Saved tab's Advise button runs a saved
-  query and, from its EXPLAIN plan and run stats, flags when the primary
-  key isn't filtering it (scanned a lot to return a little). The fix is
-  copyable DDL that names the real WHERE column and picks the skip-index
-  type from the column's type and a cardinality probe: minmax for ranges,
-  set(0) for low-cardinality equality, bloom_filter (with a tighter 0.01
-  rate for very high cardinality) otherwise. Each finding has copy /
-  open-in-editor actions and, when an agent is remembered, an optional
-  silent hand-off that routes the fix into the editor. A clean query shows
-  a short "looks fine" note.
+Phase 9 makes ClickHouse more legible: a query advisor that turns a
+query's plan into a fix, and a schema inspector that shows the MergeTree
+lifecycle and materialized-view lineage. Plus a batch of editor, grid,
+and agent-panel fixes.
+
+### Query advisor
+
+- On the Saved tab, Advise runs a saved query and, from its EXPLAIN plan
+  and run stats, flags when the primary key isn't filtering it (scanned a
+  lot to return a little). The fix is copyable DDL naming the real WHERE
+  column, with the skip-index type chosen from the column's type and a
+  cardinality probe (minmax for ranges, set(0) for low-cardinality
+  equality, bloom_filter otherwise, tighter for very high cardinality).
+  Copy / open-in-editor actions, plus an optional silent hand-off to a
+  remembered agent; a clean query shows a short "looks fine" note.
+
+### Schema inspector
+
+- Parts tab: active parts grouped by partition (count, rows, sizes,
+  ratio, merge level) with a "too many parts" warning, and, live, the
+  merges in progress with a progress bar refreshing every couple of
+  seconds; mutations are tagged.
+- Dependencies tab: the materialized-view lineage as source -> view ->
+  target chains, walkable both ways by clicking nodes, with broken
+  pipelines (a referenced table that no longer exists) flagged.
+- Projections tab: each projection's definition and size, with a one-line
+  explanation of what a projection is.
+- Moving between tables keeps the tab you were on.
+
+### SQL editor and grid
+
 - Fixed a crash where any non-ASCII character (accent, em-dash, arrow,
-  emoji, a backtick-quoted non-ASCII name) typed or pasted into the SQL
-  editor aborted the app: the completion tokenizer sliced mid-character.
-- Query tabs no longer push the toolbar (max rows, Execute, Run, history)
-  off-screen: the toolbar keeps its place and the tabs scroll (shift-wheel
-  over the tab strip) when there are too many to fit.
-- Opening the agent panel now closes the history/saved drawer (they share
-  the right dock), and bookmarking a query no longer switches the drawer
-  to the Saved tab.
-- Connection rows are quieter at rest: instead of full pills they wear a
-  small triangle in the environment color and a square in the read/write
-  color, and hovering the row swaps the full ENV / READ-ONLY / WRITE
-  pills back in.
-- Fixed cmd-c not copying from the SQL editor: the results grid bound
-  cmd-c (and cmd-a) globally, shadowing the editor's own copy / select-all
-  whenever a grid existed. They are now scoped to the focused grid, and
-  clicking a grid cell takes focus so its cmd-c / cmd-a still work.
-- The agent transcript can be highlighted across messages: a single drag
-  now selects text spanning several messages and cmd-c copies the whole
-  range, instead of being trapped inside one message bubble.
-- Our messages in the agent transcript now render as a bordered box
-  matching the composer, visually distinct from the agent's replies.
+  emoji) typed or pasted into the editor aborted the app.
+- Fixed cmd-c not copying from the editor (the results grid was stealing
+  it); clicking a grid cell now focuses it so grid copy still works.
+- Query tabs scroll (shift-wheel) instead of pushing the toolbar off
+  screen when there are too many to fit.
+- Bookmarking a query no longer jumps the drawer to the Saved tab.
+
+### Agent panel
+
+- Text selection can span several messages (one drag, one copy).
+- Our messages render as a bordered box matching the composer.
+- Opening the agent panel closes the history/saved drawer.
+
+### Connections
+
+- Connection rows are quieter at rest: a small triangle (environment) and
+  square (read/write), with the full pills on hover.
 
 ## v0.1.21 - 2026-08-11
 
