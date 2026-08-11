@@ -94,6 +94,24 @@ pub struct PartitionStats {
     pub max_level: u64,
 }
 
+/// One in-progress merge (or mutation-merge) for a table, from
+/// `system.merges` (Phase 9, Part B).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MergeInfo {
+    pub partition_id: String,
+    pub result_part: String,
+    /// Source parts being merged into one.
+    pub num_parts: u64,
+    pub elapsed_secs: u64,
+    /// Completion percent (0..100).
+    pub progress_pct: u64,
+    pub rows_read: u64,
+    pub rows_written: u64,
+    pub memory_usage: u64,
+    /// True when this is a mutation applying an ALTER, not a plain merge.
+    pub is_mutation: bool,
+}
+
 impl ChClient {
     /// Fetch the cheap, fleet-wide portion of the schema cache in one sweep.
     /// Column metadata is intentionally fetched separately per database.
@@ -253,6 +271,42 @@ impl ChClient {
                     compressed_bytes: optional_u64_at(row, 3, "compressed bytes")?.unwrap_or(0),
                     uncompressed_bytes: optional_u64_at(row, 4, "uncompressed bytes")?.unwrap_or(0),
                     max_level: optional_u64_at(row, 5, "max level")?.unwrap_or(0),
+                })
+            })
+            .collect()
+    }
+
+    /// Merges (and mutation-merges) running right now for this table
+    /// (Phase 9, Part B). Polled while the Parts tab is open so progress
+    /// updates live. `elapsed` and `progress` are cast to integers in SQL
+    /// to reuse the integer row accessors.
+    pub async fn active_merges(&self, database: &str, object: &str) -> Result<Vec<MergeInfo>> {
+        let database = escape_string(database);
+        let object = escape_string(object);
+        let result = self
+            .query(&format!(
+                "SELECT partition_id, result_part_name, num_parts, \
+                        toUInt64(round(elapsed)), toUInt64(round(progress * 100)), \
+                        rows_read, rows_written, memory_usage, is_mutation \
+                 FROM system.merges \
+                 WHERE database = '{database}' AND table = '{object}' \
+                 ORDER BY progress DESC"
+            ))
+            .await?;
+        result
+            .rows
+            .iter()
+            .map(|row| {
+                Ok(MergeInfo {
+                    partition_id: string_at(row, 0, "partition_id")?,
+                    result_part: string_at(row, 1, "result_part_name")?,
+                    num_parts: optional_u64_at(row, 2, "num_parts")?.unwrap_or(0),
+                    elapsed_secs: optional_u64_at(row, 3, "elapsed")?.unwrap_or(0),
+                    progress_pct: optional_u64_at(row, 4, "progress")?.unwrap_or(0),
+                    rows_read: optional_u64_at(row, 5, "rows_read")?.unwrap_or(0),
+                    rows_written: optional_u64_at(row, 6, "rows_written")?.unwrap_or(0),
+                    memory_usage: optional_u64_at(row, 7, "memory_usage")?.unwrap_or(0),
+                    is_mutation: optional_u64_at(row, 8, "is_mutation")?.unwrap_or(0) != 0,
                 })
             })
             .collect()

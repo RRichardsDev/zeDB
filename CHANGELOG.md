@@ -14,6 +14,9 @@ GitHub release notes.
   size, ratio and max merge level, plus a "too many parts" warning when a
   single partition has enough active parts to slow reads and inserts.
   Loads on demand from the connected node's system.parts, with a refresh.
+  While the tab is open it also shows merges in progress (system.merges),
+  auto-refreshing every couple of seconds with a live progress bar,
+  parts-merged, rows written and memory; mutations are tagged.
 - New query advisor (Phase 9): the Saved tab's Advise button runs a saved
   query and, from its EXPLAIN plan and run stats, flags when the primary
   key isn't filtering it (scanned a lot to return a little). The fix is

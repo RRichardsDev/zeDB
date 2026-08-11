@@ -392,6 +392,9 @@ struct SelectedSchemaObject {
     partitions: Option<Vec<zedb_ch::PartitionStats>>,
     partitions_loading: bool,
     partitions_error: Option<String>,
+    /// Merges in progress for this object, refreshed on a poll while the
+    /// Parts tab is open (Phase 9, Part B).
+    merges: Vec<zedb_ch::MergeInfo>,
     ddl_editor: Entity<InputState>,
     engine_editor: Entity<InputState>,
     tab: ObjectInspectorTab,
@@ -519,6 +522,8 @@ struct Workspace {
     /// report the kill instead of a transport failure.
     ops_killed: std::collections::HashSet<String>,
     health_poll_generation: u64,
+    /// Cancels a stale merges poll when the object or tab changes.
+    merges_poll_generation: u64,
     connections: Vec<ConnectionConfig>,
     selected: Option<usize>,
     connected: Option<ConnectedCluster>,
@@ -896,6 +901,7 @@ impl Workspace {
                 checks: None,
                 commit: None,
                 health_poll_generation: 0,
+                merges_poll_generation: 0,
                 query_abort: None,
                 rerun_pending: None,
                 last_focus_check: None,
@@ -973,6 +979,7 @@ impl Workspace {
                 checks: None,
                 commit: None,
                 health_poll_generation: 0,
+                merges_poll_generation: 0,
                 query_abort: None,
                 rerun_pending: None,
                 last_focus_check: None,
@@ -3718,6 +3725,102 @@ impl Workspace {
         .detach();
     }
 
+    /// Poll `system.merges` for the selected object while the Parts tab is
+    /// open, so in-progress merges and their progress update live. A
+    /// generation guard stops the loop when the object or tab changes.
+    fn start_merges_poll(&mut self, cx: &mut Context<Self>) {
+        self.merges_poll_generation += 1;
+        let generation = self.merges_poll_generation;
+        let Some(selected) = &self.selected_schema_object else {
+            return;
+        };
+        let Some(connected) = &self.connected else {
+            return;
+        };
+        let connection_name = connected.name.clone();
+        let database = selected.database.clone();
+        let object = selected.object.name.clone();
+        self.merges_fetch(generation, cx);
+        cx.spawn(async move |this, cx| loop {
+            Timer::after(Duration::from_secs(2)).await;
+            let live = this
+                .update(cx, |this, cx| {
+                    let live = this.merges_poll_generation == generation
+                        && this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                            == Some(connection_name.as_str())
+                        && this
+                            .selected_schema_object
+                            .as_ref()
+                            .is_some_and(|selected| {
+                                selected.tab == ObjectInspectorTab::Parts
+                                    && selected.database == database
+                                    && selected.object.name == object
+                            });
+                    if live {
+                        this.merges_fetch(generation, cx);
+                    }
+                    live
+                })
+                .unwrap_or(false);
+            if !live {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    /// One off-thread read of the selected object's in-progress merges.
+    fn merges_fetch(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let (connection_name, config, database, object) = {
+            let Some(selected) = &self.selected_schema_object else {
+                return;
+            };
+            let Some(connected) = &self.connected else {
+                return;
+            };
+            (
+                connected.name.clone(),
+                connected.client_config.clone(),
+                selected.database.clone(),
+                selected.object.name.clone(),
+            )
+        };
+        let guard_database = database.clone();
+        let guard_object = object.clone();
+        let task = rt::tokio().spawn(async move {
+            ChClient::new(config)
+                .active_merges(&database, &object)
+                .await
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if this.merges_poll_generation != generation {
+                    return;
+                }
+                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                    != Some(connection_name.as_str())
+                {
+                    return;
+                }
+                let Some(selected) = &mut this.selected_schema_object else {
+                    return;
+                };
+                if selected.database != guard_database || selected.object.name != guard_object {
+                    return;
+                }
+                // Keep the last snapshot on a transient error; a live poll
+                // shouldn't blank out or spam.
+                if let Ok(Ok(merges)) = result {
+                    selected.merges = merges;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// The Parts tab: active parts grouped by partition, with a "too many
     /// parts" warning. Reads the connected node's `system.parts`.
     fn parts_panel(&self, selected: &SelectedSchemaObject, cx: &mut Context<Self>) -> gpui::Div {
@@ -3810,6 +3913,99 @@ impl Workspace {
                     ))
             })
             .collect();
+
+        // Compact count: 42_401_792 -> "42.4M", so a live merge line never
+        // wraps.
+        let compact = |n: u64| -> String {
+            let (value, suffix) = if n >= 1_000_000_000 {
+                (n as f64 / 1e9, "B")
+            } else if n >= 1_000_000 {
+                (n as f64 / 1e6, "M")
+            } else if n >= 1_000 {
+                (n as f64 / 1e3, "K")
+            } else {
+                return n.to_string();
+            };
+            let text = format!("{value:.1}");
+            format!("{}{suffix}", text.strip_suffix(".0").unwrap_or(&text))
+        };
+
+        // Live merges (auto-refreshed by the poll): a thin progress bar and
+        // a compact, dot-separated status line. Mutations are tagged.
+        let merge_rows: Vec<_> = selected
+            .merges
+            .iter()
+            .map(|merge| {
+                let pct = merge.progress_pct.min(100);
+                let partition = if merge.partition_id.is_empty() || merge.partition_id == "all" {
+                    "(unpartitioned)".to_string()
+                } else {
+                    merge.partition_id.clone()
+                };
+                // The stats that ride the right edge; the progress (bar + %)
+                // stays grouped with the label on the left.
+                let stats = format!(
+                    "{}\u{2192}1 \u{b7} {} rows \u{b7} {} \u{b7} {}s",
+                    merge.num_parts,
+                    compact(merge.rows_written),
+                    Self::format_bytes(merge.memory_usage),
+                    merge.elapsed_secs,
+                );
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .py_1p5()
+                    .border_b_1()
+                    .border_color(theme::border())
+                    .text_sm()
+                    .whitespace_nowrap()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(div().text_color(theme::text()).child(partition))
+                            .when(merge.is_mutation, |row| {
+                                row.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme::text_dim())
+                                        .child("mutation"),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .w(px(120.))
+                                    .h(px(6.))
+                                    .rounded(px(3.))
+                                    .bg(theme::border())
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .w(px(120. * pct as f32 / 100.))
+                                            .rounded(px(3.))
+                                            .bg(theme::accent()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .w(px(40.))
+                                    .text_color(theme::text_dim())
+                                    .child(format!("{pct}%")),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(theme::text_dim())
+                            .child(stats),
+                    )
+            })
+            .collect();
+        let has_merges = !merge_rows.is_empty();
 
         let body = div()
             .id("object-parts")
@@ -3918,6 +4114,28 @@ impl Workspace {
                             })),
                     ),
             )
+            // Live merges (shown only while something is merging).
+            .when(has_merges, |panel| {
+                panel.child(
+                    div()
+                        .flex_none()
+                        .px_4()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(theme::border())
+                        .bg(theme::bg_sunken())
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::text_dim())
+                                .pb_1()
+                                .child("Merges in progress"),
+                        )
+                        .children(merge_rows),
+                )
+            })
             // A single partition with too many parts slows reads and inserts.
             .when(busiest >= TOO_MANY_PARTS, |panel| {
                 panel.child(
@@ -4206,6 +4424,7 @@ impl Workspace {
             partitions: None,
             partitions_loading: false,
             partitions_error: None,
+            merges: Vec::new(),
             ddl_editor: ddl_editor.clone(),
             engine_editor: engine_editor.clone(),
             tab,
@@ -7387,6 +7606,7 @@ impl Workspace {
                             }
                             if button_tab == ObjectInspectorTab::Parts {
                                 this.load_partitions(cx);
+                                this.start_merges_poll(cx);
                             }
                         }))
                         .child(label)
