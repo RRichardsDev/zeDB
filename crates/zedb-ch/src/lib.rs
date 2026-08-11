@@ -34,7 +34,8 @@ pub use pin::{
     binary_cache_dir, cached_binary, discover_server_version, ensure_binary, smoke_replay, PinError,
 };
 pub use schema::{
-    distributed_sharding_key, ColumnInfo, DatabaseMeta, MergeInfo, ObjectDetails, PartitionStats,
-    SchemaObjectKind, SchemaObjectMeta, TableStorage,
+    distributed_sharding_key, ColumnInfo, DatabaseMeta, MergeInfo, MvDependency,
+    ObjectDependencies, ObjectDetails, PartitionStats, ProjectionInfo, SchemaObjectKind,
+    SchemaObjectMeta, TableStorage,
 };
 pub use types::{parse_type, ChType};

@@ -9,6 +9,14 @@ GitHub release notes.
 
 ## Unreleased
 
+- The schema inspector gains Dependencies and Projections tabs (Phase 9).
+  Dependencies draws the materialized-view lineage as source -> view ->
+  target chains with this object emphasized; every other node is clickable
+  to walk the graph both ways, and a referenced table that no longer
+  exists is flagged as a broken pipeline. Projections lists each
+  projection's definition (aggregate query or ORDER BY) and size, with a
+  one-line explanation of what a projection is. Moving between tables keeps
+  the tab you were on.
 - The schema inspector gains a Parts tab (Phase 9): active parts grouped
   by partition, each with its part count, rows, compressed / uncompressed
   size, ratio and max merge level, plus a "too many parts" warning when a
