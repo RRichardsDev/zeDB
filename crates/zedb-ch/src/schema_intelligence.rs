@@ -809,6 +809,14 @@ fn current_statement(sql: &str, cursor: usize) -> &str {
     &sql[start..end.max(start)]
 }
 
+/// Byte length of the UTF-8 character starting at `index`, so the
+/// byte-wise tokenizer advances whole characters and never slices mid
+/// character (a multibyte char in the SQL otherwise panics the app, since
+/// this runs on the editor buffer as you type/paste). At least 1.
+fn char_len(sql: &str, index: usize) -> usize {
+    sql[index..].chars().next().map_or(1, |c| c.len_utf8())
+}
+
 fn tokenize(sql: &str) -> Vec<Token<'_>> {
     let bytes = sql.as_bytes();
     let mut tokens = Vec::new();
@@ -839,14 +847,15 @@ fn tokenize(sql: &str) -> Vec<Token<'_>> {
             let mut inner_end = index;
             while index < bytes.len() {
                 if bytes[index] == b'\\' {
-                    index = (index + 2).min(bytes.len());
+                    index =
+                        (index + 1 + char_len(sql, (index + 1).min(sql.len()))).min(bytes.len());
                     inner_end = index;
                 } else if bytes[index] == b'`' {
                     inner_end = index;
                     index += 1;
                     break;
                 } else {
-                    index += 1;
+                    index += char_len(sql, index);
                     inner_end = index;
                 }
             }
@@ -883,7 +892,7 @@ fn tokenize(sql: &str) -> Vec<Token<'_>> {
             });
         } else {
             let start = index;
-            index += 1;
+            index += char_len(sql, index);
             tokens.push(Token {
                 text: &sql[start..index],
                 range: start..index,
@@ -923,6 +932,25 @@ mod tests {
     use crate::schema_cache::{CachedDatabase, CachedObjectKind};
 
     use super::*;
+
+    #[test]
+    fn multibyte_sql_does_not_panic_the_tokenizer() {
+        // The byte-wise tokenizer runs on the editor buffer as you type or
+        // paste; a multibyte character (arrow, em-dash, accent, emoji, a
+        // backtick-quoted non-ASCII name) must never slice mid character.
+        for sql in [
+            "SELECT * FROM t WHERE amount = 475.51 → note",
+            "SELECT * FROM t WHERE name = 'café' AND note = '— dash'",
+            "SELECT * FROM t WHERE `café` = 1 ORDER BY `naïve` DESC",
+            "SELECT 😀 FROM t WHERE x > 1",
+            "-- comment with →\nSELECT * FROM t WHERE a = 1",
+        ] {
+            // Must not panic.
+            let _ = tokenize(sql);
+            let _ = column_filters(sql);
+            let _ = top_level_order_by(sql);
+        }
+    }
 
     fn snapshot(columns: Option<HashMap<String, CachedColumn>>) -> SchemaSnapshot {
         let mut snapshot = SchemaSnapshot::default();
