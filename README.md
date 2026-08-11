@@ -66,4 +66,10 @@ Everything about building, architecture, and design decisions lives in
 
 ## License
 
-Apache-2.0
+Source-available under the [PolyForm Noncommercial License
+1.0.0](LICENSE): free to use, modify, and share for any **noncommercial**
+purpose, but not for commercial use. Copyright 2026 Rhodri Richards; all
+commercial rights reserved.
+
+Third-party components under `vendor/` (gpui, gpui-component, ...) remain
+under their own licenses (Apache-2.0).
