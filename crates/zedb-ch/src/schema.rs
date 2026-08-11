@@ -78,6 +78,22 @@ pub struct TableStorage {
     pub compact_parts: u64,
 }
 
+/// One partition's active-part rollup, for the schema inspector's Parts
+/// tab (Phase 9, Part B).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartitionStats {
+    /// The partition expression value (`tuple()` for unpartitioned tables).
+    pub partition: String,
+    /// Active parts in this partition; a large count is the "too many
+    /// parts" signal.
+    pub parts: u64,
+    pub rows: u64,
+    pub compressed_bytes: u64,
+    pub uncompressed_bytes: u64,
+    /// Highest merge level among the partition's parts (0 = never merged).
+    pub max_level: u64,
+}
+
 impl ChClient {
     /// Fetch the cheap, fleet-wide portion of the schema cache in one sweep.
     /// Column metadata is intentionally fetched separately per database.
@@ -203,6 +219,43 @@ impl ChClient {
             wide_parts: optional_u64_at(row, 2, "wide part count")?.unwrap_or(0),
             compact_parts: optional_u64_at(row, 3, "compact part count")?.unwrap_or(0),
         }))
+    }
+
+    /// Active parts grouped by partition (Phase 9, Part B), so the schema
+    /// inspector can show the MergeTree lifecycle: how many parts each
+    /// partition has (a "too many parts" signal), its rows and compressed
+    /// size. Reads the connected node's `system.parts`.
+    pub async fn table_partitions(
+        &self,
+        database: &str,
+        object: &str,
+    ) -> Result<Vec<PartitionStats>> {
+        let database = escape_string(database);
+        let object = escape_string(object);
+        let result = self
+            .query(&format!(
+                "SELECT partition, count(), sum(rows), \
+                        sum(data_compressed_bytes), sum(data_uncompressed_bytes), max(level) \
+                 FROM system.parts \
+                 WHERE database = '{database}' AND table = '{object}' AND active \
+                 GROUP BY partition \
+                 ORDER BY min(min_time), partition"
+            ))
+            .await?;
+        result
+            .rows
+            .iter()
+            .map(|row| {
+                Ok(PartitionStats {
+                    partition: string_at(row, 0, "partition")?,
+                    parts: optional_u64_at(row, 1, "part count")?.unwrap_or(0),
+                    rows: optional_u64_at(row, 2, "rows")?.unwrap_or(0),
+                    compressed_bytes: optional_u64_at(row, 3, "compressed bytes")?.unwrap_or(0),
+                    uncompressed_bytes: optional_u64_at(row, 4, "uncompressed bytes")?.unwrap_or(0),
+                    max_level: optional_u64_at(row, 5, "max level")?.unwrap_or(0),
+                })
+            })
+            .collect()
     }
 
     pub async fn list_columns(&self, database: &str, object: &str) -> Result<Vec<ColumnInfo>> {
