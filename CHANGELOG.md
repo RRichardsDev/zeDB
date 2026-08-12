@@ -9,14 +9,18 @@ GitHub release notes.
 
 ## Unreleased
 
-- Live tail (Phase 10): right-click a MergeTree table in the schema
-  sidebar and pick a retained-row cap (20 / 50 / 100 / 500 / 1000 /
-  Unlimited) to open a `tail -f`-style view. It polls over HTTP on the
-  table's leading ORDER BY key (`WHERE key > :last`, off the main thread,
-  every ~1.5s), so cost stays flat however long it runs; newest rows land
-  at the top, the buffer trims the oldest past the cap, and Pause / Resume /
-  Stop control it. When a native ClickHouse port is reachable, a "Get
-  instant updates" button offers a future server-push upgrade.
+- Live tail (Phase 10): right-click a MergeTree table in the schema sidebar
+  and pick a retained-row cap (20 / 50 / 100 / 500 / 1000 / Unlimited) to
+  open a `tail -f`-style view in its own "Tail N" tab (steel-blue border).
+  It polls over HTTP on the query's leading ORDER BY key (`WHERE key > :last`,
+  off the main thread, every ~1.5s), so cost stays flat however long it
+  runs; newest rows land at the top, the buffer trims the oldest past the
+  cap, and Pause / Resume / Stop control it. The tab editor shows the
+  runnable query the tail is based on: edit it (columns, WHERE, joins,
+  LIMIT, key) and press Update Tail to re-base the live view, whatever you
+  write is what gets tailed; an invalid query is reported and the running
+  tail is kept. When a native ClickHouse port is reachable, a "Get instant
+  updates" button offers a future server-push upgrade.
 
 ## v0.1.25 - 2026-08-12
 

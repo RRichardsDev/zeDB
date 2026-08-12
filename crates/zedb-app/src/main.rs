@@ -508,10 +508,14 @@ struct QueryTab {
 /// it advances on, and the last key seen. The poll loop is guarded by
 /// `generation` so a stopped or restarted tail's late polls are ignored.
 struct TailState {
-    database: String,
-    object: String,
-    /// The monotonic key column the tail advances on (a table ORDER BY key).
-    key: String,
+    /// Display number for the tab label ("Tail 1", "Tail 2", ...).
+    number: usize,
+    /// The editable definition: table, key, filter, LIMIT. The tab editor
+    /// shows [`tail::base_sql`] of this; editing and applying re-parses it.
+    query: tail::TailQuery,
+    /// The editor text the tail last adopted, for dirty-detection (the
+    /// "update tail" button shows when the editor differs from this).
+    baseline: String,
     /// SQL literal of the last-seen key; `None` until the seed runs.
     last: Option<String>,
     /// The key's column index in the result, for reading each batch's max.
@@ -538,8 +542,6 @@ type TailBatch = (
 /// Owned view of a tab's tail for rendering the status strip.
 struct TailStripInfo {
     tab_id: usize,
-    database: String,
-    object: String,
     key: String,
     paused: bool,
     error: Option<String>,
@@ -547,6 +549,8 @@ struct TailStripInfo {
     /// A native port is reachable, so "instant updates" (server-push) is on
     /// the table; the button only shows when this is true.
     native_available: bool,
+    /// The editor differs from the adopted query, so "update tail" shows.
+    dirty: bool,
 }
 
 enum QueryOutcome {
@@ -620,6 +624,8 @@ struct Workspace {
     /// Monotonic source for per-tail generation ids; a stopped or restarted
     /// tail bumps past its old loop so late polls are dropped.
     next_tail_generation: u64,
+    /// Display counter for tail tabs ("Tail 1", "Tail 2", ...).
+    next_tail_number: usize,
     connections: Vec<ConnectionConfig>,
     selected: Option<usize>,
     connected: Option<ConnectedCluster>,
@@ -1018,6 +1024,7 @@ impl Workspace {
                 health_poll_generation: 0,
                 merges_poll_generation: 0,
                 next_tail_generation: 0,
+                next_tail_number: 0,
                 query_abort: None,
                 rerun_pending: None,
                 last_focus_check: None,
@@ -1097,6 +1104,7 @@ impl Workspace {
                 health_poll_generation: 0,
                 merges_poll_generation: 0,
                 next_tail_generation: 0,
+                next_tail_number: 0,
                 query_abort: None,
                 rerun_pending: None,
                 last_focus_check: None,
@@ -6186,6 +6194,8 @@ impl Workspace {
 
         self.next_tail_generation += 1;
         let generation = self.next_tail_generation;
+        self.next_tail_number += 1;
+        let number = self.next_tail_number;
         let qualified = format!("{database}.{object}");
         let task = rt::tokio().spawn(async move {
             let client = ChClient::new(config);
@@ -6194,9 +6204,9 @@ impl Workspace {
                 .and_then(|(order_by, _)| order_by.into_iter().next())
                 .and_then(|first| first_tail_key(&first))
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let key = task.await.ok().flatten();
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 let Some(key) = key else {
                     this.flash_warning(
                         format!("{database}.{object} has no simple ORDER BY key to tail on"),
@@ -6206,10 +6216,21 @@ impl Workspace {
                     return;
                 };
                 if let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id) {
-                    tab.tail = Some(TailState {
-                        database: database.clone(),
-                        object: object.clone(),
+                    let query = tail::TailQuery {
+                        body: tail::table_body(&database, &object),
                         key,
+                        limit: tail::TAIL_BATCH,
+                    };
+                    // Show the runnable base query in the tab editor; editing
+                    // it and pressing "update tail" re-parses it.
+                    let baseline = tail::base_sql(&query);
+                    let editor = tab.editor.clone();
+                    let display = baseline.clone();
+                    editor.update(cx, |editor, cx| editor.set_value(display, window, cx));
+                    tab.tail = Some(TailState {
+                        number,
+                        query,
+                        baseline,
                         last: None,
                         key_index: 0,
                         cap,
@@ -6301,16 +6322,14 @@ impl Workspace {
                 return;
             }
             let sql = match &state.last {
-                None => tail::seed_sql(&state.database, &state.object, &state.key, tail::TAIL_SEED),
-                Some(last) => tail::poll_sql(
-                    &state.database,
-                    &state.object,
-                    &state.key,
-                    last,
-                    tail::TAIL_BATCH,
-                ),
+                None => tail::seed_sql(&state.query, tail::TAIL_SEED),
+                Some(last) => tail::poll_sql(&state.query, last, state.query.limit),
             };
-            (connected.client_config.clone(), sql, state.key.clone())
+            (
+                connected.client_config.clone(),
+                sql,
+                state.query.key.clone(),
+            )
         };
         let priming = self
             .query_tabs
@@ -6419,6 +6438,129 @@ impl Workspace {
         }
     }
 
+    /// Adopt the tab editor's edited query as the tail's new definition. The
+    /// edit is validated by running its seed once; if that errors (or the
+    /// text isn't a tailable `SELECT ... FROM ... ORDER BY key`), the tail is
+    /// left running unchanged and the reason is flashed.
+    fn update_tail_from_editor(&mut self, tab_id: usize, cx: &mut Context<Self>) {
+        let Some(connection_name) = self.connected.as_ref().map(|c| c.name.clone()) else {
+            return;
+        };
+        let config = self.connected.as_ref().map(|c| c.client_config.clone());
+        let (Some(config), Some(tab)) =
+            (config, self.query_tabs.iter().find(|tab| tab.id == tab_id))
+        else {
+            return;
+        };
+        let Some(state) = tab.tail.as_ref() else {
+            return;
+        };
+        let generation = state.generation;
+        let edited = tab.editor.read(cx).value().to_string();
+        let Some(parsed) = tail::parse_tail_query(&edited, tail::TAIL_BATCH) else {
+            self.flash_warning(
+                "That isn't a tailable query (need SELECT … FROM db.table … ORDER BY key); tail unchanged",
+                cx,
+            );
+            return;
+        };
+
+        // Validate by running the seed once before switching over.
+        let probe_sql = tail::seed_sql(&parsed, tail::TAIL_SEED);
+        let task = rt::tokio().spawn(async move { ChClient::new(config).query(&probe_sql).await });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if this.connected.as_ref().map(|c| c.name.as_str())
+                    != Some(connection_name.as_str())
+                {
+                    return;
+                }
+                match result {
+                    // The probe IS the seed, so its rows are the newest ones:
+                    // adopt the query and repaint the grid from them right
+                    // now, without waiting for the next poll or new inserts.
+                    Ok(Ok(res)) => {
+                        let grid = this
+                            .query_tabs
+                            .iter()
+                            .find(|tab| tab.id == tab_id)
+                            .map(|tab| tab.result_grid.clone());
+                        let cap = this
+                            .query_tabs
+                            .iter()
+                            .find(|tab| tab.id == tab_id)
+                            .and_then(|tab| tab.tail.as_ref())
+                            .and_then(|state| state.cap)
+                            .unwrap_or(usize::MAX);
+                        let key_index = res
+                            .columns
+                            .iter()
+                            .position(|column| column.name == parsed.key);
+                        // The cursor needs the ORDER BY key in the output;
+                        // if the projection dropped it, keep the old tail.
+                        if key_index.is_none() {
+                            this.flash_warning(
+                                format!(
+                                    "The ORDER BY key `{}` must be in the SELECT to tail; tail unchanged",
+                                    parsed.key
+                                ),
+                                cx,
+                            );
+                            cx.notify();
+                            return;
+                        }
+                        let Some(state) = this
+                            .query_tabs
+                            .iter_mut()
+                            .find(|tab| tab.id == tab_id)
+                            .and_then(|tab| tab.tail.as_mut())
+                        else {
+                            return;
+                        };
+                        if state.generation != generation {
+                            return;
+                        }
+                        state.query = parsed.clone();
+                        state.baseline = edited.clone();
+                        state.error = None;
+                        state.key_index = key_index.unwrap_or(0);
+                        state.last = key_index.and_then(|idx| tail::last_key(&res.rows, idx));
+
+                        if let Some(grid) = grid {
+                            let columns = res.columns.clone();
+                            let columns_len = columns.len();
+                            let rows = res.rows;
+                            grid.update(cx, |grid, cx| grid.clear_rows(cx));
+                            if !rows.is_empty() {
+                                grid.update(cx, |grid, cx| grid.begin_result(columns, None, cx));
+                                grid.update(cx, |grid, cx| grid.prepend_tail(rows, cap, cx));
+                            }
+                            let count = grid.read(cx).row_count();
+                            if let Some(tab) =
+                                this.query_tabs.iter_mut().find(|tab| tab.id == tab_id)
+                            {
+                                tab.result_rows = count;
+                                tab.has_result = true;
+                                tab.result_columns = columns_len;
+                            }
+                        }
+                        this.flash_notice("Tail updated", cx);
+                    }
+                    Ok(Err(error)) => {
+                        this.flash_warning(format!("Query failed, tail unchanged: {error}"), cx);
+                    }
+                    Err(error) => {
+                        this.flash_warning(format!("Query failed, tail unchanged: {error}"), cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Discover whether the connection's host answers on a native
     /// ClickHouse port (9440 TLS, then 9000). Poll-over-HTTP tail works
     /// everywhere; a reachable native port means true server-push (`WATCH`)
@@ -6474,13 +6616,12 @@ impl Workspace {
     fn tail_strip(&self, info: TailStripInfo, cx: &mut Context<Self>) -> impl IntoElement {
         let TailStripInfo {
             tab_id,
-            database,
-            object,
             key,
             paused,
             error,
             rows,
             native_available,
+            dirty,
         } = info;
         let icon_button = |id: &'static str, icon: &'static str, color: gpui::Hsla| {
             div()
@@ -6501,6 +6642,11 @@ impl Workspace {
             .items_center()
             .gap_2()
             .bg(theme::bg_sidebar())
+            // An orange outline on the whole strip while the query is edited
+            // (unapplied), alongside the green Update Tail button.
+            .when(dirty, |strip| {
+                strip.border_1().border_color(theme::warning())
+            })
             .child(
                 // A live dot: accent when following, dim when paused.
                 div().size(px(7.)).rounded_full().bg(if paused {
@@ -6510,9 +6656,9 @@ impl Workspace {
                 }),
             )
             .child(div().text_xs().text_color(theme::text()).child(if paused {
-                format!("Tail paused · {database}.{object} on {key}")
+                format!("Tail paused · advancing on {key}")
             } else {
-                format!("Tailing {database}.{object} on {key}")
+                format!("Tailing · advancing on {key}")
             }))
             .child(
                 div()
@@ -6529,6 +6675,33 @@ impl Workspace {
                 )
             })
             .child(div().flex_1())
+            .when(dirty, |row| {
+                // The editor query was edited; a green-outlined text button
+                // (left of "Get instant updates") that reads as "apply your
+                // changes".
+                row.child(
+                    div()
+                        .id("tail-update")
+                        .px_2()
+                        .py_0p5()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(theme::success())
+                        .text_xs()
+                        .text_color(theme::success())
+                        .child("Update Tail")
+                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                        .tooltip(|window, cx| {
+                            gpui_component::tooltip::Tooltip::new(
+                                "Apply the edited query to the tail",
+                            )
+                            .build(window, cx)
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.update_tail_from_editor(tab_id, cx)
+                        })),
+                )
+            })
             .when(native_available, |row| {
                 // Discovery found a native port: offer the server-push
                 // upgrade, accent-tinted so it reads as an offer.
@@ -9430,6 +9603,14 @@ impl Workspace {
                 let tab_id = tab.id;
                 let multiple = self.query_tabs.len() > 1;
                 let has_right = index + 1 < self.query_tabs.len();
+                let active = index == self.active_query_tab;
+                // Tail tabs are labelled "Tail N" and wear a steel-blue,
+                // top-rounded border so they read as a distinct live view.
+                let tail_number = tab.tail.as_ref().map(|state| state.number);
+                let is_tail = tail_number.is_some();
+                let label = tail_number
+                    .map(|number| format!("Tail {number}"))
+                    .unwrap_or_else(|| format!("Query {tab_id}"));
                 div()
                     .id(("query-tab", tab_id))
                     .flex_none()
@@ -9438,14 +9619,26 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .whitespace_nowrap()
-                    .border_b_2()
-                    .when(index == self.active_query_tab, |tab| {
-                        tab.border_color(theme::accent()).text_color(theme::text())
+                    .when(!is_tail, |tab| {
+                        tab.border_b_2()
+                            .when(active, |tab| {
+                                tab.border_color(theme::accent()).text_color(theme::text())
+                            })
+                            .when(!active, |tab| {
+                                tab.border_color(theme::bg_sidebar())
+                                    .text_color(theme::text_dim())
+                                    .hover(|tab| tab.text_color(theme::text()).cursor_pointer())
+                            })
                     })
-                    .when(index != self.active_query_tab, |tab| {
-                        tab.border_color(theme::bg_sidebar())
-                            .text_color(theme::text_dim())
-                            .hover(|tab| tab.text_color(theme::text()).cursor_pointer())
+                    .when(is_tail, |tab| {
+                        tab.border_1()
+                            .border_color(rgb(0x4682b4))
+                            .rounded_t(px(5.))
+                            .when(active, |tab| tab.text_color(theme::text()))
+                            .when(!active, |tab| {
+                                tab.text_color(theme::text_dim())
+                                    .hover(|tab| tab.text_color(theme::text()).cursor_pointer())
+                            })
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.active_query_tab = index;
@@ -9469,7 +9662,7 @@ impl Workspace {
                         )
                     })
                     .gap_2()
-                    .child(format!("Query {tab_id}"))
+                    .child(label)
                     .when(self.query_tabs.len() > 1, |tab_row| {
                         tab_row.child(
                             div()
@@ -9519,15 +9712,19 @@ impl Workspace {
         };
         // Owned snapshot of the active tab's tail, so the strip renders
         // without re-borrowing self.
-        let tail_info = active.tail.as_ref().map(|state| TailStripInfo {
-            tab_id: active.id,
-            database: state.database.clone(),
-            object: state.object.clone(),
-            key: state.key.clone(),
-            paused: state.paused,
-            error: state.error.clone(),
-            rows: active.result_rows,
-            native_available: state.native_available == Some(true),
+        let tail_info = active.tail.as_ref().map(|state| {
+            // Dirty when the editor no longer matches the adopted query, so
+            // the "update tail" button can appear.
+            let editor_text = active.editor.read(cx).value().to_string();
+            TailStripInfo {
+                tab_id: active.id,
+                key: state.query.key.clone(),
+                paused: state.paused,
+                error: state.error.clone(),
+                rows: active.result_rows,
+                native_available: state.native_available == Some(true),
+                dirty: editor_text.trim() != state.baseline.trim(),
+            }
         });
         // Ask needs a remembered agent that discovery has not ruled out.
         let ask_agent = self.preferences.last_agent.clone().filter(|name| {

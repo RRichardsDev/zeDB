@@ -272,6 +272,13 @@ impl GridSpike {
         self.rows.len()
     }
 
+    /// Drop all retained rows (keeping the header), for restarting a tail
+    /// under an edited query. The old rows go to a background drop.
+    pub fn clear_rows(&mut self, cx: &mut Context<Self>) {
+        crate::rt::drop_in_background(std::mem::take(&mut self.rows));
+        cx.notify();
+    }
+
     /// Apply a header context-menu choice to the current sort.
     pub fn header_sort_action(&mut self, action: &HeaderSort, cx: &mut Context<Self>) {
         let mut sort = self.sort.clone();
