@@ -7,20 +7,30 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.26 - 2026-08-13
 
-- Live tail (Phase 10): right-click a MergeTree table in the schema sidebar
-  and pick a retained-row cap (20 / 50 / 100 / 500 / 1000 / Unlimited) to
-  open a `tail -f`-style view in its own "Tail N" tab (steel-blue border).
-  It polls over HTTP on the query's leading ORDER BY key (`WHERE key > :last`,
-  off the main thread, every ~1.5s), so cost stays flat however long it
-  runs; newest rows land at the top, the buffer trims the oldest past the
-  cap, and Pause / Resume / Stop control it. The tab editor shows the
-  runnable query the tail is based on: edit it (columns, WHERE, joins,
-  LIMIT, key) and press Update Tail to re-base the live view, whatever you
-  write is what gets tailed; an invalid query is reported and the running
-  tail is kept. When a native ClickHouse port is reachable, a "Get instant
-  updates" button offers a future server-push upgrade.
+Phase 10: live tail, a `tail -f` for a ClickHouse table.
+
+### Live tail
+
+- Right-click a MergeTree table in the schema sidebar and pick a
+  retained-row cap (20 / 50 / 100 / 500 / 1000 / Unlimited) to open a live
+  view in its own "Tail N" tab (steel-blue border). It polls over HTTP on
+  the query's leading ORDER BY key (`WHERE key > :last`, off the main
+  thread, every ~1.5s), so cost stays flat however long it runs; the
+  initial load is a light 20 rows.
+- The tab editor shows the runnable query the tail is based on. Whatever you
+  write there is what gets tailed: edit the columns, WHERE, joins, GROUP BY,
+  ORDER BY key, or LIMIT and press Update Tail to re-base the live view. It
+  validates before switching and repaints instantly; an invalid query (or
+  one that drops the ORDER BY key) is reported and the running tail is kept.
+- Newest rows land at the top and the buffer trims the oldest past the cap.
+  The view follows the top while you are at it, but if you scroll down to
+  read older rows it holds your place instead of yanking you back up.
+  Pause / Resume / Stop are coloured controls.
+- When a native ClickHouse port is reachable, a "Get instant updates" button
+  appears (discovery runs off the main thread). True server-push over the
+  native protocol is not built yet; the button says so.
 
 ## v0.1.25 - 2026-08-12
 
