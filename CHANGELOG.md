@@ -7,23 +7,28 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.25 - 2026-08-12
 
-- The connection list pluralizes the node count properly ("1 node" /
-  "2 nodes") instead of "node(s)".
-- Switching cluster/node re-runs editor diagnostics, so a database that was
-  flagged "unknown" on one cluster loses its squiggly immediately once the
-  new cluster reports it, instead of lingering until the next edit.
-- The dev environment colour is now blue (was green), consistently across
-  badges, the connection triangle glyph, and the fleet view; staging stays
-  gold, production stays red.
+A round of real-world fixes and polish from daily use.
+
+### Editor
+
+- Multi-cursor: shift-cmd-left / shift-cmd-right (select to line start / end)
+  now extends the selection at every cursor, not just the primary one.
+- Query tabs have a right-click menu: Close tab, Close others, Close to the
+  right. Running or errored tabs are protected, and one tab always remains.
+
+### Schema & connections
+
+- Switching cluster or node re-runs the open editors' diagnostics, so a
+  database flagged "unknown" on one cluster drops its squiggly as soon as
+  the new cluster reports it, instead of lingering until the next edit.
 - The schema inspector's DDL tab drops its Copy bar; Copy is now a hover
   icon at the top-right of the DDL editor, leaving more room for the DDL.
-- Query tabs have a right-click menu: Close tab, Close others, Close to the
-  right. Running or errored tabs are protected, and at least one tab always
-  remains.
-- Multi-cursor: shift-cmd-left / shift-cmd-right (select to line start /
-  end) now extends the selection at every cursor, not just the primary one.
+- The dev environment colour is now blue (was green), consistent across the
+  badges, the connection triangle glyph, and the fleet view; staging stays
+  gold, production red.
+- The connection list pluralizes the node count ("1 node" / "2 nodes").
 
 ## v0.1.24 - 2026-08-12
 
