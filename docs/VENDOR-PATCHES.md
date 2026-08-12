@@ -205,3 +205,13 @@ makes one drag span every selectable `TextView` painted in a frame and
 Why it stays scoped in practice: only agent-transcript messages set
 `.selectable(true)`, so the shared band only ever groups those. When a
 crates.io gpui-component ships document-spanning selection, drop this.
+
+## 12. Submenu triangle marker (`PopupMenu`)
+
+`src/menu/popup_menu.rs`: `render_item`'s `Submenu` arm drew
+`IconName::ChevronRight` as the "has submenu" affordance, which depends
+on an icon asset and reads faintly. Swapped for a literal right-pointing
+triangle (`\u{25b8}`) in `muted_foreground`, right-aligned by the
+existing `justify_between`. Affects every submenu in the app (only the
+schema table's Tail cap menu uses one today). Drop if upstream ships a
+clearer submenu indicator.

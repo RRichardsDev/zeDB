@@ -247,6 +247,31 @@ impl GridSpike {
         cx.notify();
     }
 
+    /// Prepend a live-tail batch newest-first: the newest row lands at the
+    /// top and older rows push down, trimming the oldest off the bottom past
+    /// `cap`, and the view follows the top so the newest stays in sight. The
+    /// batch arrives oldest-first (ORDER BY key ASC), so it is reversed.
+    pub fn prepend_tail(&mut self, mut batch: Vec<Vec<Value>>, cap: usize, cx: &mut Context<Self>) {
+        if batch.is_empty() {
+            return;
+        }
+        self.adopt_pending();
+        batch.reverse();
+        let existing = std::mem::take(&mut self.rows);
+        batch.extend(existing);
+        self.rows = batch;
+        if self.rows.len() > cap {
+            crate::rt::drop_in_background(self.rows.split_off(cap));
+        }
+        self.scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    /// Current retained row count (for the tail status line).
+    pub fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
     /// Apply a header context-menu choice to the current sort.
     pub fn header_sort_action(&mut self, action: &HeaderSort, cx: &mut Context<Self>) {
         let mut sort = self.sort.clone();

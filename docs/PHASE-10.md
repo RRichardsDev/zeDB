@@ -5,7 +5,17 @@ this turns the explorer into a real-time console (north-star #5,
 `docs/NORTH-STAR.md`). Reuses the streaming execution + progress plumbing
 already built.
 
-Status: PLANNED. Follows Phase 9 (`docs/PHASE-9.md`).
+Status: IN PROGRESS. Follows Phase 9 (`docs/PHASE-9.md`).
+
+**Increment 1 DONE** (branch `phase-10-live-tail`): poll-over-HTTP tail from
+the schema sidebar's table context menu, on the leading ORDER BY key, off
+the main thread. Retained-row cap chosen up front (20/50/100/500/1000/
+Unlimited); the initial load is always ~20 rows. Newest-first (rows land at
+top, oldest trimmed past the cap), Pause / Resume / Stop, and a live strip
+above the results. Native-port discovery (9440/9000, off-thread) surfaces a
+"Get instant updates" button when a switch to server-push would be possible;
+the switch itself is not wired yet. Core SQL/key logic in
+`crates/zedb-app/src/tail.rs` (unit-tested). Still open below.
 
 ## Mechanism: poll over HTTP (decided)
 

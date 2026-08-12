@@ -1184,7 +1184,15 @@ impl PopupMenu {
                                 .items_center()
                                 .justify_between()
                                 .child(label.clone())
-                                .child(IconName::ChevronRight),
+                                // zeDB patch: a literal right-pointing
+                                // triangle marks "has submenu", instead of
+                                // the chevron icon (which needs an asset and
+                                // reads faintly).
+                                .child(
+                                    div()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("\u{25b8}"),
+                                ),
                         ),
                 )
                 .when(selected, |this| {

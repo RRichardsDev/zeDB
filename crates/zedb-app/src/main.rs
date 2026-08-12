@@ -16,6 +16,7 @@ mod rt;
 mod schema_intelligence_ui;
 mod settings_sync;
 mod storage_advisor;
+mod tail;
 mod theme;
 mod type_highlight;
 mod updates;
@@ -172,6 +173,8 @@ impl AssetSource for Assets {
             "icons/advise.svg" => Some(include_bytes!("../assets/icons/advise.svg")),
             "icons/sparkle.svg" => Some(include_bytes!("../assets/icons/sparkle.svg")),
             "icons/stop.svg" => Some(include_bytes!("../assets/icons/stop.svg")),
+            "icons/play.svg" => Some(include_bytes!("../assets/icons/play.svg")),
+            "icons/pause.svg" => Some(include_bytes!("../assets/icons/pause.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             "about-logo.png" => Some(include_bytes!("../assets/about-logo.png")),
             _ => None,
@@ -319,6 +322,17 @@ struct CloseOtherQueryTabs {
 #[action(no_json, no_register)]
 struct CloseQueryTabsToRight {
     tab_id: usize,
+}
+
+/// Start a live tail of a table (Phase 10), from the schema sidebar's
+/// table context menu. `cap` is the retained-row limit the user opted into
+/// (`None` = unlimited); the initial load is always small regardless.
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct TailTable {
+    database: String,
+    object: String,
+    cap: Option<usize>,
 }
 
 /// Optional GitHub identity (docs/PHASE-3.4.md M0).
@@ -485,6 +499,54 @@ struct QueryTab {
     /// Server-side id of the currently streaming statement, for
     /// recognizing kills initiated from the ops view.
     running_query_id: Option<String>,
+    /// Live tail state when this tab is tailing a table (Phase 10); `None`
+    /// for an ordinary query tab.
+    tail: Option<TailState>,
+}
+
+/// A running live tail bound to a query tab: the table, the monotonic key
+/// it advances on, and the last key seen. The poll loop is guarded by
+/// `generation` so a stopped or restarted tail's late polls are ignored.
+struct TailState {
+    database: String,
+    object: String,
+    /// The monotonic key column the tail advances on (a table ORDER BY key).
+    key: String,
+    /// SQL literal of the last-seen key; `None` until the seed runs.
+    last: Option<String>,
+    /// The key's column index in the result, for reading each batch's max.
+    key_index: usize,
+    /// Retained-row cap the user chose (`None` = unlimited).
+    cap: Option<usize>,
+    /// Native-protocol (TCP) push discovery: `None` while probing, then
+    /// whether a native port (9440 TLS / 9000) is reachable, so we can offer
+    /// "instant updates" only when a switch is actually possible.
+    native_available: Option<bool>,
+    generation: u64,
+    paused: bool,
+    /// A transient error from the last poll, shown without stopping.
+    error: Option<String>,
+}
+
+/// One appendable tail batch: the columns (only on the priming poll, to
+/// install the header) and the rows.
+type TailBatch = (
+    Option<Vec<zedb_core::ColumnMeta>>,
+    Vec<Vec<zedb_core::Value>>,
+);
+
+/// Owned view of a tab's tail for rendering the status strip.
+struct TailStripInfo {
+    tab_id: usize,
+    database: String,
+    object: String,
+    key: String,
+    paused: bool,
+    error: Option<String>,
+    rows: usize,
+    /// A native port is reachable, so "instant updates" (server-push) is on
+    /// the table; the button only shows when this is true.
+    native_available: bool,
 }
 
 enum QueryOutcome {
@@ -555,6 +617,9 @@ struct Workspace {
     health_poll_generation: u64,
     /// Cancels a stale merges poll when the object or tab changes.
     merges_poll_generation: u64,
+    /// Monotonic source for per-tail generation ids; a stopped or restarted
+    /// tail bumps past its old loop so late polls are dropped.
+    next_tail_generation: u64,
     connections: Vec<ConnectionConfig>,
     selected: Option<usize>,
     connected: Option<ConnectedCluster>,
@@ -952,6 +1017,7 @@ impl Workspace {
                 commit: None,
                 health_poll_generation: 0,
                 merges_poll_generation: 0,
+                next_tail_generation: 0,
                 query_abort: None,
                 rerun_pending: None,
                 last_focus_check: None,
@@ -1030,6 +1096,7 @@ impl Workspace {
                 commit: None,
                 health_poll_generation: 0,
                 merges_poll_generation: 0,
+                next_tail_generation: 0,
                 query_abort: None,
                 rerun_pending: None,
                 last_focus_check: None,
@@ -2300,15 +2367,47 @@ impl Workspace {
                             }))
                             .context_menu({
                                 let database = database_name.clone();
+                                let engine = object.engine.clone();
                                 let object = object.name.clone();
-                                move |menu, _, _| {
-                                    menu.menu(
+                                move |menu, window, cx| {
+                                    let menu = menu.menu(
                                         "View DDL",
                                         Box::new(ViewObjectDdl {
                                             database: database.clone(),
                                             object: object.clone(),
                                         }),
-                                    )
+                                    );
+                                    // Tail is a MergeTree-family thing (a
+                                    // monotonic key to advance on). The
+                                    // submenu is the retained-row cap the
+                                    // user opts into; the initial load is
+                                    // always small either way.
+                                    if engine.contains("MergeTree") {
+                                        let database = database.clone();
+                                        let object = object.clone();
+                                        menu.submenu("Tail", window, cx, move |menu, _, _| {
+                                            let caps: [(&str, Option<usize>); 6] = [
+                                                ("20 rows", Some(20)),
+                                                ("50 rows", Some(50)),
+                                                ("100 rows", Some(100)),
+                                                ("500 rows", Some(500)),
+                                                ("1000 rows", Some(1000)),
+                                                ("Unlimited", None),
+                                            ];
+                                            caps.into_iter().fold(menu, |menu, (label, cap)| {
+                                                menu.menu(
+                                                    label,
+                                                    Box::new(TailTable {
+                                                        database: database.clone(),
+                                                        object: object.clone(),
+                                                        cap,
+                                                    }),
+                                                )
+                                            })
+                                        })
+                                    } else {
+                                        menu
+                                    }
                                 }
                             })
                             .child(
@@ -5506,6 +5605,7 @@ impl Workspace {
             displayed_statement: None,
             displayed_statement_offset: None,
             running_query_id: None,
+            tail: None,
         }
     }
 
@@ -6060,6 +6160,429 @@ impl Workspace {
             .map(|tab| tab.id)
             .collect();
         self.close_query_tab_ids(&ids, from_id, cx);
+    }
+
+    /// Begin a live tail of a table (Phase 10): open a fresh tab, resolve
+    /// the monotonic key (the table's leading ORDER BY column), and start
+    /// polling `WHERE key > :last` off the main thread.
+    fn start_tail(
+        &mut self,
+        database: String,
+        object: String,
+        cap: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(connected) = self.connected.as_ref() else {
+            self.flash_warning("Connect before tailing a table", cx);
+            return;
+        };
+        let config = connected.client_config.clone();
+        let connection_name = connected.name.clone();
+
+        // A dedicated tab hosts the tail so it never fights a real query.
+        self.add_query_tab(window, cx);
+        let tab_id = self.query_tabs[self.active_query_tab].id;
+
+        self.next_tail_generation += 1;
+        let generation = self.next_tail_generation;
+        let qualified = format!("{database}.{object}");
+        let task = rt::tokio().spawn(async move {
+            let client = ChClient::new(config);
+            fetch_table_keys(&client, Some(&qualified))
+                .await
+                .and_then(|(order_by, _)| order_by.into_iter().next())
+                .and_then(|first| first_tail_key(&first))
+        });
+        cx.spawn(async move |this, cx| {
+            let key = task.await.ok().flatten();
+            this.update(cx, |this, cx| {
+                let Some(key) = key else {
+                    this.flash_warning(
+                        format!("{database}.{object} has no simple ORDER BY key to tail on"),
+                        cx,
+                    );
+                    // Leave the empty tab in place; the user can close it.
+                    return;
+                };
+                if let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                    tab.tail = Some(TailState {
+                        database: database.clone(),
+                        object: object.clone(),
+                        key,
+                        last: None,
+                        key_index: 0,
+                        cap,
+                        native_available: None,
+                        generation,
+                        paused: false,
+                        error: None,
+                    });
+                    tab.has_result = true;
+                }
+                // One immediate poll to prime, then the timer loop.
+                this.tail_poll_once(tab_id, generation, connection_name.clone(), cx);
+                this.start_tail_loop(tab_id, generation, connection_name.clone(), cx);
+                // Discover whether a native (TCP) port is reachable, to
+                // offer the "instant updates" upgrade only when possible.
+                this.probe_native_push(tab_id, generation, connection_name, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The timer loop: every cadence, while the tab still hosts this tail
+    /// generation on the same connection and isn't paused, run one poll.
+    fn start_tail_loop(
+        &mut self,
+        tab_id: usize,
+        generation: u64,
+        connection_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| loop {
+            Timer::after(Duration::from_millis(tail::TAIL_INTERVAL_MS)).await;
+            let alive = this
+                .update(cx, |this, cx| {
+                    let on_connection = this.connected.as_ref().map(|c| c.name.as_str())
+                        == Some(connection_name.as_str());
+                    let state = this
+                        .query_tabs
+                        .iter()
+                        .find(|tab| tab.id == tab_id)
+                        .and_then(|tab| tab.tail.as_ref());
+                    let live =
+                        on_connection && state.is_some_and(|state| state.generation == generation);
+                    if !live {
+                        return false;
+                    }
+                    let paused = state.map(|state| state.paused).unwrap_or(true);
+                    if !paused {
+                        this.tail_poll_once(tab_id, generation, connection_name.clone(), cx);
+                    }
+                    true
+                })
+                .unwrap_or(false);
+            if !alive {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    /// One off-thread poll: `seed_sql` while unprimed (grab the newest rows
+    /// and install the header), then `poll_sql` for everything after the
+    /// last seen key. New rows append and follow the bottom.
+    fn tail_poll_once(
+        &mut self,
+        tab_id: usize,
+        generation: u64,
+        connection_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let (config, sql, key) = {
+            let Some(connected) = self.connected.as_ref() else {
+                return;
+            };
+            if connected.name != connection_name {
+                return;
+            }
+            let Some(state) = self
+                .query_tabs
+                .iter()
+                .find(|tab| tab.id == tab_id)
+                .and_then(|tab| tab.tail.as_ref())
+            else {
+                return;
+            };
+            if state.generation != generation {
+                return;
+            }
+            let sql = match &state.last {
+                None => tail::seed_sql(&state.database, &state.object, &state.key, tail::TAIL_SEED),
+                Some(last) => tail::poll_sql(
+                    &state.database,
+                    &state.object,
+                    &state.key,
+                    last,
+                    tail::TAIL_BATCH,
+                ),
+            };
+            (connected.client_config.clone(), sql, state.key.clone())
+        };
+        let priming = self
+            .query_tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .and_then(|tab| tab.tail.as_ref())
+            .map(|state| state.last.is_none())
+            .unwrap_or(false);
+        let cap = self
+            .query_tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .and_then(|tab| tab.tail.as_ref())
+            .and_then(|state| state.cap)
+            .unwrap_or(usize::MAX);
+        let Some(grid) = self
+            .query_tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .map(|tab| tab.result_grid.clone())
+        else {
+            return;
+        };
+
+        let task = rt::tokio().spawn(async move { ChClient::new(config).query(&sql).await });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                let mut batch: Option<TailBatch> = None;
+                {
+                    let Some(state) = this
+                        .query_tabs
+                        .iter_mut()
+                        .find(|tab| tab.id == tab_id)
+                        .and_then(|tab| tab.tail.as_mut())
+                    else {
+                        return;
+                    };
+                    if state.generation != generation {
+                        return;
+                    }
+                    match result {
+                        Ok(Ok(res)) => {
+                            state.error = None;
+                            if !res.rows.is_empty() {
+                                let Some(idx) =
+                                    res.columns.iter().position(|column| column.name == key)
+                                else {
+                                    state.error =
+                                        Some(format!("tail key `{key}` is not in the result"));
+                                    cx.notify();
+                                    return;
+                                };
+                                state.key_index = idx;
+                                if let Some(next) = tail::last_key(&res.rows, idx) {
+                                    state.last = Some(next);
+                                }
+                                let columns = priming.then(|| res.columns.clone());
+                                batch = Some((columns, res.rows));
+                            }
+                        }
+                        Ok(Err(error)) => state.error = Some(error.to_string()),
+                        Err(error) => state.error = Some(error.to_string()),
+                    }
+                }
+                if let Some((columns, rows)) = batch {
+                    let columns_len = columns.as_ref().map(|columns| columns.len());
+                    if let Some(columns) = columns {
+                        grid.update(cx, |grid, cx| grid.begin_result(columns, None, cx));
+                    }
+                    grid.update(cx, |grid, cx| grid.prepend_tail(rows, cap, cx));
+                    let count = grid.read(cx).row_count();
+                    if let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                        tab.result_rows = count;
+                        tab.has_result = true;
+                        if let Some(len) = columns_len {
+                            tab.result_columns = len;
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Stop the tail on a tab (its loop notices the cleared/renumbered
+    /// generation and exits). The tab and its rows stay.
+    fn stop_tail(&mut self, tab_id: usize, cx: &mut Context<Self>) {
+        if let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+            tab.tail = None;
+            cx.notify();
+        }
+    }
+
+    fn toggle_tail_pause(&mut self, tab_id: usize, cx: &mut Context<Self>) {
+        if let Some(state) = self
+            .query_tabs
+            .iter_mut()
+            .find(|tab| tab.id == tab_id)
+            .and_then(|tab| tab.tail.as_mut())
+        {
+            state.paused = !state.paused;
+            cx.notify();
+        }
+    }
+
+    /// Discover whether the connection's host answers on a native
+    /// ClickHouse port (9440 TLS, then 9000). Poll-over-HTTP tail works
+    /// everywhere; a reachable native port means true server-push (`WATCH`)
+    /// is an option, which we surface as an "instant updates" button.
+    fn probe_native_push(
+        &mut self,
+        tab_id: usize,
+        generation: u64,
+        connection_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(host) = self
+            .connected
+            .as_ref()
+            .and_then(|connected| host_of(&connected.client_config.url))
+        else {
+            return;
+        };
+        let task = rt::tokio().spawn(async move {
+            tokio::task::spawn_blocking(move || native_port_reachable(&host)).await
+        });
+        cx.spawn(async move |this, cx| {
+            let reachable = task
+                .await
+                .ok()
+                .and_then(|joined| joined.ok())
+                .unwrap_or(false);
+            this.update(cx, |this, cx| {
+                if this.connected.as_ref().map(|c| c.name.as_str())
+                    != Some(connection_name.as_str())
+                {
+                    return;
+                }
+                if let Some(state) = this
+                    .query_tabs
+                    .iter_mut()
+                    .find(|tab| tab.id == tab_id)
+                    .and_then(|tab| tab.tail.as_mut())
+                {
+                    if state.generation == generation {
+                        state.native_available = Some(reachable);
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The live-tail status strip above the editor: what's tailing, the
+    /// retained row count, and Pause / Stop.
+    fn tail_strip(&self, info: TailStripInfo, cx: &mut Context<Self>) -> impl IntoElement {
+        let TailStripInfo {
+            tab_id,
+            database,
+            object,
+            key,
+            paused,
+            error,
+            rows,
+            native_available,
+        } = info;
+        let icon_button = |id: &'static str, icon: &'static str, color: gpui::Hsla| {
+            div()
+                .id(id)
+                .size(px(22.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(3.))
+                .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                .child(svg().path(icon).size(px(13.)).text_color(color))
+        };
+        div()
+            .flex_none()
+            .h(px(30.))
+            .px_3()
+            .flex()
+            .items_center()
+            .gap_2()
+            .bg(theme::bg_sidebar())
+            .child(
+                // A live dot: accent when following, dim when paused.
+                div().size(px(7.)).rounded_full().bg(if paused {
+                    theme::text_dim()
+                } else {
+                    theme::accent()
+                }),
+            )
+            .child(div().text_xs().text_color(theme::text()).child(if paused {
+                format!("Tail paused · {database}.{object} on {key}")
+            } else {
+                format!("Tailing {database}.{object} on {key}")
+            }))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme::text_dim())
+                    .child(format!("· {rows} rows")),
+            )
+            .when_some(error, |row, error| {
+                row.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::danger())
+                        .child(format!("· {error}")),
+                )
+            })
+            .child(div().flex_1())
+            .when(native_available, |row| {
+                // Discovery found a native port: offer the server-push
+                // upgrade, accent-tinted so it reads as an offer.
+                row.child(
+                    div()
+                        .id("tail-instant")
+                        .px_2()
+                        .py_0p5()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(theme::accent())
+                        .text_xs()
+                        .text_color(theme::accent())
+                        .child("Get instant updates")
+                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                        .tooltip(|window, cx| {
+                            gpui_component::tooltip::Tooltip::new("Switch to TLS connection")
+                                .build(window, cx)
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            // Native-protocol push isn't wired yet; the
+                            // discovery and affordance land first.
+                            this.flash_notice(
+                                "Instant updates over the native connection are coming soon",
+                                cx,
+                            );
+                        })),
+                )
+            })
+            .child(
+                // Paused shows green Play (resume); running shows orange
+                // Pause. Stop is always red.
+                if paused {
+                    icon_button("tail-play", "icons/play.svg", theme::success()).tooltip(
+                        |window, cx| {
+                            gpui_component::tooltip::Tooltip::new("Resume").build(window, cx)
+                        },
+                    )
+                } else {
+                    icon_button("tail-pause", "icons/pause.svg", theme::warning()).tooltip(
+                        |window, cx| {
+                            gpui_component::tooltip::Tooltip::new("Pause").build(window, cx)
+                        },
+                    )
+                }
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_tail_pause(tab_id, cx))),
+            )
+            .child(
+                icon_button("tail-stop", "icons/stop.svg", theme::danger())
+                    .tooltip(|window, cx| {
+                        gpui_component::tooltip::Tooltip::new("Stop").build(window, cx)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| this.stop_tail(tab_id, cx))),
+            )
     }
 
     fn run_query_action(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
@@ -8994,6 +9517,18 @@ impl Workspace {
             QueryOutcome::Error(error) => Some(error.clone()),
             _ => None,
         };
+        // Owned snapshot of the active tab's tail, so the strip renders
+        // without re-borrowing self.
+        let tail_info = active.tail.as_ref().map(|state| TailStripInfo {
+            tab_id: active.id,
+            database: state.database.clone(),
+            object: state.object.clone(),
+            key: state.key.clone(),
+            paused: state.paused,
+            error: state.error.clone(),
+            rows: active.result_rows,
+            native_available: state.native_available == Some(true),
+        });
         // Ask needs a remembered agent that discovery has not ruled out.
         let ask_agent = self.preferences.last_agent.clone().filter(|name| {
             self.agent.agents.is_empty()
@@ -9297,6 +9832,11 @@ impl Workspace {
                     QueryResizeTarget::Editor,
                     cx,
                 ))
+            })
+            // The tail strip sits directly above the results, where the eye
+            // is already resting on the newest rows.
+            .when_some(tail_info, |panel, info| {
+                panel.child(self.tail_strip(info, cx))
             })
             .when(has_result, |panel| {
                 panel.child(
@@ -9644,6 +10184,15 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, action: &CloseQueryTabsToRight, _, cx| {
                 this.close_query_tabs_to_right(action.tab_id, cx);
+            }))
+            .on_action(cx.listener(|this, action: &TailTable, window, cx| {
+                this.start_tail(
+                    action.database.clone(),
+                    action.object.clone(),
+                    action.cap,
+                    window,
+                    cx,
+                );
             }))
             .on_action(
                 cx.listener(|this, _: &MaxRows1k, _, cx| this.select_max_rows(MaxRows::Rows1k, cx)),
@@ -10091,6 +10640,55 @@ impl Workspace {
 /// `system.tables`, for the query advisor. `table` is `db.name` from the
 /// EXPLAIN plan. Returns `None` when the table isn't qualified or the
 /// lookup fails.
+/// The host of a ClickHouse HTTP URL (`http(s)://host:port/...` -> `host`),
+/// for probing its native TCP ports.
+fn host_of(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    // Strip credentials and the port, leaving the host.
+    let host_port = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
+    let host = host_port
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(host_port);
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+/// Whether a native ClickHouse port answers on this host: 9440 (native over
+/// TLS) preferred, then 9000. A quick TCP connect is enough to know a switch
+/// to server-push is possible; it doesn't speak the protocol.
+fn native_port_reachable(host: &str) -> bool {
+    use std::net::ToSocketAddrs;
+    for port in [9440u16, 9000] {
+        let Ok(addresses) = (host, port).to_socket_addrs() else {
+            continue;
+        };
+        for address in addresses {
+            if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(700)).is_ok() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The leading ORDER BY entry as a tailable key: a bare column identifier.
+/// Returns `None` for an expression key (e.g. `toStartOfHour(at)`), which a
+/// backtick-quoted predicate can't target; a column override comes later.
+fn first_tail_key(order_by_entry: &str) -> Option<String> {
+    let name = order_by_entry.trim().trim_matches('`').trim();
+    let simple = !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    simple.then(|| name.to_string())
+}
+
 async fn fetch_table_keys(client: &ChClient, table: Option<&str>) -> Option<(Vec<String>, String)> {
     let (database, name) = table?.split_once('.')?;
     let escape = |value: &str| value.replace('\'', "''");

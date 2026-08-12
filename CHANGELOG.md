@@ -7,6 +7,17 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Live tail (Phase 10): right-click a MergeTree table in the schema
+  sidebar and pick a retained-row cap (20 / 50 / 100 / 500 / 1000 /
+  Unlimited) to open a `tail -f`-style view. It polls over HTTP on the
+  table's leading ORDER BY key (`WHERE key > :last`, off the main thread,
+  every ~1.5s), so cost stays flat however long it runs; newest rows land
+  at the top, the buffer trims the oldest past the cap, and Pause / Resume /
+  Stop control it. When a native ClickHouse port is reachable, a "Get
+  instant updates" button offers a future server-push upgrade.
+
 ## v0.1.25 - 2026-08-12
 
 A round of real-world fixes and polish from daily use.
