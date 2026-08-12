@@ -61,8 +61,24 @@ pub struct QueryFacts {
     pub pk_present: bool,
     pub pk_initial_granules: u64,
     pub pk_selected_granules: u64,
+    /// The table's PARTITION BY expression (empty when unpartitioned).
+    pub partition_key: String,
+    /// The plan had a Partition index (partitioned table) and how many
+    /// parts it kept vs started with; equal counts mean nothing pruned.
+    pub partition_present: bool,
+    pub partition_initial_parts: u64,
+    pub partition_selected_parts: u64,
     /// How many MergeTree reads the plan had (a join has more than one).
     pub merge_tree_reads: u32,
+    /// The plan contains an `Aggregating` step (the query aggregates).
+    pub has_aggregate: bool,
+    /// The query has a top-level `GROUP BY` (a real rollup, not a global
+    /// aggregate like `count(*)`), set from the SQL by the caller.
+    pub has_group_by: bool,
+    /// The projection body (`SELECT ... GROUP BY ...`) and derived name for
+    /// this rollup, built deterministically from the SQL by the caller, so
+    /// the aggregate finding can offer copyable projection DDL.
+    pub aggregate_projection: Option<(String, String)>,
 }
 
 /// One column the WHERE filters on, with what we need to size its index.
@@ -174,6 +190,10 @@ fn walk(node: &ExplainNode, facts: &mut QueryFacts) {
     if node.node_type.contains("Filter") || describes_where {
         facts.has_filter = true;
     }
+    // GROUP BY / aggregate functions surface as an `Aggregating` step.
+    if node.node_type.contains("Aggregating") {
+        facts.has_aggregate = true;
+    }
     if node.node_type == "ReadFromMergeTree" {
         facts.merge_tree_reads += 1;
         if facts.table.is_none() {
@@ -187,6 +207,11 @@ fn walk(node: &ExplainNode, facts: &mut QueryFacts) {
                 if facts.order_by.is_empty() {
                     facts.order_by = index.keys.clone();
                 }
+            }
+            if index.index_type.eq_ignore_ascii_case("partition") {
+                facts.partition_present = true;
+                facts.partition_initial_parts += index.initial_parts;
+                facts.partition_selected_parts += index.selected_parts;
             }
         }
     }
@@ -223,23 +248,82 @@ pub fn is_advisable_select(sql: &str) -> bool {
 /// Rank findings by rows scanned (rough impact), most first.
 pub fn advise(facts: &QueryFacts) -> Vec<QueryFinding> {
     let mut findings = Vec::new();
+    if let Some(finding) = partition_not_pruned(facts) {
+        findings.push(finding);
+    }
     if let Some(finding) = primary_key_not_filtering(facts) {
+        findings.push(finding);
+    }
+    if let Some(finding) = repeated_aggregate(facts) {
         findings.push(finding);
     }
     findings.sort_by_key(|finding| std::cmp::Reverse(finding.rows_scanned));
     findings
 }
 
+/// Whether the selective-scan gates that every finding shares are met:
+/// a big scan, a WHERE, an uncapped and small result.
+fn is_selective_scan(facts: &QueryFacts) -> bool {
+    facts.read_rows >= MIN_SCAN_ROWS
+        && facts.has_filter
+        && !facts.result_capped
+        && facts.result_rows > 0
+        && facts.read_rows / facts.result_rows.max(1) >= MIN_SELECTIVITY
+}
+
+/// The query filters, but not on the partition key, so ClickHouse read
+/// every partition. Adding a partition-aligned predicate would skip whole
+/// partitions.
+fn partition_not_pruned(facts: &QueryFacts) -> Option<QueryFinding> {
+    if !is_selective_scan(facts) {
+        return None;
+    }
+    // Needs a partitioned table whose Partition index pruned nothing.
+    if facts.partition_key.is_empty() || !facts.partition_present {
+        return None;
+    }
+    if facts.partition_initial_parts <= 1 {
+        return None; // one part: nothing to prune between.
+    }
+    if facts.partition_selected_parts < facts.partition_initial_parts {
+        return None; // some partitions were already skipped.
+    }
+    // Only fire when the WHERE doesn't already touch the partition key
+    // (otherwise there is nothing to add). Substring match against the
+    // partition expression is deliberately conservative.
+    let key = facts.partition_key.to_ascii_lowercase();
+    let filters_partition = facts.filter_columns.iter().any(|column| {
+        let name = unquote(&column.name).to_ascii_lowercase();
+        !name.is_empty() && key.contains(&name)
+    });
+    if filters_partition {
+        return None;
+    }
+
+    let detail = format!(
+        "Read all {} parts to return {}: the query filters, but not on the partition key \
+         (PARTITION BY {}), so no partitions were skipped.",
+        thousands(facts.partition_initial_parts),
+        thousands(facts.result_rows),
+        facts.partition_key,
+    );
+    let fix = format!(
+        "Add a predicate on the partition key ({}) so ClickHouse can skip whole partitions.",
+        facts.partition_key,
+    );
+    Some(QueryFinding {
+        title: "Query scans every partition".to_string(),
+        detail,
+        fix,
+        editor_sql: None,
+        rows_scanned: facts.read_rows,
+    })
+}
+
 fn primary_key_not_filtering(facts: &QueryFacts) -> Option<QueryFinding> {
-    if facts.read_rows < MIN_SCAN_ROWS {
-        return None;
-    }
-    // A WHERE must exist and the result must be small relative to the scan;
-    // otherwise the scan is intentional or an index cannot help.
-    if !facts.has_filter || facts.result_capped || facts.result_rows == 0 {
-        return None;
-    }
-    if facts.read_rows / facts.result_rows.max(1) < MIN_SELECTIVITY {
+    // A big scan, a WHERE, and a small uncapped result; otherwise the scan
+    // is intentional or an index cannot help.
+    if !is_selective_scan(facts) {
         return None;
     }
     // Stay quiet if the primary key already pruned well.
@@ -348,6 +432,53 @@ fn primary_key_not_filtering(facts: &QueryFacts) -> Option<QueryFinding> {
     })
 }
 
+/// The query aggregates a big scan down to a handful of groups. Run
+/// repeatedly, it re-scans the whole table every time; a projection (or a
+/// materialized view) that pre-aggregates it turns that into a cheap read.
+fn repeated_aggregate(facts: &QueryFacts) -> Option<QueryFinding> {
+    // A real rollup: the plan aggregates and the SQL has a top-level GROUP
+    // BY (so we skip global aggregates like `count(*)`, which a projection
+    // would not meaningfully speed up).
+    if !facts.has_aggregate || !facts.has_group_by {
+        return None;
+    }
+    // A big, uncapped scan that collapses to far fewer rows than it read.
+    if facts.read_rows < MIN_SCAN_ROWS || facts.result_capped || facts.result_rows == 0 {
+        return None;
+    }
+    if facts.read_rows / facts.result_rows.max(1) < MIN_SELECTIVITY {
+        return None;
+    }
+    // Projections and materialized views pre-aggregate one table; a join
+    // rollup has no single table to attach one to.
+    let table = facts.table.as_ref()?;
+
+    let detail = format!(
+        "Aggregated about {} rows into {} groups. Run repeatedly, this re-scans the \
+         whole table each time.",
+        thousands(facts.read_rows),
+        thousands(facts.result_rows),
+    );
+    let fix = format!(
+        "If you run this regularly, pre-aggregate it: add a projection to {table} carrying \
+         this query's GROUP BY, or a materialized view that maintains the rollup on insert."
+    );
+    // Offer copyable projection DDL when we could rebuild the rollup body
+    // from the SQL. A projection lives on the table and is maintained on
+    // insert, so a later run of this query reads the rollup, not the table.
+    let editor_sql = facts
+        .aggregate_projection
+        .as_ref()
+        .map(|(body, name)| projection_ddl(table, name, body));
+    Some(QueryFinding {
+        title: "Aggregation re-scans the whole table".to_string(),
+        detail,
+        fix,
+        editor_sql,
+        rows_scanned: facts.read_rows,
+    })
+}
+
 /// Strip a single pair of surrounding backticks from an identifier.
 fn unquote(ident: &str) -> &str {
     ident.trim().trim_matches('`')
@@ -375,6 +506,24 @@ fn index_ddl(table: &str, columns: &[FilterColumn]) -> String {
         ));
     }
     out.trim_end().to_string()
+}
+
+/// `ADD PROJECTION` + `MATERIALIZE PROJECTION` for an aggregate rollup.
+/// The body is the query's own `SELECT ... GROUP BY`, so this is the query
+/// pre-computed, not a guess. MATERIALIZE backfills it over existing parts.
+fn projection_ddl(table: &str, name: &str, body: &str) -> String {
+    // Indent the (possibly multi-line) body inside the projection parens.
+    let indented = body
+        .lines()
+        .map(|line| format!("    {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "ALTER TABLE {table} ADD PROJECTION {name}\n(\n{indented}\n);\n\n\
+         -- Builds the projection for existing rows (rewrites existing parts \
+         in the background).\n\
+         ALTER TABLE {table} MATERIALIZE PROJECTION {name};"
+    )
 }
 
 /// Group digits for readability (12345678 -> "12,345,678"). Locale-free,
@@ -427,8 +576,24 @@ mod tests {
         }
     }
 
+    fn partition_index(initial_parts: u64, selected_parts: u64) -> ExplainIndex {
+        ExplainIndex {
+            index_type: "Partition".to_string(),
+            keys: vec![],
+            condition: Some("true".to_string()),
+            initial_parts,
+            selected_parts,
+            initial_granules: 0,
+            selected_granules: 0,
+        }
+    }
+
     /// Expression -> Filter -> ReadFromMergeTree(table, pk index).
     fn plan(table: &str, index: ExplainIndex) -> ExplainNode {
+        plan_indexes(table, vec![index])
+    }
+
+    fn plan_indexes(table: &str, indexes: Vec<ExplainIndex>) -> ExplainNode {
         ExplainNode {
             node_type: "Expression".to_string(),
             description: None,
@@ -440,11 +605,189 @@ mod tests {
                 children: vec![ExplainNode {
                     node_type: "ReadFromMergeTree".to_string(),
                     description: Some(table.to_string()),
+                    indexes,
+                    children: vec![],
+                }],
+            }],
+        }
+    }
+
+    /// Facts for a selective scan of a partitioned table whose Partition
+    /// index kept all `parts`, filtering on `filter_col` (not the key).
+    fn partitioned_facts(parts: u64, partition_key: &str, filter_col: &str) -> QueryFacts {
+        let mut facts = facts_from_plan(
+            &plan_indexes(
+                "db.events",
+                vec![pk_index(120, 3, &["id"]), partition_index(parts, parts)],
+            ),
+            3_000_000,
+            30,
+            0,
+            false,
+        );
+        facts.partition_key = partition_key.to_string();
+        facts.filter_columns = vec![fcol(filter_col, "Float64", false)];
+        facts
+    }
+
+    #[test]
+    fn fires_when_query_scans_every_partition() {
+        let facts = partitioned_facts(8, "toYYYYMM(ts)", "amount");
+        let findings = advise(&facts);
+        let finding = findings
+            .iter()
+            .find(|f| f.title == "Query scans every partition")
+            .expect("partition finding");
+        assert!(finding.detail.contains("8 parts"));
+        assert!(finding.fix.contains("toYYYYMM(ts)"));
+        assert!(finding.editor_sql.is_none());
+    }
+
+    #[test]
+    fn quiet_when_filter_is_on_the_partition_key() {
+        // Filtering `ts`, which the partition expression toYYYYMM(ts) uses.
+        let facts = partitioned_facts(8, "toYYYYMM(ts)", "ts");
+        assert!(!advise(&facts)
+            .iter()
+            .any(|f| f.title == "Query scans every partition"));
+    }
+
+    #[test]
+    fn quiet_when_partitions_were_pruned() {
+        // Kept 2 of 8 parts: some partitions were already skipped.
+        let mut facts = facts_from_plan(
+            &plan_indexes(
+                "db.events",
+                vec![pk_index(120, 3, &["id"]), partition_index(8, 2)],
+            ),
+            3_000_000,
+            30,
+            0,
+            false,
+        );
+        facts.partition_key = "toYYYYMM(ts)".to_string();
+        facts.filter_columns = vec![fcol("amount", "Float64", false)];
+        assert!(!advise(&facts)
+            .iter()
+            .any(|f| f.title == "Query scans every partition"));
+    }
+
+    #[test]
+    fn quiet_when_unpartitioned() {
+        // No Partition index / empty partition key.
+        let mut facts = facts_from_plan(
+            &plan("db.events", pk_index(120, 118, &["id"])),
+            3_000_000,
+            30,
+            0,
+            false,
+        );
+        facts.filter_columns = vec![fcol("amount", "Float64", false)];
+        assert!(!advise(&facts)
+            .iter()
+            .any(|f| f.title == "Query scans every partition"));
+    }
+
+    /// Aggregating -> Expression -> ReadFromMergeTree(table, pk index): a
+    /// grouped rollup with no WHERE (so only the aggregate rule can fire).
+    fn agg_plan(table: &str, index: ExplainIndex) -> ExplainNode {
+        ExplainNode {
+            node_type: "Aggregating".to_string(),
+            description: None,
+            indexes: vec![],
+            children: vec![ExplainNode {
+                node_type: "Expression".to_string(),
+                description: None,
+                indexes: vec![],
+                children: vec![ExplainNode {
+                    node_type: "ReadFromMergeTree".to_string(),
+                    description: Some(table.to_string()),
                     indexes: vec![index],
                     children: vec![],
                 }],
             }],
         }
+    }
+
+    #[test]
+    fn fires_when_a_grouped_aggregate_rescans_a_big_table() {
+        let mut facts = facts_from_plan(
+            &agg_plan("db.events", pk_index(400, 400, &["id"])),
+            5_000_000,
+            20,
+            0,
+            false,
+        );
+        facts.has_group_by = true;
+        facts.aggregate_projection = Some((
+            "SELECT kind, count()\nGROUP BY kind".to_string(),
+            "proj_kind".to_string(),
+        ));
+        assert!(facts.has_aggregate);
+        let finding = advise(&facts)
+            .into_iter()
+            .find(|f| f.title == "Aggregation re-scans the whole table")
+            .expect("aggregate finding");
+        assert!(finding.detail.contains("5,000,000"));
+        assert!(finding.detail.contains("20 groups"));
+        assert!(finding.fix.contains("db.events"));
+        // Offers the projection DDL rebuilt from the query itself.
+        let sql = finding.editor_sql.as_ref().expect("projection DDL");
+        assert!(sql.contains("ADD PROJECTION proj_kind"));
+        assert!(sql.contains("GROUP BY kind"));
+        assert!(sql.contains("MATERIALIZE PROJECTION proj_kind"));
+    }
+
+    #[test]
+    fn aggregate_finding_has_no_ddl_when_projection_cannot_be_built() {
+        // No projection body available (e.g. a CTE the caller couldn't
+        // reduce): still fire, but without DDL.
+        let mut facts = facts_from_plan(
+            &agg_plan("db.events", pk_index(400, 400, &["id"])),
+            5_000_000,
+            20,
+            0,
+            false,
+        );
+        facts.has_group_by = true;
+        let finding = advise(&facts)
+            .into_iter()
+            .find(|f| f.title == "Aggregation re-scans the whole table")
+            .expect("aggregate finding");
+        assert!(finding.editor_sql.is_none());
+    }
+
+    #[test]
+    fn quiet_for_a_global_aggregate_without_group_by() {
+        // count(*)-style: aggregates but no GROUP BY, so no projection.
+        let facts = facts_from_plan(
+            &agg_plan("db.events", pk_index(400, 400, &["id"])),
+            5_000_000,
+            1,
+            0,
+            false,
+        );
+        assert!(facts.has_aggregate);
+        assert!(!facts.has_group_by);
+        assert!(!advise(&facts)
+            .iter()
+            .any(|f| f.title == "Aggregation re-scans the whole table"));
+    }
+
+    #[test]
+    fn quiet_when_the_aggregate_returns_many_groups() {
+        // Collapsed only ~5x: a projection wouldn't buy much.
+        let mut facts = facts_from_plan(
+            &agg_plan("db.events", pk_index(400, 400, &["id"])),
+            5_000_000,
+            1_000_000,
+            0,
+            false,
+        );
+        facts.has_group_by = true;
+        assert!(!advise(&facts)
+            .iter()
+            .any(|f| f.title == "Aggregation re-scans the whole table"));
     }
 
     #[test]

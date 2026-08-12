@@ -607,13 +607,32 @@ enum UpdatePhase {
 
 impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (preferences, preferences_error) = match load_preferences() {
+        let (mut preferences, preferences_error) = match load_preferences() {
             Ok(preferences) => (preferences, None),
             Err(error) => (
                 Preferences::default(),
                 Some(format!("Could not load preferences: {error}")),
             ),
         };
+        // Saved queries gained a `saved_at` timestamp; anchor any that
+        // predate it to now, once, so the "saved N ago" label shows for
+        // them going forward (their true save time is unknowable).
+        {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_secs() as i64)
+                .unwrap_or(0);
+            let mut stamped = false;
+            for saved in &mut preferences.saved_queries {
+                if saved.saved_at == 0 {
+                    saved.saved_at = now;
+                    stamped = true;
+                }
+            }
+            if stamped {
+                let _ = save_preferences(&preferences);
+            }
+        }
         let fleet_repo_path = preferences.fleet_repo.clone();
         let fleet_cluster = preferences.fleet_cluster.clone();
         // Check for updates now and every five minutes (the health-poll
@@ -6704,6 +6723,12 @@ impl Workspace {
             .into_iter()
             .map(|(name, conjunct)| (name, is_range_predicate(&conjunct)))
             .collect();
+        // A top-level GROUP BY marks a rollup the advisor can suggest a
+        // projection / materialized view for (vs a global aggregate); when
+        // present we also rebuild the projection body from the SQL so the
+        // fix is copyable DDL, not just prose.
+        let has_group_by = zedb_ch::schema_intelligence::has_group_by(&sql);
+        let aggregate_projection = zedb_ch::schema_intelligence::aggregate_projection(&sql);
         let explain_sql = zedb_ch::explain::explain_statement(&sql);
         // Compute the findings off-thread: EXPLAIN, then (once we know the
         // table) fetch its true sorting key and the filtered columns' types
@@ -6724,8 +6749,15 @@ impl Workspace {
             let plan = zedb_ch::explain::parse_explain_json(&raw).ok()?;
             let mut facts =
                 query_advisor::facts_from_plan(&plan, read_rows, result_rows, read_bytes, capped);
-            if let Some(order_by) = fetch_sorting_key(&client, facts.table.as_deref()).await {
-                facts.order_by = order_by;
+            facts.has_group_by = has_group_by;
+            facts.aggregate_projection = aggregate_projection;
+            if let Some((order_by, partition_key)) =
+                fetch_table_keys(&client, facts.table.as_deref()).await
+            {
+                if !order_by.is_empty() {
+                    facts.order_by = order_by;
+                }
+                facts.partition_key = partition_key;
             }
             let types = fetch_column_types(&client, facts.table.as_deref()).await;
             let mut filter_columns: Vec<query_advisor::FilterColumn> = filters
@@ -6901,6 +6933,10 @@ impl Workspace {
         }
         for (index, finding) in findings.iter().enumerate() {
             let editor_sql = finding.editor_sql.clone();
+            // Findings without copyable DDL (e.g. the partition and
+            // aggregate advice) still get a copy button: it copies the
+            // suggestion prose, so every row has a copy action.
+            let copy_fix_text = editor_sql.is_none().then(|| finding.fix.clone());
             panel = panel.child(
                 div()
                     .flex()
@@ -6923,8 +6959,13 @@ impl Workspace {
                             .justify_between()
                             .gap_2()
                             .child(
+                                // min-width: 0 lets the flex child shrink
+                                // below its content width so the fix text
+                                // wraps instead of overflowing (and being
+                                // clipped) when the panel narrows.
                                 div()
                                     .flex_1()
+                                    .min_w_0()
                                     .text_xs()
                                     .text_color(theme::text_dim())
                                     .child(finding.fix.clone()),
@@ -6969,6 +7010,22 @@ impl Workspace {
                                                     this.open_query_tab_with(&sql, window, cx);
                                                 })),
                                             )
+                                    })
+                                    .when_some(copy_fix_text, |actions, fix| {
+                                        actions.child(
+                                            advisor_action(("advisor-copy", index), "icons/copy.svg")
+                                                .tooltip(|window, cx| {
+                                                    gpui_component::tooltip::Tooltip::new(
+                                                        "Copy suggestion",
+                                                    )
+                                                    .build(window, cx)
+                                                })
+                                                .on_click(cx.listener(move |_, _, _, cx| {
+                                                    cx.write_to_clipboard(
+                                                        gpui::ClipboardItem::new_string(fix.clone()),
+                                                    );
+                                                })),
+                                        )
                                     })
                                     .when_some(ask_agent_icon.clone(), |actions, icon| {
                                         // Silent hand-off, mirroring the error
@@ -9843,31 +9900,35 @@ impl Workspace {
     }
 }
 
-/// The table's real `ORDER BY` columns from `system.tables`, for the query
-/// advisor. `table` is `db.name` from the EXPLAIN plan. Returns `None` when
-/// the table isn't qualified or the lookup fails.
-async fn fetch_sorting_key(client: &ChClient, table: Option<&str>) -> Option<Vec<String>> {
+/// The table's real `ORDER BY` columns and `PARTITION BY` expression from
+/// `system.tables`, for the query advisor. `table` is `db.name` from the
+/// EXPLAIN plan. Returns `None` when the table isn't qualified or the
+/// lookup fails.
+async fn fetch_table_keys(client: &ChClient, table: Option<&str>) -> Option<(Vec<String>, String)> {
     let (database, name) = table?.split_once('.')?;
     let escape = |value: &str| value.replace('\'', "''");
     let sql = format!(
-        "SELECT sorting_key FROM system.tables WHERE database = '{}' AND name = '{}'",
+        "SELECT sorting_key, partition_key FROM system.tables \
+         WHERE database = '{}' AND name = '{}'",
         escape(database),
         escape(name),
     );
-    let raw = client
-        .query(&sql)
-        .await
-        .ok()?
-        .rows
+    let result = client.query(&sql).await.ok()?;
+    let row = result.rows.first()?;
+    let sorting = row
         .first()
-        .and_then(|row| row.first())
-        .map(|value| value.to_string())?;
-    let columns: Vec<String> = raw
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let partition_key = row
+        .get(1)
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let order_by: Vec<String> = sorting
         .split(',')
         .map(|column| column.trim().to_string())
         .filter(|column| !column.is_empty())
         .collect();
-    (!columns.is_empty()).then_some(columns)
+    Some((order_by, partition_key))
 }
 
 /// The filtered columns' types from `system.columns`, keyed by name, for

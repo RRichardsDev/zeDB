@@ -42,6 +42,11 @@ pub struct SavedQuery {
     /// Favorites sort to the top of the Saved tab.
     #[serde(default)]
     pub favorite: bool,
+    /// When the query was saved (Unix seconds), for a "saved N ago" label.
+    /// Zero on queries saved before this field existed (shown without a
+    /// time).
+    #[serde(default)]
+    pub saved_at: i64,
 }
 
 /// A user-configured ACP-speaking agent: a name and a command line.
@@ -136,6 +141,7 @@ mod tests {
                 name: "top tables".into(),
                 sql: "SELECT 1".into(),
                 favorite: true,
+                saved_at: 1_700_000_000,
             }],
         };
         save_preferences(&preferences).unwrap();

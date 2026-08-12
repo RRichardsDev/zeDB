@@ -7,6 +7,27 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+### Query advisor
+
+- Two new findings finish Part A. "Query scans every partition" fires when
+  a selective query filters on something other than the partition key, so
+  ClickHouse read every partition; it names the partition key to add a
+  predicate on. "Aggregation re-scans the whole table" fires when a GROUP
+  BY collapses a big scan into a handful of groups, and offers copyable
+  projection DDL rebuilt from the query itself (a two-step ADD PROJECTION /
+  MATERIALIZE PROJECTION, deterministic, no model), or a materialized view.
+- Findings without generated DDL (the partition advice) now have a
+  copy-suggestion button, and the fix text wraps instead of being clipped
+  when the panel is narrow.
+
+### Saved & History
+
+- Saved queries show when they were saved ("just now", "2h ago"), aligned
+  to the right of the row. History moves its relative time to the right as
+  well, keeping rows and duration on the left.
+
 ## v0.1.23 - 2026-08-12
 
 - Relicensed to the PolyForm Noncommercial License 1.0.0: zeDB is

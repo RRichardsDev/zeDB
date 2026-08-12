@@ -146,10 +146,15 @@ impl Workspace {
             name = format!("{base} {counter}");
             counter += 1;
         }
+        let saved_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs() as i64)
+            .unwrap_or(0);
         self.preferences.saved_queries.push(SavedQuery {
             name,
             sql: sql.to_string(),
             favorite: false,
+            saved_at,
         });
         sort_saved(&mut self.preferences.saved_queries);
         if let Err(error) = zedb_core::save_preferences(&self.preferences) {
@@ -348,22 +353,25 @@ impl Workspace {
                         let save_sql = entry.sql.clone();
                         let hover_sql = entry.sql.clone();
                         let failed = entry.error.is_some();
-                        let mut meta = relative_time(entry.at);
+                        // The relative time goes all the way to the right;
+                        // connection / rows / ms (or the error) stay left.
+                        let when = relative_time(entry.at);
+                        let mut parts: Vec<String> = Vec::new();
                         if let Some(connection_name) = &connection {
                             if *connection_name != entry.connection {
-                                meta.push_str(" \u{b7} ");
-                                meta.push_str(&entry.connection);
+                                parts.push(entry.connection.clone());
                             }
                         }
                         if let Some(rows) = entry.rows {
-                            meta.push_str(&format!(" \u{b7} {rows} rows"));
+                            parts.push(format!("{rows} rows"));
                         }
                         if let Some(duration) = entry.duration_ms {
-                            meta.push_str(&format!(" \u{b7} {duration} ms"));
+                            parts.push(format!("{duration} ms"));
                         }
-                        if let Some(error) = &entry.error {
-                            meta = format!("{} \u{b7} {error}", relative_time(entry.at));
-                        }
+                        let left_meta = match &entry.error {
+                            Some(error) => error.clone(),
+                            None => parts.join(" \u{b7} "),
+                        };
                         div()
                             .id(("history-entry", index))
                             .group("history-row")
@@ -394,15 +402,34 @@ impl Workspace {
                                     )
                                     .child(
                                         div()
-                                            .text_xs()
-                                            .overflow_hidden()
-                                            .whitespace_nowrap()
-                                            .text_color(if failed {
-                                                theme::danger()
-                                            } else {
-                                                theme::text_dim()
-                                            })
-                                            .child(meta),
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .min_w_0()
+                                                    .text_xs()
+                                                    .overflow_hidden()
+                                                    .whitespace_nowrap()
+                                                    .text_color(if failed {
+                                                        theme::danger()
+                                                    } else {
+                                                        theme::text_dim()
+                                                    })
+                                                    .child(left_meta),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_none()
+                                                    .text_xs()
+                                                    .text_color(if failed {
+                                                        theme::danger()
+                                                    } else {
+                                                        theme::text_dim()
+                                                    })
+                                                    .child(when),
+                                            ),
                                     ),
                             )
                             .child(
@@ -476,6 +503,11 @@ impl Workspace {
                         let favorite_name = saved.name.clone();
                         let rename_name = saved.name.clone();
                         let favorite = saved.favorite;
+                        // "saved N ago", using the same relative-time style
+                        // as History; blank for queries saved before the
+                        // timestamp existed.
+                        let saved_meta =
+                            (saved.saved_at > 0).then(|| relative_time(saved.saved_at));
                         let renaming = renaming_name.as_deref() == Some(saved.name.as_str());
 
                         if renaming {
@@ -580,96 +612,114 @@ impl Workspace {
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap_1()
+                                    .justify_between()
                                     .pt_0p5()
                                     .child(
-                                        action_button(
-                                            ("favorite-saved", index),
-                                            "icons/star.svg",
-                                            favorite,
-                                            if favorite {
-                                                theme::sort_indicator()
-                                            } else {
-                                                theme::text_dim()
-                                            },
-                                        )
-                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
-                                        .on_click(
-                                            cx.listener(move |this, _, _, cx| {
-                                                cx.stop_propagation();
-                                                this.history_toggle_favorite(&favorite_name, cx);
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        action_button(
-                                            ("rename-saved", index),
-                                            "icons/edit.svg",
-                                            false,
-                                            theme::text_dim(),
-                                        )
-                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
-                                        .tooltip(|window, cx| {
-                                            gpui_component::tooltip::Tooltip::new("Rename")
-                                                .build(window, cx)
-                                        })
-                                        .on_click(
-                                            cx.listener(move |this, _, _, cx| {
-                                                cx.stop_propagation();
-                                                this.history_renaming = Some((
-                                                    rename_name.clone(),
-                                                    Self::input(
-                                                        rename_name.clone(),
-                                                        "Name",
-                                                        false,
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .child(
+                                                action_button(
+                                                    ("favorite-saved", index),
+                                                    "icons/star.svg",
+                                                    favorite,
+                                                    if favorite {
+                                                        theme::sort_indicator()
+                                                    } else {
+                                                        theme::text_dim()
+                                                    },
+                                                )
+                                                .hover(|button| {
+                                                    button.bg(theme::hover()).cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.history_toggle_favorite(
+                                                        &favorite_name,
                                                         cx,
-                                                    ),
-                                                ));
-                                                cx.notify();
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        action_button(
-                                            ("advise-saved", index),
-                                            "icons/advise.svg",
-                                            false,
-                                            theme::text_dim(),
-                                        )
-                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
-                                        .tooltip(|window, cx| {
-                                            gpui_component::tooltip::Tooltip::new(
-                                                "Run & advise on this query",
+                                                    );
+                                                })),
                                             )
-                                            .build(window, cx)
-                                        })
-                                        .on_click(
-                                            cx.listener(move |this, _, window, cx| {
-                                                cx.stop_propagation();
-                                                this.advise_saved_query(
-                                                    advise_sql.clone(),
-                                                    window,
-                                                    cx,
-                                                );
-                                            }),
-                                        ),
+                                            .child(
+                                                action_button(
+                                                    ("rename-saved", index),
+                                                    "icons/edit.svg",
+                                                    false,
+                                                    theme::text_dim(),
+                                                )
+                                                .hover(|button| {
+                                                    button.bg(theme::hover()).cursor_pointer()
+                                                })
+                                                .tooltip(|window, cx| {
+                                                    gpui_component::tooltip::Tooltip::new("Rename")
+                                                        .build(window, cx)
+                                                })
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.history_renaming = Some((
+                                                        rename_name.clone(),
+                                                        Self::input(
+                                                            rename_name.clone(),
+                                                            "Name",
+                                                            false,
+                                                            cx,
+                                                        ),
+                                                    ));
+                                                    cx.notify();
+                                                })),
+                                            )
+                                            .child(
+                                                action_button(
+                                                    ("advise-saved", index),
+                                                    "icons/advise.svg",
+                                                    false,
+                                                    theme::text_dim(),
+                                                )
+                                                .hover(|button| {
+                                                    button.bg(theme::hover()).cursor_pointer()
+                                                })
+                                                .tooltip(|window, cx| {
+                                                    gpui_component::tooltip::Tooltip::new(
+                                                        "Run & advise on this query",
+                                                    )
+                                                    .build(window, cx)
+                                                })
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        cx.stop_propagation();
+                                                        this.advise_saved_query(
+                                                            advise_sql.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                            )
+                                            .child(
+                                                action_button(
+                                                    ("delete-saved", index),
+                                                    "icons/trash.svg",
+                                                    false,
+                                                    theme::text_dim(),
+                                                )
+                                                .hover(|button| {
+                                                    button
+                                                        .bg(theme::danger_hover())
+                                                        .cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.history_delete_saved(&delete_name, cx);
+                                                })),
+                                            ),
                                     )
                                     .child(
-                                        action_button(
-                                            ("delete-saved", index),
-                                            "icons/trash.svg",
-                                            false,
-                                            theme::text_dim(),
-                                        )
-                                        .hover(|button| {
-                                            button.bg(theme::danger_hover()).cursor_pointer()
-                                        })
-                                        .on_click(
-                                            cx.listener(move |this, _, _, cx| {
-                                                cx.stop_propagation();
-                                                this.history_delete_saved(&delete_name, cx);
-                                            }),
-                                        ),
+                                        div()
+                                            .flex_none()
+                                            .text_xs()
+                                            .text_color(theme::text_dim())
+                                            .when_some(saved_meta, |label, meta| label.child(meta)),
                                     ),
                             )
                     })
