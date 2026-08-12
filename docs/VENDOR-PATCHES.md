@@ -149,6 +149,10 @@ under `src/input/`:
   cursor (`collapse_multi_to_edge`), then once collapsed move every
   cursor together one grapheme at a time (`move_multi_cursors`,
   `is_multi_collapsed`), deduping collisions.
+  `select_to_line_edge_multi` extends EVERY cursor to its own line
+  start/end so shift-cmd-left/right selects at all cursors, not just the
+  primary (`select_to_start_of_line` / `select_to_end_of_line` in
+  `state.rs` delegate to it); each extra keeps its far anchor.
 - `mode.rs`: `rehighlight_all` re-highlights the whole document in one
   pass reusing the compiled query (patch #5's `replace_all`), for the
   batched multi-edit above.

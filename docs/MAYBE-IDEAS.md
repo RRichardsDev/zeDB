@@ -62,3 +62,11 @@ doc; delete freely.
 - When a query runs past ~30s, quietly suggest the explain ("still
   running… see why: Explain query"), triggering the palette
   command's action directly.
+- Cross-version robustness for `system.*` reads. We query specific
+  columns from memory, and they vary by ClickHouse version (e.g.
+  `system.merges` had no `total_rows_count` on an older server, which
+  errored the merges panel). A version-tolerant approach would probe
+  `system.columns` for what exists and degrade gracefully, or keep a
+  vetted stable-columns list, applied app-wide. Deferred for now: the
+  breakages have been one-off and patchable, so this is a hardening
+  pass to do when a version gap actually bites, not speculatively.

@@ -302,6 +302,25 @@ struct DeleteConnection {
     index: usize,
 }
 
+/// Query-tab context-menu actions, each targeting a tab by id.
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct CloseQueryTab {
+    tab_id: usize,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct CloseOtherQueryTabs {
+    tab_id: usize,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct CloseQueryTabsToRight {
+    tab_id: usize,
+}
+
 /// Optional GitHub identity (docs/PHASE-3.4.md M0).
 enum GithubAuth {
     SignedOut,
@@ -1736,13 +1755,13 @@ impl Workspace {
     fn tier_colors(tier: EnvTier) -> (u32, u32) {
         if theme::is_dark() {
             match tier {
-                EnvTier::Dev => (0x294132, 0x8abe94),
+                EnvTier::Dev => (0x28384b, 0x8ab4d4),
                 EnvTier::Staging => (0x463b28, 0xc7a969),
                 EnvTier::Production => (0x472d31, 0xd4868d),
             }
         } else {
             match tier {
-                EnvTier::Dev => (0xdcefdf, 0x2f6f43),
+                EnvTier::Dev => (0xd6e6f5, 0x2f5f8a),
                 EnvTier::Staging => (0xf3e9d2, 0x8a6d1f),
                 EnvTier::Production => (0xf5dcdf, 0xa03744),
             }
@@ -1932,7 +1951,10 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(format!("{} node(s)", connection.nodes.len()))
+                            .child({
+                                let count = connection.nodes.len();
+                                format!("{count} node{}", if count == 1 { "" } else { "s" })
+                            })
                             .when(connected, |row| {
                                 row.child(div().size(px(7.)).rounded_full().bg(theme::success()))
                             }),
@@ -3512,6 +3534,10 @@ impl Workspace {
                     Ok(Err(error)) => this.schema_error = Some(error),
                     Err(error) => this.schema_error = Some(error.to_string()),
                 }
+                // The schema context just changed; refresh open editors'
+                // diagnostics so a now-known database drops its stale
+                // "unknown" squiggly without waiting for the next edit.
+                this.refresh_schema_diagnostics(cx);
                 cx.notify();
             })
             .ok();
@@ -5866,6 +5892,78 @@ impl Workspace {
         .detach();
     }
 
+    /// Re-run schema analysis on every open editor against the current
+    /// snapshot, refreshing diagnostics. Called when the schema context
+    /// changes (node / cluster switch, schema reload) so a stale "unknown
+    /// database/table" squiggly clears once the object is known again.
+    /// Unlike [`Self::schedule_schema_analysis`] it does not warm column
+    /// metadata, so it needs no window; column-level hints refresh on the
+    /// next edit.
+    fn refresh_schema_diagnostics(&mut self, cx: &mut Context<Self>) {
+        let jobs: Vec<(usize, u64, Entity<InputState>)> = self
+            .query_tabs
+            .iter_mut()
+            .map(|tab| {
+                tab.schema_analysis_generation += 1;
+                (tab.id, tab.schema_analysis_generation, tab.editor.clone())
+            })
+            .collect();
+        let snapshot = self.schema_provider.snapshot();
+        for (tab_id, generation, editor) in jobs {
+            let Some((snapshot, default_database)) = snapshot.clone() else {
+                // No schema context: clear any stale diagnostics outright.
+                editor.update(cx, |editor, cx| {
+                    if let Some(diagnostics) = editor.diagnostics_mut() {
+                        diagnostics.clear();
+                    }
+                    cx.notify();
+                });
+                continue;
+            };
+            let sql = editor.read(cx).value().to_string();
+            let task = rt::tokio().spawn(async move {
+                let issues = zedb_ch::schema_intelligence::analyze_sql(
+                    &snapshot,
+                    default_database.as_deref(),
+                    &sql,
+                );
+                (sql, issues)
+            });
+            cx.spawn(async move |this, cx| {
+                let Ok((sql, issues)) = task.await else {
+                    return;
+                };
+                this.update(cx, |this, cx| {
+                    let Some(tab) = this.query_tabs.iter().find(|tab| tab.id == tab_id) else {
+                        return;
+                    };
+                    if tab.schema_analysis_generation != generation {
+                        return;
+                    }
+                    editor.update(cx, |editor, cx| {
+                        let Some(diagnostics) = editor.diagnostics_mut() else {
+                            return;
+                        };
+                        diagnostics.clear();
+                        diagnostics.extend(issues.into_iter().map(|issue| {
+                            let range = byte_range_to_lsp(&sql, issue.range);
+                            Diagnostic {
+                                range: range.start..range.end,
+                                severity: DiagnosticSeverity::Hint,
+                                source: Some("zeDB schema".into()),
+                                message: issue.message.into(),
+                                ..Default::default()
+                            }
+                        }));
+                        cx.notify();
+                    });
+                })
+                .ok();
+            })
+            .detach();
+        }
+    }
+
     fn add_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.next_query_tab_id;
         self.next_query_tab_id += 1;
@@ -5899,6 +5997,69 @@ impl Workspace {
             .active_query_tab
             .min(self.query_tabs.len().saturating_sub(1));
         cx.notify();
+    }
+
+    /// Close every tab whose id is in `close_ids`, keeping `focus_id`
+    /// active. Running / errored tabs are protected (never closed), and the
+    /// focus tab always survives, so at least one tab remains.
+    fn close_query_tab_ids(
+        &mut self,
+        close_ids: &[usize],
+        focus_id: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if close_ids.is_empty() {
+            return;
+        }
+        let mut kept = Vec::with_capacity(self.query_tabs.len());
+        let mut dropped = Vec::new();
+        for tab in self.query_tabs.drain(..) {
+            let closable = !matches!(
+                tab.outcome,
+                QueryOutcome::Running | QueryOutcome::StatementError { .. }
+            );
+            if tab.id != focus_id && closable && close_ids.contains(&tab.id) {
+                dropped.push(tab);
+            } else {
+                kept.push(tab);
+            }
+        }
+        self.query_tabs = kept;
+        // A closed tab may hold a huge result; drop it in the background.
+        for tab in &dropped {
+            tab.result_grid.update(cx, |grid, _| grid.release_rows());
+        }
+        drop(dropped);
+        self.active_query_tab = self
+            .query_tabs
+            .iter()
+            .position(|tab| tab.id == focus_id)
+            .unwrap_or_else(|| {
+                self.active_query_tab
+                    .min(self.query_tabs.len().saturating_sub(1))
+            });
+        cx.notify();
+    }
+
+    fn close_other_query_tabs(&mut self, keep_id: usize, cx: &mut Context<Self>) {
+        let ids: Vec<usize> = self
+            .query_tabs
+            .iter()
+            .filter(|tab| tab.id != keep_id)
+            .map(|tab| tab.id)
+            .collect();
+        self.close_query_tab_ids(&ids, keep_id, cx);
+    }
+
+    fn close_query_tabs_to_right(&mut self, from_id: usize, cx: &mut Context<Self>) {
+        let Some(pos) = self.query_tabs.iter().position(|tab| tab.id == from_id) else {
+            return;
+        };
+        let ids: Vec<usize> = self.query_tabs[pos + 1..]
+            .iter()
+            .map(|tab| tab.id)
+            .collect();
+        self.close_query_tab_ids(&ids, from_id, cx);
     }
 
     fn run_query_action(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
@@ -8540,79 +8701,77 @@ impl Workspace {
                     .map(|details| details.create_table_query.clone())
                     .unwrap_or_default();
                 let clipboard_ddl = ddl.clone();
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .h(px(34.))
-                            .flex_none()
-                            .px_3()
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .border_b_1()
-                            .border_color(theme::border())
-                            .child(
+                let has_ddl = !loading && error.is_none() && !ddl.is_empty();
+                div().flex_1().min_h_0().flex().flex_col().child(
+                    div()
+                        .id("object-ddl")
+                        .group("ddl-editor")
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        .m_3()
+                        .overflow_hidden()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(theme::border())
+                        .bg(theme::bg_sunken())
+                        .text_color(theme::text())
+                        .when(loading, |panel| panel.child("Loading DDL..."))
+                        .when_some(error.as_ref(), |panel, error| {
+                            panel.child(div().text_color(theme::danger()).child(error.clone()))
+                        })
+                        .when(!loading && error.is_none() && ddl.is_empty(), |panel| {
+                            panel
+                                .p_3()
+                                .child(div().text_color(theme::text_dim()).child("DDL unavailable"))
+                        })
+                        .when(has_ddl, |panel| {
+                            panel.child(
+                                Input::new(&ddl_editor)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .focus_bordered(false)
+                                    .disabled(true)
+                                    .tab_index(-1)
+                                    .h_full(),
+                            )
+                        })
+                        // Copy sits over the top-right of the editor,
+                        // revealed on hover, instead of a dedicated bar.
+                        .when(has_ddl, |panel| {
+                            panel.child(
                                 div()
                                     .id("copy-object-ddl")
-                                    .px_2()
-                                    .py_1()
+                                    .absolute()
+                                    .top(px(6.))
+                                    .right(px(6.))
+                                    .size(px(22.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
                                     .rounded(px(3.))
-                                    .text_xs()
-                                    .text_color(theme::text_dim())
-                                    .when(!ddl.is_empty(), |button| {
-                                        button
-                                            .hover(|button| {
-                                                button
-                                                    .bg(theme::bg_sidebar())
-                                                    .text_color(theme::text())
-                                                    .cursor_pointer()
-                                            })
-                                            .on_click(cx.listener(move |_, _, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    clipboard_ddl.clone(),
-                                                ));
-                                            }))
+                                    .bg(theme::bg_sidebar())
+                                    .invisible()
+                                    .group_hover("ddl-editor", |icon| icon.visible())
+                                    .hover(|icon| icon.cursor_pointer())
+                                    .tooltip(|window, cx| {
+                                        gpui_component::tooltip::Tooltip::new("Copy DDL")
+                                            .build(window, cx)
                                     })
-                                    .child("Copy DDL"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("object-ddl")
-                            .flex_1()
-                            .min_h_0()
-                            .m_3()
-                            .overflow_hidden()
-                            .rounded(px(3.))
-                            .border_1()
-                            .border_color(theme::border())
-                            .bg(theme::bg_sunken())
-                            .text_color(theme::text())
-                            .when(loading, |panel| panel.child("Loading DDL..."))
-                            .when_some(error.as_ref(), |panel, error| {
-                                panel.child(div().text_color(theme::danger()).child(error.clone()))
-                            })
-                            .when(!loading && error.is_none() && ddl.is_empty(), |panel| {
-                                panel.p_3().child(
-                                    div().text_color(theme::text_dim()).child("DDL unavailable"),
-                                )
-                            })
-                            .when(!loading && error.is_none() && !ddl.is_empty(), |panel| {
-                                panel.child(
-                                    Input::new(&ddl_editor)
-                                        .appearance(false)
-                                        .bordered(false)
-                                        .focus_bordered(false)
-                                        .disabled(true)
-                                        .tab_index(-1)
-                                        .h_full(),
-                                )
-                            }),
-                    )
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            clipboard_ddl.clone(),
+                                        ));
+                                    }))
+                                    .child(
+                                        svg()
+                                            .path("icons/copy.svg")
+                                            .size(px(13.))
+                                            .text_color(theme::text_dim()),
+                                    ),
+                            )
+                        }),
+                )
             }
         };
 
@@ -8746,6 +8905,8 @@ impl Workspace {
             .enumerate()
             .map(|(index, tab)| {
                 let tab_id = tab.id;
+                let multiple = self.query_tabs.len() > 1;
+                let has_right = index + 1 < self.query_tabs.len();
                 div()
                     .id(("query-tab", tab_id))
                     .flex_none()
@@ -8767,6 +8928,23 @@ impl Workspace {
                         this.active_query_tab = index;
                         cx.notify();
                     }))
+                    .context_menu(move |menu, _, _| {
+                        menu.menu_with_enable(
+                            "Close tab",
+                            Box::new(CloseQueryTab { tab_id }),
+                            multiple,
+                        )
+                        .menu_with_enable(
+                            "Close others",
+                            Box::new(CloseOtherQueryTabs { tab_id }),
+                            multiple,
+                        )
+                        .menu_with_enable(
+                            "Close to the right",
+                            Box::new(CloseQueryTabsToRight { tab_id }),
+                            has_right,
+                        )
+                    })
                     .gap_2()
                     .child(format!("Query {tab_id}"))
                     .when(self.query_tabs.len() > 1, |tab_row| {
@@ -9458,6 +9636,15 @@ impl Render for Workspace {
             .text_sm()
             .on_action(cx.listener(Self::run_query_action))
             .on_action(cx.listener(Self::run_selection_action))
+            .on_action(cx.listener(|this, action: &CloseQueryTab, _, cx| {
+                this.close_query_tab(action.tab_id, cx);
+            }))
+            .on_action(cx.listener(|this, action: &CloseOtherQueryTabs, _, cx| {
+                this.close_other_query_tabs(action.tab_id, cx);
+            }))
+            .on_action(cx.listener(|this, action: &CloseQueryTabsToRight, _, cx| {
+                this.close_query_tabs_to_right(action.tab_id, cx);
+            }))
             .on_action(
                 cx.listener(|this, _: &MaxRows1k, _, cx| this.select_max_rows(MaxRows::Rows1k, cx)),
             )

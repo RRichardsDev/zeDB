@@ -208,6 +208,39 @@ impl InputState {
         cx.notify();
     }
 
+    /// zeDB patch (multi-cursor): extend EVERY cursor (primary + extras) to
+    /// its own line edge, so shift-cmd-left / shift-cmd-right selects to the
+    /// line start / end at all cursors, not just the primary. `to_end`
+    /// selects to end of line, otherwise to start. Each extra keeps its far
+    /// anchor and moves its near edge to the boundary; with no extras this
+    /// reduces to the original single-cursor behaviour.
+    pub(super) fn select_to_line_edge_multi(&mut self, to_end: bool, cx: &mut Context<Self>) {
+        let row_of = |this: &Self, off: usize| this.text.offset_to_point(off).row;
+        let mut updated: Vec<crate::input::cursor::Selection> =
+            Vec::with_capacity(self.extra_selections.len());
+        for selection in &self.extra_selections {
+            let new: crate::input::cursor::Selection = if to_end {
+                let end = self.text.line_end_offset(row_of(self, selection.end));
+                (selection.start.min(end)..end).into()
+            } else {
+                let start = self.text.line_start_offset(row_of(self, selection.start));
+                (start..selection.end.max(start)).into()
+            };
+            updated.push(new);
+        }
+        self.extra_selections = updated;
+
+        // The primary moves its head (respecting the reversed flag and
+        // preferred column) to the same line boundary.
+        let row = row_of(self, self.cursor());
+        let offset = if to_end {
+            self.text.line_end_offset(row)
+        } else {
+            self.text.line_start_offset(row)
+        };
+        self.select_to(offset, cx);
+    }
+
     fn collapse_multi_to_edge(&mut self, to_end: bool, cx: &mut Context<Self>) {
         let edge = |s: &crate::input::cursor::Selection| if to_end { s.end } else { s.start };
         let primary = edge(&self.selected_range);

@@ -919,8 +919,8 @@ impl InputState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let offset = self.start_of_line();
-        self.select_to(offset, cx);
+        // zeDB patch (multi-cursor): extend every cursor, not just primary.
+        self.select_to_line_edge_multi(false, cx);
     }
 
     pub(super) fn select_to_end_of_line(
@@ -929,8 +929,8 @@ impl InputState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let offset = self.end_of_line();
-        self.select_to(offset, cx);
+        // zeDB patch (multi-cursor): extend every cursor, not just primary.
+        self.select_to_line_edge_multi(true, cx);
     }
 
     pub(super) fn select_to_previous_word(
