@@ -155,6 +155,9 @@ pub struct GridSpike {
     hl_json: Option<gpui_component::highlighter::SyntaxHighlighter>,
     /// The inspector's computed runs for its open cell.
     inspector_cache: Option<((usize, usize), Option<HighlightRuns>)>,
+    /// Column widths haven't been fitted to content yet (no remembered
+    /// layout); the first rows to arrive trigger a one-time auto-fit.
+    needs_autofit: bool,
 }
 
 impl GridSpike {
@@ -187,7 +190,34 @@ impl GridSpike {
             hl_sql: None,
             hl_json: None,
             inspector_cache: None,
+            needs_autofit: false,
         }
+    }
+
+    /// Fit each column to the wider of its header and its content (sampled
+    /// from the first rows), clamped to a sensible min/max, so a result that
+    /// doesn't fill the width sizes to its values instead of a flat default.
+    fn autofit_column_widths(&mut self) {
+        const CHAR_W: f32 = 7.0;
+        const PAD: f32 = 22.0;
+        const MIN_W: f32 = 48.0;
+        const MAX_W: f32 = 360.0;
+        let sample = self.rows.len().min(200);
+        self.col_widths = self
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(column, meta)| {
+                let mut chars = meta.name.chars().count();
+                for row in self.rows.iter().take(sample) {
+                    if let Some(value) = row.get(column) {
+                        chars = chars.max(value.to_string().chars().count().min(80));
+                    }
+                }
+                (chars as f32 * CHAR_W + PAD).clamp(MIN_W, MAX_W)
+            })
+            .collect();
+        self.needs_autofit = false;
     }
 
     pub fn begin_result(
@@ -220,12 +250,22 @@ impl GridSpike {
 
     fn adopt_pending(&mut self) {
         if let Some((columns, requested_rows)) = self.pending.take() {
-            self.col_widths = self
+            match self
                 .width_memory
                 .get(&Self::width_key(&columns))
                 .filter(|saved| saved.len() == columns.len())
-                .cloned()
-                .unwrap_or_else(|| vec![COL_WIDTH; columns.len()]);
+            {
+                // A remembered layout (the user resized this shape) wins.
+                Some(saved) => {
+                    self.col_widths = saved.clone();
+                    self.needs_autofit = false;
+                }
+                // Otherwise fit columns to their content once rows arrive.
+                None => {
+                    self.col_widths = vec![COL_WIDTH; columns.len()];
+                    self.needs_autofit = true;
+                }
+            }
             self.columns = columns;
             // The outgoing result may be enormous; free it off-thread.
             crate::rt::drop_in_background(std::mem::take(&mut self.rows));
@@ -244,6 +284,9 @@ impl GridSpike {
     pub fn append_rows(&mut self, batch: Vec<Vec<Value>>, cx: &mut Context<Self>) {
         self.adopt_pending();
         self.rows.extend(batch);
+        if self.needs_autofit && !self.rows.is_empty() {
+            self.autofit_column_widths();
+        }
         cx.notify();
     }
 
@@ -269,6 +312,9 @@ impl GridSpike {
         self.rows = batch;
         if self.rows.len() > cap {
             crate::rt::drop_in_background(self.rows.split_off(cap));
+        }
+        if self.needs_autofit && !self.rows.is_empty() {
+            self.autofit_column_widths();
         }
         if at_top {
             self.scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);

@@ -539,6 +539,28 @@ type TailBatch = (
     Vec<Vec<zedb_core::Value>>,
 );
 
+/// Drag payload for reordering query tabs; also renders the drag ghost.
+#[derive(Clone)]
+struct DragTab {
+    /// The dragged tab's position in the strip.
+    index: usize,
+    label: gpui::SharedString,
+}
+
+impl Render for DragTab {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_1()
+            .rounded(px(3.))
+            .bg(theme::bg_sidebar())
+            .border_1()
+            .border_color(theme::accent())
+            .text_color(theme::text())
+            .child(self.label.clone())
+    }
+}
+
 /// Owned view of a tab's tail for rendering the status strip.
 struct TailStripInfo {
     tab_id: usize,
@@ -1982,7 +2004,25 @@ impl Workspace {
                             .items_center()
                             .justify_between()
                             .text_color(theme::text())
-                            .child(connection.name.clone())
+                            .child(
+                                // Name plus an inline muted node count "(N)"
+                                // at rest; hovering hides it and reveals the
+                                // full "N nodes" line below.
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .child(connection.name.clone())
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme::text_dim())
+                                            .group_hover("connection-row", |count| {
+                                                count.invisible()
+                                            })
+                                            .child(format!("({})", connection.nodes.len())),
+                                    ),
+                            )
                             .child(
                                 // At rest the row wears only two small
                                 // marks: a triangle in the environment
@@ -1996,6 +2036,15 @@ impl Workspace {
                                     .flex()
                                     .items_center()
                                     .justify_end()
+                                    .when(connected, |row| {
+                                        row.child(
+                                            div()
+                                                .size(px(7.))
+                                                .rounded_full()
+                                                .bg(theme::success())
+                                                .mr_1(),
+                                        )
+                                    })
                                     .child(
                                         div()
                                             .flex()
@@ -2022,16 +2071,16 @@ impl Workspace {
                             ),
                     )
                     .child(
+                        // The full "N nodes" line is collapsed at rest (the
+                        // inline "(N)" stands in) and expands on hover.
                         div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
+                            .max_h(px(0.))
+                            .overflow_hidden()
+                            .text_color(theme::text_dim())
+                            .group_hover("connection-row", |line| line.max_h(px(20.)))
                             .child({
                                 let count = connection.nodes.len();
                                 format!("{count} node{}", if count == 1 { "" } else { "s" })
-                            })
-                            .when(connected, |row| {
-                                row.child(div().size(px(7.)).rounded_full().bg(theme::success()))
                             }),
                     )
             })
@@ -6149,6 +6198,24 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Move a query tab from one strip position to another (drag reorder),
+    /// keeping the currently-active tab active.
+    fn reorder_query_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        let len = self.query_tabs.len();
+        if from == to || from >= len || to >= len {
+            return;
+        }
+        let active_id = self.query_tabs.get(self.active_query_tab).map(|tab| tab.id);
+        let tab = self.query_tabs.remove(from);
+        self.query_tabs.insert(to, tab);
+        if let Some(id) = active_id {
+            if let Some(pos) = self.query_tabs.iter().position(|tab| tab.id == id) {
+                self.active_query_tab = pos;
+            }
+        }
+        cx.notify();
+    }
+
     fn close_other_query_tabs(&mut self, keep_id: usize, cx: &mut Context<Self>) {
         let ids: Vec<usize> = self
             .query_tabs
@@ -9610,7 +9677,7 @@ impl Workspace {
                 let is_tail = tail_number.is_some();
                 let label = tail_number
                     .map(|number| format!("Tail {number}"))
-                    .unwrap_or_else(|| format!("Query {tab_id}"));
+                    .unwrap_or_else(|| format!("Tab {tab_id}"));
                 div()
                     .id(("query-tab", tab_id))
                     .flex_none()
@@ -9643,6 +9710,24 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.active_query_tab = index;
                         cx.notify();
+                    }))
+                    // Drag to reorder: a ghost of the label follows the
+                    // cursor, the drop target shows an accent left edge.
+                    .on_drag(
+                        DragTab {
+                            index,
+                            label: label.clone().into(),
+                        },
+                        |drag, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.new(|_| drag.clone())
+                        },
+                    )
+                    .drag_over::<DragTab>(|style, _, _, _| {
+                        style.border_l_2().border_color(theme::accent())
+                    })
+                    .on_drop(cx.listener(move |this, drag: &DragTab, _, cx| {
+                        this.reorder_query_tab(drag.index, index, cx);
                     }))
                     .context_menu(move |menu, _, _| {
                         menu.menu_with_enable(
@@ -9848,6 +9933,16 @@ impl Workspace {
                                     .hover(|button| {
                                         button.text_color(theme::text()).cursor_pointer()
                                     })
+                                    // Dropping a dragged tab here sends it to
+                                    // the very end (the one spot no tab's own
+                                    // drop zone covers).
+                                    .drag_over::<DragTab>(|style, _, _, _| {
+                                        style.border_l_2().border_color(theme::accent())
+                                    })
+                                    .on_drop(cx.listener(|this, drag: &DragTab, _, cx| {
+                                        let last = this.query_tabs.len().saturating_sub(1);
+                                        this.reorder_query_tab(drag.index, last, cx);
+                                    }))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.add_query_tab(window, cx)
                                     })),
@@ -10106,13 +10201,19 @@ impl Workspace {
                                         .child(
                                             div()
                                                 .id("copy-error")
-                                                .px_2()
+                                                .size(px(22.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
                                                 .rounded(px(3.))
-                                                .border_1()
-                                                .border_color(theme::border())
-                                                .text_color(theme::text())
                                                 .hover(|button| {
                                                     button.bg(theme::hover()).cursor_pointer()
+                                                })
+                                                .tooltip(|window, cx| {
+                                                    gpui_component::tooltip::Tooltip::new(
+                                                        "Copy error",
+                                                    )
+                                                    .build(window, cx)
                                                 })
                                                 .on_click(cx.listener(move |_, _, _, cx| {
                                                     cx.write_to_clipboard(
@@ -10121,7 +10222,12 @@ impl Workspace {
                                                         ),
                                                     );
                                                 }))
-                                                .child("Copy"),
+                                                .child(
+                                                    svg()
+                                                        .path("icons/copy.svg")
+                                                        .size(px(13.))
+                                                        .text_color(theme::text_dim()),
+                                                ),
                                         )
                                         .when_some(ask_agent.clone(), |actions, agent_name| {
                                             // Visible message: the error itself.
@@ -10144,13 +10250,15 @@ impl Workspace {
                                                 .clone()
                                                 .map(|sql| (active.id, sql));
                                             actions.child(
+                                                // Just the remembered agent's
+                                                // logo; the tooltip names it.
                                                 div()
                                                     .id("ask-agent-error")
-                                                    .px_2()
+                                                    .size(px(22.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
                                                     .rounded(px(3.))
-                                                    .border_1()
-                                                    .border_color(theme::border())
-                                                    .text_color(theme::text())
                                                     .hover(|button| {
                                                         button
                                                             .bg(theme::hover())
@@ -10168,17 +10276,13 @@ impl Workspace {
                                                             );
                                                         },
                                                     ))
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1p5()
-                                                    .child("Ask")
                                                     .child(
                                                         svg()
                                                             .path(
                                                                 ask_agent_icon
                                                                     .unwrap_or("icons/sparkle.svg"),
                                                             )
-                                                            .size(px(12.))
+                                                            .size(px(14.))
                                                             .text_color(theme::text()),
                                                     )
                                                     .tooltip(move |window, cx| {

@@ -7,6 +7,20 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Query tabs can be reordered by dragging; the drop target shows an accent
+  edge and a ghost of the tab follows the cursor.
+- Default query tabs are named "Tab 1", "Tab 2" (was "Query N").
+- Result grid columns auto-fit to their content (clamped to a sensible
+  min/max) when a result doesn't fill the width, instead of a flat default;
+  a remembered column resize still wins.
+- Connection list shows the node count inline as a muted "(N)" next to the
+  name, expanding to the full "N nodes" on hover; the connected dot stays on
+  the name line.
+- In the error bar, Copy is now a copy icon and the "Ask" action is just the
+  remembered agent's logo.
+
 ## v0.1.26 - 2026-08-13
 
 Phase 10: live tail, a `tail -f` for a ClickHouse table.
