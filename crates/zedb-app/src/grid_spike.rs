@@ -5,7 +5,7 @@
 use crate::theme;
 use gpui::Entity;
 use gpui::{
-    actions, div, prelude::*, px, rgb, uniform_list, Action, App, ClipboardItem, Context,
+    actions, div, point, prelude::*, px, rgb, uniform_list, Action, App, ClipboardItem, Context,
     EventEmitter, FocusHandle, Focusable, KeyBinding, ListHorizontalSizingBehavior, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, UniformListScrollHandle, Window,
 };
@@ -249,13 +249,20 @@ impl GridSpike {
 
     /// Prepend a live-tail batch newest-first: the newest row lands at the
     /// top and older rows push down, trimming the oldest off the bottom past
-    /// `cap`, and the view follows the top so the newest stays in sight. The
-    /// batch arrives oldest-first (ORDER BY key ASC), so it is reversed.
+    /// `cap`. The batch arrives oldest-first (ORDER BY key ASC), so it is
+    /// reversed. Follow the top only when the user is already there; if they
+    /// have scrolled down to read, keep those rows in place by nudging the
+    /// scroll offset down by exactly what was prepended.
     pub fn prepend_tail(&mut self, mut batch: Vec<Vec<Value>>, cap: usize, cx: &mut Context<Self>) {
         if batch.is_empty() {
             return;
         }
         self.adopt_pending();
+        let added = batch.len();
+        let at_top = {
+            let state = self.scroll.0.borrow();
+            state.base_handle.offset().y >= px(-1.0)
+        };
         batch.reverse();
         let existing = std::mem::take(&mut self.rows);
         batch.extend(existing);
@@ -263,7 +270,15 @@ impl GridSpike {
         if self.rows.len() > cap {
             crate::rt::drop_in_background(self.rows.split_off(cap));
         }
-        self.scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        if at_top {
+            self.scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        } else {
+            let state = self.scroll.0.borrow();
+            let offset = state.base_handle.offset();
+            state
+                .base_handle
+                .set_offset(point(offset.x, offset.y - px(added as f32 * ROW_HEIGHT)));
+        }
         cx.notify();
     }
 
