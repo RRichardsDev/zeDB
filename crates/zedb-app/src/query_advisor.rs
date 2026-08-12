@@ -226,7 +226,7 @@ pub fn advise(facts: &QueryFacts) -> Vec<QueryFinding> {
     if let Some(finding) = primary_key_not_filtering(facts) {
         findings.push(finding);
     }
-    findings.sort_by(|a, b| b.rows_scanned.cmp(&a.rows_scanned));
+    findings.sort_by_key(|finding| std::cmp::Reverse(finding.rows_scanned));
     findings
 }
 
