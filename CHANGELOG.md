@@ -7,6 +7,13 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## v0.1.23 - 2026-08-12
+
+- Relicensed to the PolyForm Noncommercial License 1.0.0: zeDB is
+  source-available and free to use, modify, and share for any
+  noncommercial purpose, but not for commercial use. Vendored components
+  under `vendor/` remain under their own (Apache-2.0) licenses.
+
 ## v0.1.22 - 2026-08-12
 
 Phase 9 makes ClickHouse more legible: a query advisor that turns a

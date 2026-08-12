@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.22"
+version = "0.1.23"
 edition = "2021"
 # Source-available, noncommercial; see LICENSE. Vendored crates keep their
 # own (Apache-2.0) licenses.
