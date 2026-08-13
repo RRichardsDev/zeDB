@@ -1,0 +1,2 @@
+- scale ui with cmd + and cmd  (is there something out the box we can use with GPUI)
+- Decide if TCP should become the default transport
