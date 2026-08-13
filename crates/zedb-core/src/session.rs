@@ -20,6 +20,9 @@ pub struct SavedSession {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SavedQueryTab {
+    pub id: String,
+    pub saved_tab_id: Option<String>,
+    pub name: String,
     pub sql: String,
 }
 
@@ -77,9 +80,15 @@ mod tests {
         let session = SavedSession {
             tabs: vec![
                 SavedQueryTab {
+                    id: "tab-a".into(),
+                    saved_tab_id: Some("saved-a".into()),
+                    name: "Same name".into(),
                     sql: "SELECT 1".into(),
                 },
                 SavedQueryTab {
+                    id: "tab-b".into(),
+                    saved_tab_id: Some("saved-b".into()),
+                    name: "Same name".into(),
                     sql: "SELECT 2".into(),
                 },
             ],
@@ -90,6 +99,9 @@ mod tests {
         let restored = take_at(path.clone()).expect("session expected");
         assert_eq!(restored.tabs.len(), 2);
         assert_eq!(restored.tabs[1].sql, "SELECT 2");
+        assert_eq!(restored.tabs[0].name, restored.tabs[1].name);
+        assert_ne!(restored.tabs[0].id, restored.tabs[1].id);
+        assert_eq!(restored.tabs[1].saved_tab_id.as_deref(), Some("saved-b"));
         assert_eq!(restored.active_tab, 1);
 
         assert!(take_at(path).is_none(), "second take must find nothing");

@@ -1,1 +1,3 @@
-- Save tabs (probably in the query history section as a new tab) — DEFERRED: needs design (what's saved, how restored); spec together
+# IRL issues
+
+No outstanding issues.

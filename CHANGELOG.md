@@ -7,6 +7,16 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Pressing `cmd-s` saves the active query tab in the History drawer's new Tabs
+  section. Saved tabs are machine-local, preserve SQL and row limits, support
+  duplicate names through stable IDs, and reopen as ordinary query tabs.
+- Query editors now support buffer-local `@set name=value` declarations and
+  `${name}` substitution without sending the directives to ClickHouse.
+- The connected indicator now sits beside the compact environment and write
+  marks at rest, then moves beside their expanded badges on hover.
+
 ## v0.1.27 - 2026-08-13
 
 Native ClickHouse connections make reads and live tails faster, with an

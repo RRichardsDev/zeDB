@@ -92,6 +92,7 @@ actions!(
         QuitZeDb,
         RunQuery,
         RunSelection,
+        SaveQueryTab,
         MaxRows1k,
         MaxRows10k,
         MaxRows50k,
@@ -456,6 +457,11 @@ enum ObjectInspectorTab {
 }
 
 struct QueryTab {
+    /// Stable across snapshots and relaunches. Display names are not keys.
+    persistent_id: String,
+    /// The machine-local saved item this editor updates with cmd-s.
+    saved_tab_id: Option<String>,
+    name: String,
     id: usize,
     editor: Entity<InputState>,
     result_grid: Entity<GridSpike>,
@@ -696,6 +702,9 @@ struct Workspace {
     history_search: Entity<TextInput>,
     /// A saved query being renamed inline: (original name, input).
     history_renaming: Option<(String, Entity<TextInput>)>,
+    /// A saved tab being renamed inline: (id, name, input).
+    saved_tab_renaming: Option<(String, String, Entity<TextInput>)>,
+    saved_tabs: Vec<zedb_core::SavedTab>,
     /// Clear-history asked once; the next click clears.
     history_clear_armed: bool,
     /// Where an error-bar ask came from: (query tab id, failed sql).
@@ -1036,11 +1045,14 @@ impl Workspace {
             }
         })
         .detach();
-        let tab_contents: Vec<String> = match &saved_session {
-            Some(session) if !session.tabs.is_empty() => {
-                session.tabs.iter().map(|tab| tab.sql.clone()).collect()
-            }
-            _ => vec![DEFAULT_QUERY.to_string()],
+        let tab_contents: Vec<zedb_core::SavedQueryTab> = match &saved_session {
+            Some(session) if !session.tabs.is_empty() => session.tabs.clone(),
+            _ => vec![zedb_core::SavedQueryTab {
+                id: zedb_core::new_local_id("tab"),
+                saved_tab_id: None,
+                name: "Tab 1".to_string(),
+                sql: DEFAULT_QUERY.to_string(),
+            }],
         };
         let active_query_tab = saved_session
             .as_ref()
@@ -1051,8 +1063,22 @@ impl Workspace {
         let query_tabs: Vec<QueryTab> = tab_contents
             .into_iter()
             .enumerate()
-            .map(|(index, sql)| {
-                Self::make_query_tab(index + 1, &sql, schema_provider.clone(), window, cx)
+            .map(|(index, saved)| {
+                let mut tab = Self::make_query_tab(
+                    index + 1,
+                    &saved.sql,
+                    schema_provider.clone(),
+                    window,
+                    cx,
+                );
+                if !saved.id.is_empty() {
+                    tab.persistent_id = saved.id;
+                }
+                tab.saved_tab_id = saved.saved_tab_id;
+                if !saved.name.is_empty() {
+                    tab.name = saved.name;
+                }
+                tab
             })
             .collect();
         match load_connections() {
@@ -1102,6 +1128,8 @@ impl Workspace {
                 history: zedb_core::load_history(),
                 history_search: Self::input("", "Search queries", false, cx),
                 history_renaming: None,
+                saved_tab_renaming: None,
+                saved_tabs: zedb_core::load_saved_tabs(),
                 history_clear_armed: false,
                 agent_fix_target: None,
                 export: None,
@@ -1183,6 +1211,8 @@ impl Workspace {
                 history: zedb_core::load_history(),
                 history_search: Self::input("", "Search queries", false, cx),
                 history_renaming: None,
+                saved_tab_renaming: None,
+                saved_tabs: zedb_core::load_saved_tabs(),
                 history_clear_armed: false,
                 agent_fix_target: None,
                 export: None,
@@ -1370,6 +1400,9 @@ impl Workspace {
                 .query_tabs
                 .iter()
                 .map(|tab| zedb_core::SavedQueryTab {
+                    id: tab.persistent_id.clone(),
+                    saved_tab_id: tab.saved_tab_id.clone(),
+                    name: tab_display_name(tab),
                     sql: tab.editor.read(cx).value().to_string(),
                 })
                 .collect(),
@@ -2205,15 +2238,6 @@ impl Workspace {
                                     .flex()
                                     .items_center()
                                     .justify_end()
-                                    .when(connected, |row| {
-                                        row.child(
-                                            div()
-                                                .size(px(7.))
-                                                .rounded_full()
-                                                .bg(theme::success())
-                                                .mr_1(),
-                                        )
-                                    })
                                     .child(
                                         div()
                                             .flex()
@@ -2221,6 +2245,15 @@ impl Workspace {
                                             .gap_1()
                                             .invisible()
                                             .group_hover("connection-row", |pills| pills.visible())
+                                            .when(connected, |pills| {
+                                                pills.child(
+                                                    div()
+                                                        .size(px(7.))
+                                                        .rounded_full()
+                                                        .bg(theme::success())
+                                                        .mr_1(),
+                                                )
+                                            })
                                             .child(Self::write_badge_small(connection.read_only))
                                             .child(Self::tier_badge_small(connection.tier)),
                                     )
@@ -2233,6 +2266,15 @@ impl Workspace {
                                             .gap(px(3.))
                                             .group_hover("connection-row", |marks| {
                                                 marks.invisible()
+                                            })
+                                            .when(connected, |marks| {
+                                                marks.child(
+                                                    div()
+                                                        .size(px(7.))
+                                                        .rounded_full()
+                                                        .bg(theme::success())
+                                                        .mr_1(),
+                                                )
                                             })
                                             .child(Self::write_glyph(connection.read_only))
                                             .child(Self::tier_glyph(connection.tier)),
@@ -5802,6 +5844,9 @@ impl Workspace {
         )
         .detach();
         QueryTab {
+            persistent_id: zedb_core::new_local_id("tab"),
+            saved_tab_id: None,
+            name: format!("Tab {id}"),
             id,
             editor,
             result_grid: result_grid.clone(),
@@ -7828,11 +7873,27 @@ impl Workspace {
         if self.query_abort.is_some() {
             self.cancel_query(cx);
         }
-        let sql = self.run_target_sql(window, cx);
-        let offset = self.query_tabs.get(self.active_query_tab).and_then(|tab| {
-            let editor = tab.editor.read(cx);
-            nearest_occurrence(editor.value().as_ref(), sql.trim(), editor.cursor())
-        });
+        let raw_sql = self.run_target_sql(window, cx);
+        let full_text = self
+            .query_tabs
+            .get(self.active_query_tab)
+            .map(|tab| tab.editor.read(cx).value().to_string())
+            .unwrap_or_default();
+        let sql = match resolve_query_variables(&raw_sql, &full_text) {
+            Ok(sql) => sql,
+            Err(error) => {
+                self.flash_warning(error, cx);
+                return;
+            }
+        };
+        let offset = if sql.trim() == raw_sql.trim() {
+            self.query_tabs.get(self.active_query_tab).and_then(|tab| {
+                let editor = tab.editor.read(cx);
+                nearest_occurrence(editor.value().as_ref(), raw_sql.trim(), editor.cursor())
+            })
+        } else {
+            None
+        };
         self.start_statements(vec![(sql.trim().to_string(), offset)], cx);
     }
 
@@ -7853,13 +7914,21 @@ impl Workspace {
             .unwrap_or_default();
         // Offsets are absolute editor positions; a selection anchors its
         // relative offsets at the occurrence nearest the cursor.
-        let (text, base) = match selection {
+        let (raw_text, base) = match selection {
             Some(selection) => {
                 let base = nearest_occurrence(&full_text, &selection, cursor);
                 (selection, base)
             }
-            None => (full_text, Some(0)),
+            None => (full_text.clone(), Some(0)),
         };
+        let text = match resolve_query_variables(&raw_text, &full_text) {
+            Ok(text) => text,
+            Err(error) => {
+                self.flash_warning(error, cx);
+                return;
+            }
+        };
+        let transformed = text != raw_text;
         let statements = split_statements(&text)
             .into_iter()
             .filter_map(|(start, end)| {
@@ -7869,7 +7938,11 @@ impl Workspace {
                     return None;
                 }
                 let leading = raw.len() - raw.trim_start().len();
-                let offset = base.map(|base| base + start + leading);
+                let offset = if transformed {
+                    None
+                } else {
+                    base.map(|base| base + start + leading)
+                };
                 Some((statement.to_string(), offset))
             })
             .collect();
@@ -10419,9 +10492,7 @@ impl Workspace {
                 // top-rounded border so they read as a distinct live view.
                 let tail_number = tab.tail.as_ref().map(|state| state.number);
                 let is_tail = tail_number.is_some();
-                let label = tail_number
-                    .map(|number| format!("Tail {number}"))
-                    .unwrap_or_else(|| format!("Tab {tab_id}"));
+                let label = tab_display_name(tab);
                 div()
                     .id(("query-tab", tab_id))
                     .flex_none()
@@ -11223,6 +11294,7 @@ impl Render for Workspace {
             .text_sm()
             .on_action(cx.listener(Self::run_query_action))
             .on_action(cx.listener(Self::run_selection_action))
+            .on_action(cx.listener(|this, _: &SaveQueryTab, _, cx| this.save_active_query_tab(cx)))
             .on_action(cx.listener(|this, action: &CloseQueryTab, _, cx| {
                 this.close_query_tab(action.tab_id, cx);
             }))
@@ -11824,6 +11896,89 @@ fn split_statements(text: &str) -> Vec<(usize, usize)> {
     segments
 }
 
+/// Resolve editor-local `@set name=value` declarations and `${name}` uses.
+/// Declarations come from the full editor buffer, while only declarations in
+/// the execution target are removed from the SQL sent to ClickHouse.
+fn resolve_query_variables(text: &str, editor_text: &str) -> Result<String, String> {
+    let mut variables = HashMap::new();
+    for (line_index, line) in editor_text.lines().enumerate() {
+        let trimmed = line.trim();
+        let directive = if trimmed == "@set" {
+            Some("")
+        } else {
+            trimmed
+                .strip_prefix("@set")
+                .filter(|rest| rest.starts_with(char::is_whitespace))
+        };
+        let Some(directive) = directive else {
+            continue;
+        };
+        let Some((name, value)) = directive.trim().split_once('=') else {
+            return Err(format!(
+                "Invalid query variable on line {}: use @set name=value",
+                line_index + 1
+            ));
+        };
+        let name = name.trim();
+        let value = value.trim();
+        let valid_name = name
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+            && name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_');
+        if !valid_name {
+            return Err(format!(
+                "Invalid query variable name `{name}` on line {}",
+                line_index + 1
+            ));
+        }
+        if value.is_empty() {
+            return Err(format!(
+                "Query variable `{name}` has no value on line {}",
+                line_index + 1
+            ));
+        }
+        variables.insert(name.to_string(), value.to_string());
+    }
+
+    let mut sql = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let content = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = content.trim();
+        let is_directive = trimmed == "@set"
+            || trimmed
+                .strip_prefix("@set")
+                .is_some_and(|rest| rest.starts_with(char::is_whitespace));
+        if is_directive {
+            if line.ends_with('\n') {
+                sql.push('\n');
+            }
+            continue;
+        }
+
+        let mut remaining = line;
+        while let Some(start) = remaining.find("${") {
+            sql.push_str(&remaining[..start]);
+            let placeholder = &remaining[start + 2..];
+            let Some(end) = placeholder.find('}') else {
+                return Err("Unclosed query variable placeholder".to_string());
+            };
+            let name = &placeholder[..end];
+            let Some(value) = variables.get(name) else {
+                return Err(format!(
+                    "Query variable `${{{name}}}` is not set; add @set {name}=value"
+                ));
+            };
+            sql.push_str(value);
+            remaining = &placeholder[end + 1..];
+        }
+        sql.push_str(remaining);
+    }
+    Ok(sql)
+}
+
 /// Return the statement containing the byte offset `cursor`. When the cursor
 /// sits in blank space between statements, prefer the nearest non-empty
 /// statement before it, then after it.
@@ -11890,6 +12045,24 @@ fn format_query_duration(duration: Duration) -> String {
     } else {
         format!("{} ms", duration.as_millis())
     }
+}
+
+fn max_rows_from_limit(limit: Option<usize>) -> MaxRows {
+    match limit {
+        Some(1_000) => MaxRows::Rows1k,
+        Some(10_000) => MaxRows::Rows10k,
+        Some(50_000) => MaxRows::Rows50k,
+        Some(1_000_000) => MaxRows::Rows1m,
+        None => MaxRows::Unlimited,
+        _ => MaxRows::Rows100k,
+    }
+}
+
+fn tab_display_name(tab: &QueryTab) -> String {
+    tab.tail
+        .as_ref()
+        .map(|tail| format!("Tail {}", tail.number))
+        .unwrap_or_else(|| tab.name.clone())
 }
 
 /// The two zeDB theme configs (Zed-style JSON), embedded.
@@ -12046,6 +12219,7 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("cmd-enter", RunQuery, None),
             KeyBinding::new("ctrl-x", RunSelection, None),
+            KeyBinding::new("cmd-s", SaveQueryTab, None),
             KeyBinding::new("cmd-,", OpenPreferences, None),
             // In multi-line inputs the composer sends on plain enter;
             // shift-enter keeps inserting a newline via the secondary
@@ -12139,7 +12313,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_engine_definition, split_statements, statement_at_cursor};
+    use super::{
+        format_engine_definition, max_rows_from_limit, resolve_query_variables, split_statements,
+        statement_at_cursor, MaxRows,
+    };
 
     #[test]
     fn engine_definition_is_split_at_top_level_clauses() {
@@ -12193,6 +12370,48 @@ mod tests {
             statements,
             vec!["SELECT 1", "-- a; comment\nSELECT ';'", "SELECT 3"]
         );
+    }
+
+    #[test]
+    fn query_variables_are_removed_and_substituted() {
+        let text = "@set db=KPARTS\nselect count() from ${db}.ContactsDim";
+        assert_eq!(
+            resolve_query_variables(text, text).unwrap(),
+            "\nselect count() from KPARTS.ContactsDim"
+        );
+    }
+
+    #[test]
+    fn query_variables_apply_to_a_selected_statement() {
+        let editor = "@set db=KPARTS\nselect 1;\nselect count() from ${db}.ContactsDim";
+        let selected = "select count() from ${db}.ContactsDim";
+        assert_eq!(
+            resolve_query_variables(selected, editor).unwrap(),
+            "select count() from KPARTS.ContactsDim"
+        );
+    }
+
+    #[test]
+    fn query_variables_report_invalid_or_missing_values() {
+        assert_eq!(
+            resolve_query_variables("select ${db}.table", "select ${db}.table").unwrap_err(),
+            "Query variable `${db}` is not set; add @set db=value"
+        );
+        assert_eq!(
+            resolve_query_variables("@set db\nselect 1", "@set db\nselect 1").unwrap_err(),
+            "Invalid query variable on line 1: use @set name=value"
+        );
+    }
+
+    #[test]
+    fn saved_tab_row_limits_restore_to_the_matching_choice() {
+        assert!(matches!(max_rows_from_limit(Some(1_000)), MaxRows::Rows1k));
+        assert!(matches!(
+            max_rows_from_limit(Some(100_000)),
+            MaxRows::Rows100k
+        ));
+        assert!(matches!(max_rows_from_limit(None), MaxRows::Unlimited));
+        assert!(matches!(max_rows_from_limit(Some(123)), MaxRows::Rows100k));
     }
 
     #[test]

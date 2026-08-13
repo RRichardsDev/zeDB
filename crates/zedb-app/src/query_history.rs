@@ -21,20 +21,132 @@ pub enum HistoryTab {
     #[default]
     History,
     Saved,
+    Tabs,
 }
 
 impl HistoryTab {
-    const ALL: [HistoryTab; 2] = [HistoryTab::History, HistoryTab::Saved];
+    const ALL: [HistoryTab; 3] = [HistoryTab::History, HistoryTab::Saved, HistoryTab::Tabs];
 
     fn label(self) -> &'static str {
         match self {
             HistoryTab::History => "History",
             HistoryTab::Saved => "Saved",
+            HistoryTab::Tabs => "Tabs",
         }
     }
 }
 
 impl Workspace {
+    pub(crate) fn save_active_query_tab(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.query_tabs.get(self.active_query_tab) else {
+            self.flash_warning("There is no active query tab to save", cx);
+            return;
+        };
+        let saved_id = tab
+            .saved_tab_id
+            .clone()
+            .unwrap_or_else(|| zedb_core::new_local_id("saved-tab"));
+        let name = crate::tab_display_name(tab);
+        let saved = zedb_core::SavedTab {
+            id: saved_id.clone(),
+            name: name.clone(),
+            sql: tab.editor.read(cx).value().to_string(),
+            row_limit: tab.max_rows.limit(),
+            saved_at: unix_now(),
+        };
+        let mut updated = self.saved_tabs.clone();
+        if let Some(index) = updated.iter().position(|tab| tab.id == saved_id) {
+            updated.remove(index);
+            updated.insert(0, saved);
+        } else {
+            updated.insert(0, saved);
+            updated.truncate(zedb_core::SAVED_TAB_CAP);
+        }
+
+        if let Err(error) = zedb_core::save_saved_tabs(&updated) {
+            self.flash_warning(format!("Could not save tab: {error}"), cx);
+            return;
+        }
+        self.saved_tabs = updated;
+        self.query_tabs[self.active_query_tab].saved_tab_id = Some(saved_id);
+        self.history_tab = HistoryTab::Tabs;
+        self.show_history = true;
+        self.history_clear_armed = false;
+        if self.connected.is_some() {
+            self.show_query_editor = true;
+            self.show_ops = false;
+            self.show_fleet = false;
+        }
+        self.flash_notice(format!("Saved tab {name}"), cx);
+    }
+
+    fn saved_tab_rename_commit(&mut self, cx: &mut Context<Self>) {
+        let Some((id, original, input)) = self.saved_tab_renaming.take() else {
+            return;
+        };
+        let new_name = input.read(cx).text().trim().to_string();
+        if new_name.is_empty() || new_name == original {
+            cx.notify();
+            return;
+        }
+        let mut updated = self.saved_tabs.clone();
+        if let Some(saved) = updated.iter_mut().find(|saved| saved.id == id) {
+            saved.name = new_name.clone();
+        }
+        if let Err(error) = zedb_core::save_saved_tabs(&updated) {
+            self.flash_warning(format!("Could not rename saved tab: {error}"), cx);
+            return;
+        }
+        self.saved_tabs = updated;
+        for tab in &mut self.query_tabs {
+            if tab.saved_tab_id.as_deref() == Some(id.as_str()) {
+                tab.name = new_name.clone();
+            }
+        }
+        cx.notify();
+    }
+
+    fn saved_tab_delete(&mut self, id: &str, cx: &mut Context<Self>) {
+        let mut updated = self.saved_tabs.clone();
+        updated.retain(|saved| saved.id != id);
+        if let Err(error) = zedb_core::save_saved_tabs(&updated) {
+            self.flash_warning(format!("Could not delete saved tab: {error}"), cx);
+            return;
+        }
+        self.saved_tabs = updated;
+        for tab in &mut self.query_tabs {
+            if tab.saved_tab_id.as_deref() == Some(id) {
+                tab.saved_tab_id = None;
+            }
+        }
+        cx.notify();
+    }
+
+    fn saved_tab_open(&mut self, saved_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(saved) = self
+            .saved_tabs
+            .iter()
+            .find(|saved| saved.id == saved_id)
+            .cloned()
+        else {
+            return;
+        };
+        let name = saved.name.clone();
+        let id = self.next_query_tab_id;
+        self.next_query_tab_id += 1;
+        let mut tab =
+            Self::make_query_tab(id, &saved.sql, self.schema_provider.clone(), window, cx);
+        tab.saved_tab_id = Some(saved.id);
+        tab.name = saved.name;
+        tab.max_rows = crate::max_rows_from_limit(saved.row_limit);
+        self.query_tabs.push(tab);
+        self.active_query_tab = self.query_tabs.len() - 1;
+        self.show_query_editor = true;
+        self.show_fleet = false;
+        self.show_ops = false;
+        self.flash_notice(format!("Opened saved tab {name}"), cx);
+    }
+
     pub(crate) fn history_toggle(&mut self, cx: &mut Context<Self>) {
         self.show_history = !self.show_history;
         // The drawer lives beside the editor; surface it.
@@ -735,6 +847,234 @@ impl Workspace {
                     })
                     .into_any_element()
             }
+            HistoryTab::Tabs => {
+                let renaming_id = self
+                    .saved_tab_renaming
+                    .as_ref()
+                    .map(|(id, _, _)| id.clone());
+                let saved: Vec<&zedb_core::SavedTab> = self
+                    .saved_tabs
+                    .iter()
+                    .filter(|saved| {
+                        filter.is_empty()
+                            || saved.name.to_lowercase().contains(&filter)
+                            || saved.sql.to_lowercase().contains(&filter)
+                    })
+                    .collect();
+                let rows: Vec<_> = saved
+                    .iter()
+                    .enumerate()
+                    .map(|(index, saved)| {
+                        let saved_id = saved.id.clone();
+                        let name = saved.name.clone();
+                        let open_id = saved_id.clone();
+                        let rename_id = saved_id.clone();
+                        let rename_name = name.clone();
+                        let delete_id = saved_id;
+                        let preview = first_line(&saved.sql);
+                        let hover_sql = saved.sql.clone();
+                        let saved_meta =
+                            (saved.saved_at > 0).then(|| relative_time(saved.saved_at));
+                        let renaming = renaming_id.as_deref() == Some(saved.id.as_str());
+
+                        if renaming {
+                            let input = self
+                                .saved_tab_renaming
+                                .as_ref()
+                                .map(|(_, _, input)| input.clone())
+                                .expect("renaming saved tab has an input");
+                            return div()
+                                .id(("saved-tab", index))
+                                .px_3()
+                                .py_1p5()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().w(px(self.history_width - 130.0)).child(input))
+                                .child(
+                                    div()
+                                        .id(("saved-tab-rename-commit", index))
+                                        .flex_none()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded(px(3.))
+                                        .bg(theme::selected())
+                                        .text_xs()
+                                        .text_color(theme::text())
+                                        .child("Save")
+                                        .hover(|button| button.cursor_pointer())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.saved_tab_rename_commit(cx)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id(("saved-tab-rename-cancel", index))
+                                        .flex_none()
+                                        .px_1()
+                                        .rounded(px(3.))
+                                        .text_color(theme::text_dim())
+                                        .child("\u{00d7}")
+                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.saved_tab_renaming = None;
+                                            cx.notify();
+                                        })),
+                                );
+                        }
+
+                        let action_button = |id: (&'static str, usize), icon: &'static str| {
+                            div()
+                                .id(id)
+                                .flex_none()
+                                .size(px(20.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(3.))
+                                .invisible()
+                                .group_hover("saved-tab-row", |button| button.visible())
+                                .child(svg().path(icon).size(px(11.)).text_color(theme::text_dim()))
+                        };
+
+                        div()
+                            .id(("saved-tab", index))
+                            .group("saved-tab-row")
+                            .px_3()
+                            .py_1p5()
+                            .flex()
+                            .flex_col()
+                            .hover(|row| row.bg(theme::row_hover()).cursor_pointer())
+                            .tooltip(move |window, cx| sql_tooltip(&hover_sql).build(window, cx))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.saved_tab_open(&open_id, window, cx)
+                            }))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .text_sm()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_color(theme::text())
+                                    .child(name),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .text_xs()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .font_family("Menlo")
+                                    .text_color(theme::text_dim())
+                                    .child(preview),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .pt_0p5()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .child(
+                                                action_button(
+                                                    ("rename-saved-tab", index),
+                                                    "icons/edit.svg",
+                                                )
+                                                .hover(|button| {
+                                                    button.bg(theme::hover()).cursor_pointer()
+                                                })
+                                                .tooltip(|window, cx| {
+                                                    gpui_component::tooltip::Tooltip::new("Rename")
+                                                        .build(window, cx)
+                                                })
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.saved_tab_renaming = Some((
+                                                        rename_id.clone(),
+                                                        rename_name.clone(),
+                                                        Self::input(
+                                                            rename_name.clone(),
+                                                            "Name",
+                                                            false,
+                                                            cx,
+                                                        ),
+                                                    ));
+                                                    cx.notify();
+                                                })),
+                                            )
+                                            .child(
+                                                action_button(
+                                                    ("delete-saved-tab", index),
+                                                    "icons/trash.svg",
+                                                )
+                                                .hover(|button| {
+                                                    button
+                                                        .bg(theme::danger_hover())
+                                                        .cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.saved_tab_delete(&delete_id, cx);
+                                                })),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .text_xs()
+                                            .text_color(theme::text_dim())
+                                            .when_some(saved_meta, |label, meta| label.child(meta)),
+                                    ),
+                            )
+                    })
+                    .collect();
+                div()
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::text_dim())
+                                    .child("Save the active tab with \u{2318}S"),
+                            )
+                            .child(
+                                div()
+                                    .id("save-current-tab")
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded(px(3.))
+                                    .border_1()
+                                    .border_color(theme::border())
+                                    .text_xs()
+                                    .text_color(theme::text())
+                                    .child("Save now")
+                                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.save_active_query_tab(cx)
+                                        }),
+                                    ),
+                            ),
+                    )
+                    .children(rows)
+                    .when(saved.is_empty(), |list| {
+                        list.child(empty_line(if filter.is_empty() {
+                            "No saved tabs yet."
+                        } else {
+                            "No matches."
+                        }))
+                    })
+                    .into_any_element()
+            }
         };
 
         let footer = (active_tab == HistoryTab::History && !self.history.is_empty()).then(|| {
@@ -893,6 +1233,13 @@ fn sort_saved(saved: &mut [SavedQuery]) {
             .cmp(&a.favorite)
             .then_with(|| a.name.cmp(&b.name))
     });
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn empty_line(message: &'static str) -> gpui::Div {
