@@ -17,6 +17,12 @@ pub enum ChError {
 
     #[error("failed to decode RowBinary response: {0}")]
     Decode(String),
+
+    /// The native (TCP) transport failed below the server: connect,
+    /// handshake, or a dropped connection. Reads fall back to HTTP on
+    /// this; a [`ChError::Server`] never does (the query really ran).
+    #[error("native transport error: {0}")]
+    NativeTransport(String),
 }
 
 pub type Result<T> = std::result::Result<T, ChError>;

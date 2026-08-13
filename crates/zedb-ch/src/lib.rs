@@ -15,6 +15,7 @@ mod error;
 pub mod explain;
 pub mod lifecycle;
 pub mod mcp;
+pub mod native;
 pub mod pin;
 pub mod regen;
 pub mod replay;

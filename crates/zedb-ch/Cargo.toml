@@ -18,6 +18,11 @@ tokio = { workspace = true, features = ["io-util", "io-std", "net", "fs"] }
 thiserror.workspace = true
 arc-swap = "1"
 serde = { version = "1", features = ["derive"] }
+klickhouse = { version = "0.15", default-features = false, features = ["tls", "compression"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rustls-pki-types = "1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros"] }

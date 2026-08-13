@@ -162,7 +162,30 @@ impl ChClient {
     }
 
     /// Run a query and materialize the full typed result.
+    ///
+    /// Reads prefer the pooled native (TCP) connection when one is up
+    /// (Phase 10); the first query kicks off a background connect and
+    /// rides HTTP. A native transport failure falls back to HTTP for this
+    /// query and evicts the broken connection; a server error does not
+    /// (the query really ran). Mutating statements never route natively.
     pub async fn query(&self, sql: &str) -> Result<QueryResult> {
+        if crate::native::is_read_statement(sql) {
+            if let Some(native) = crate::native::pooled(&self.cfg) {
+                match native.query(sql).await {
+                    Ok(result) => return Ok(result),
+                    Err(error @ ChError::Server { .. }) => return Err(error),
+                    // Transport or decode trouble: this query falls back to
+                    // HTTP. Only a dead socket evicts the connection; a
+                    // per-query gap (e.g. a type the native decoder can't
+                    // parse) keeps the healthy connection pooled.
+                    Err(_) => {
+                        if native.is_closed() {
+                            crate::native::evict(&self.cfg);
+                        }
+                    }
+                }
+            }
+        }
         let body = self
             .request(sql, &[("default_format", "RowBinaryWithNamesAndTypes")])
             .await?;
@@ -308,6 +331,28 @@ impl ChClient {
             total_rows: value_as_u64(row.get(2)?).filter(|total| *total > 0),
             received_bytes: 0,
         })
+    }
+
+    /// Run a query strictly over HTTP, never routed to the native
+    /// transport: the native connect path uses this to interrogate the
+    /// server it is about to pair with, and tests use it to compare the
+    /// two transports' decoding.
+    pub async fn query_http(&self, sql: &str) -> Result<QueryResult> {
+        let body = self
+            .request(sql, &[("default_format", "RowBinaryWithNamesAndTypes")])
+            .await?;
+        rowbinary::decode(&body)
+    }
+
+    /// This server's instance UUID over HTTP only (never routed natively):
+    /// the native transport uses it to prove a guessed native port belongs
+    /// to the same server as the HTTP endpoint.
+    pub(crate) async fn server_uuid_http(&self) -> Result<String> {
+        let result = self.query_http("SELECT serverUUID()").await?;
+        match result.rows.first().and_then(|row| row.first()) {
+            Some(value) => Ok(value.to_string()),
+            None => Err(ChError::Decode("serverUUID() returned no rows".into())),
+        }
     }
 
     /// Run a statement, discarding any output (DDL, INSERT, SET, ...).

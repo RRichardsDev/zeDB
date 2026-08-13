@@ -782,3 +782,34 @@ WARNING/ALERT, TOGGLE_*, the grid accents, zebra/inset surfaces).
 Inline hex literals dropped from ~117 occurrences of 35+ distinct
 colors to 17 one-off decorative shades that stay local by design.
 Zero visual change; prerequisite for any future theme system.
+
+## Phase 10.1: ClickHouse 26.6 streaming spike (2026-08-13)
+
+- The local compose stack is pinned to ClickHouse server and Keeper
+  `26.6.2.160`. The server image digest is
+  `sha256:a63a90ffdcb574683ebfe96e4c53e2dbe401864add7bb06dc244eb935d828e7f`;
+  Keeper is
+  `sha256:1c859a5896e19eecf392a2f627ae4206d057aef3507464ee1cd905c20f1f83b7`.
+  The 26.6 stack uses a separate compose project and fresh volumes. The
+  original 26.3 volumes remain untouched for rollback.
+- Both local nodes report `26.6.2.160` and expose native TCP. The server's
+  `enable_streaming_queries` setting is Experimental and defaults to `0`, so
+  zeDB's STREAM transport is also disabled by default in Preferences.
+- `STREAM CURSOR {}` replays existing MergeTree rows, then waits for inserts.
+  `_block_number` plus `_block_offset` form a working exact resume cursor, and
+  the stream works with a read-only session. `STREAM` belongs immediately
+  after the table source. ClickHouse rejects attaching it to a subquery, so
+  zeDB only rewrites simple direct single-table tails and falls back for
+  filters, joins, subqueries, aliases, and aggregation.
+- ClickHouse 26.6 no longer accepts `CREATE LIVE VIEW`, even with
+  `allow_experimental_live_view = 1`. The existing `WATCH` implementation is
+  retained for older versions that still support Live Views. The runtime
+  ladder is opt-in STREAM, WATCH, native fast polling, then HTTP polling.
+- KlickHouse does not expose its protocol Cancel packet. Native connections
+  now pass through an owned Tokio duplex proxy, so stopping a dedicated stream
+  closes the real socket. The environment-gated integration test proves
+  initial delivery, exact cursor resume, and removal from `system.processes`
+  within two seconds after each stop.
+- The controlled polling-versus-stream cost comparison remains a manual
+  acceptance check. Correctness, feature gating, cursor resume, and lifecycle
+  cleanup are automated.

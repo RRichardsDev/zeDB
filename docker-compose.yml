@@ -1,12 +1,12 @@
 name: zedb-clickhouse
 
 x-keeper: &keeper
-  image: clickhouse/clickhouse-keeper:26.3.12.3
+  image: clickhouse/clickhouse-keeper:26.6.2.160
   restart: unless-stopped
   networks: [clickhouse]
 
 x-clickhouse: &clickhouse
-  image: clickhouse/clickhouse-server:26.3.12.3
+  image: clickhouse/clickhouse-server:26.6.2.160
   restart: unless-stopped
   environment:
     CLICKHOUSE_USER: zedb
@@ -66,7 +66,7 @@ services:
       - ./docker/clickhouse/clickhouse-2.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
 
   bootstrap:
-    image: clickhouse/clickhouse-server:26.3.12.3
+    image: clickhouse/clickhouse-server:26.6.2.160
     restart: "no"
     depends_on:
       clickhouse-1:

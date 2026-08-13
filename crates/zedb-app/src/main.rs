@@ -172,6 +172,7 @@ impl AssetSource for Assets {
             "icons/verify.svg" => Some(include_bytes!("../assets/icons/verify.svg")),
             "icons/advise.svg" => Some(include_bytes!("../assets/icons/advise.svg")),
             "icons/sparkle.svg" => Some(include_bytes!("../assets/icons/sparkle.svg")),
+            "icons/experimental.svg" => Some(include_bytes!("../assets/icons/experimental.svg")),
             "icons/stop.svg" => Some(include_bytes!("../assets/icons/stop.svg")),
             "icons/play.svg" => Some(include_bytes!("../assets/icons/play.svg")),
             "icons/pause.svg" => Some(include_bytes!("../assets/icons/pause.svg")),
@@ -526,11 +527,76 @@ struct TailState {
     /// whether a native port (9440 TLS / 9000) is reachable, so we can offer
     /// "instant updates" only when a switch is actually possible.
     native_available: Option<bool>,
+    /// How new rows arrive: HTTP-cadence polling, fast polling over the
+    /// native connection, or a direct ClickHouse streaming query.
+    push: TailPush,
+    /// Last server-native cursor emitted by `STREAM CURSOR`, retained across
+    /// reconnects. The monotonic `last` key remains the fallback until this is
+    /// available.
+    stream_cursor: Option<tail::StreamCursor>,
+    /// The dedicated native query backing active streaming, including its
+    /// abort handle and epoch for rejecting late batches.
+    stream: Option<TailStream>,
+    /// The Live View backing an active `WATCH`, retained for servers and
+    /// query shapes where direct streaming is not selected or supported.
+    watch: Option<TailWatch>,
+    /// Do not retry STREAM continuously after it fails for this tail. The
+    /// remaining instant ladder, WATCH then fast polling, stays available.
+    stream_rejected: bool,
     generation: u64,
     paused: bool,
     /// A transient error from the last poll, shown without stopping.
     error: Option<String>,
 }
+
+/// The tail's delivery mechanism. `Poll` is the universal baseline; the
+/// other two are the "instant updates" upgrade over the native (TCP)
+/// protocol, and both silently fall back to `Poll` when the native
+/// connection goes away (docs/PHASE-10.md).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TailPush {
+    /// `poll_sql` every [`tail::TAIL_INTERVAL_MS`] over HTTP.
+    Poll,
+    /// `poll_sql` every [`tail::TAIL_INTERVAL_FAST_MS`]; each poll rides
+    /// the pooled native connection. Used when streaming is unsupported for
+    /// the server or edited query shape.
+    Fast,
+    /// A dedicated native connection returns inserted rows from ClickHouse
+    /// 26.6 `STREAM CURSOR` directly.
+    Stream,
+    /// A dedicated native connection holds `WATCH <live view> EVENTS` open;
+    /// each notification triggers the existing keyed fetch.
+    Watch,
+}
+
+/// An active direct stream. Aborting its task drops the only handle to the
+/// dedicated native connection, which closes the server query.
+#[derive(Clone, Debug)]
+struct TailStream {
+    epoch: u64,
+    abort: tokio::task::AbortHandle,
+}
+
+impl Drop for TailStream {
+    fn drop(&mut self) {
+        self.abort.abort();
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TailWatch {
+    view: String,
+    epoch: u64,
+    abort: tokio::task::AbortHandle,
+}
+
+impl Drop for TailWatch {
+    fn drop(&mut self) {
+        self.abort.abort();
+    }
+}
+
+type TailStreamBatch = (Vec<zedb_core::ColumnMeta>, Vec<Vec<zedb_core::Value>>);
 
 /// One appendable tail batch: the columns (only on the priming poll, to
 /// install the header) and the rows.
@@ -571,6 +637,11 @@ struct TailStripInfo {
     /// A native port is reachable, so "instant updates" (server-push) is on
     /// the table; the button only shows when this is true.
     native_available: bool,
+    /// The active delivery mode, for the instant badge and for hiding the
+    /// upgrade button once instant updates are on.
+    push: TailPush,
+    /// Whether experimental STREAM is opted in, for the adjacent flask icon.
+    experimental_streaming_enabled: bool,
     /// The editor differs from the adopted query, so "update tail" shows.
     dirty: bool,
 }
@@ -648,6 +719,9 @@ struct Workspace {
     next_tail_generation: u64,
     /// Display counter for tail tabs ("Tail 1", "Tail 2", ...).
     next_tail_number: usize,
+    /// Monotonic source for STREAM and WATCH epochs. WATCH also uses it for
+    /// unique Live View names.
+    next_stream_epoch: u64,
     connections: Vec<ConnectionConfig>,
     selected: Option<usize>,
     connected: Option<ConnectedCluster>,
@@ -1047,6 +1121,7 @@ impl Workspace {
                 merges_poll_generation: 0,
                 next_tail_generation: 0,
                 next_tail_number: 0,
+                next_stream_epoch: 0,
                 query_abort: None,
                 rerun_pending: None,
                 last_focus_check: None,
@@ -1127,6 +1202,7 @@ impl Workspace {
                 merges_poll_generation: 0,
                 next_tail_generation: 0,
                 next_tail_number: 0,
+                next_stream_epoch: 0,
                 query_abort: None,
                 rerun_pending: None,
                 last_focus_check: None,
@@ -1391,6 +1467,18 @@ impl Workspace {
         }
         if let Err(error) = save_preferences(&self.preferences) {
             self.notice = Some(format!("Could not save preferences: {error}"));
+        }
+        cx.notify();
+    }
+
+    fn toggle_experimental_streaming_queries(&mut self, cx: &mut Context<Self>) {
+        self.preferences.experimental_streaming_queries =
+            !self.preferences.experimental_streaming_queries;
+        if let Err(error) = save_preferences(&self.preferences) {
+            self.notice = Some(format!("Could not save preferences: {error}"));
+            self.notice_warning = true;
+        } else {
+            self.settings_sync_tick(cx);
         }
         cx.notify();
     }
@@ -1762,6 +1850,7 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .justify_between()
+                        .gap_4()
                         .py_3()
                         .border_b_1()
                         .border_color(theme::border())
@@ -1809,22 +1898,32 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .justify_between()
+                        .gap_4()
                         .py_3()
                         .border_b_1()
                         .border_color(theme::border())
                         .child(
-                            div().flex().flex_col().gap_1().child("Vim mode").child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme::text_dim())
-                                    .child("Use Vim keybindings in query editors."),
-                            ),
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .child("Vim mode")
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .whitespace_normal()
+                                        .text_color(theme::text_dim())
+                                        .child("Use Vim keybindings in query editors."),
+                                ),
                         )
                         .child(
                             div()
                                 .id("toggle-vim-mode")
                                 .w(px(54.))
                                 .h(px(28.))
+                                .flex_none()
                                 .px_1()
                                 .rounded_full()
                                 .flex()
@@ -1839,6 +1938,76 @@ impl Workspace {
                                 .on_click(cx.listener(|this, _, _, cx| this.toggle_vim_mode(cx)))
                                 .child(div().size(px(20.)).rounded_full().bg(
                                     if self.preferences.vim_mode {
+                                        theme::toggle_knob_on()
+                                    } else {
+                                        theme::toggle_knob_off()
+                                    },
+                                )),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_4()
+                        .py_3()
+                        .border_b_1()
+                        .border_color(theme::border())
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child("Experimental STREAM tails")
+                                        .child(
+                                            svg()
+                                                .path("icons/experimental.svg")
+                                                .size(px(14.))
+                                                .text_color(theme::warning()),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .whitespace_normal()
+                                        .text_color(theme::text_dim())
+                                        .child(
+                                            "Prefer ClickHouse 26.6 STREAM CURSOR for compatible instant tails. Falls back to WATCH and polling.",
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("toggle-experimental-streaming-queries")
+                                .w(px(54.))
+                                .h(px(28.))
+                                .flex_none()
+                                .px_1()
+                                .rounded_full()
+                                .flex()
+                                .items_center()
+                                .when(
+                                    self.preferences.experimental_streaming_queries,
+                                    |toggle| toggle.justify_end().bg(theme::toggle_on()),
+                                )
+                                .when(
+                                    !self.preferences.experimental_streaming_queries,
+                                    |toggle| toggle.justify_start().bg(theme::toggle_off()),
+                                )
+                                .hover(|toggle| toggle.cursor_pointer())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.toggle_experimental_streaming_queries(cx)
+                                }))
+                                .child(div().size(px(20.)).rounded_full().bg(
+                                    if self.preferences.experimental_streaming_queries {
                                         theme::toggle_knob_on()
                                     } else {
                                         theme::toggle_knob_off()
@@ -6145,6 +6314,7 @@ impl Workspace {
         ) {
             return;
         }
+        self.stop_tail(tab_id, cx);
         let closed = self.query_tabs.remove(index);
         // A closed tab may hold a huge result; clear it into a
         // background drop before the entity goes away.
@@ -6167,6 +6337,22 @@ impl Workspace {
     ) {
         if close_ids.is_empty() {
             return;
+        }
+        let tail_ids: Vec<usize> = self
+            .query_tabs
+            .iter()
+            .filter(|tab| {
+                tab.id != focus_id
+                    && close_ids.contains(&tab.id)
+                    && !matches!(
+                        tab.outcome,
+                        QueryOutcome::Running | QueryOutcome::StatementError { .. }
+                    )
+            })
+            .map(|tab| tab.id)
+            .collect();
+        for tab_id in tail_ids {
+            self.stop_tail(tab_id, cx);
         }
         let mut kept = Vec::with_capacity(self.query_tabs.len());
         let mut dropped = Vec::new();
@@ -6302,6 +6488,11 @@ impl Workspace {
                         key_index: 0,
                         cap,
                         native_available: None,
+                        push: TailPush::Poll,
+                        stream_cursor: None,
+                        stream: None,
+                        watch: None,
+                        stream_rejected: false,
                         generation,
                         paused: false,
                         error: None,
@@ -6323,6 +6514,9 @@ impl Workspace {
 
     /// The timer loop: every cadence, while the tab still hosts this tail
     /// generation on the same connection and isn't paused, run one poll.
+    /// The cadence follows the delivery mode ([`TailPush`]): fast over a
+    /// live native connection, baseline otherwise; while a direct stream
+    /// drives the tail, the timer only idles as its watchdog.
     fn start_tail_loop(
         &mut self,
         tab_id: usize,
@@ -6330,31 +6524,68 @@ impl Workspace {
         connection_name: String,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn(async move |this, cx| loop {
-            Timer::after(Duration::from_millis(tail::TAIL_INTERVAL_MS)).await;
-            let alive = this
-                .update(cx, |this, cx| {
-                    let on_connection = this.connected.as_ref().map(|c| c.name.as_str())
-                        == Some(connection_name.as_str());
-                    let state = this
-                        .query_tabs
-                        .iter()
-                        .find(|tab| tab.id == tab_id)
-                        .and_then(|tab| tab.tail.as_ref());
-                    let live =
-                        on_connection && state.is_some_and(|state| state.generation == generation);
-                    if !live {
-                        return false;
-                    }
-                    let paused = state.map(|state| state.paused).unwrap_or(true);
-                    if !paused {
-                        this.tail_poll_once(tab_id, generation, connection_name.clone(), cx);
-                    }
-                    true
-                })
-                .unwrap_or(false);
-            if !alive {
-                break;
+        cx.spawn(async move |this, cx| {
+            let mut interval = tail::TAIL_INTERVAL_MS;
+            loop {
+                Timer::after(Duration::from_millis(interval)).await;
+                let alive = this
+                    .update(cx, |this, cx| {
+                        let on_connection = this.connected.as_ref().map(|c| c.name.as_str())
+                            == Some(connection_name.as_str());
+                        let config = this.connected.as_ref().map(|c| c.client_config.clone());
+                        let mut lost_native = false;
+                        let (live, paused, push) = {
+                            let state = this
+                                .query_tabs
+                                .iter_mut()
+                                .find(|tab| tab.id == tab_id)
+                                .and_then(|tab| tab.tail.as_mut());
+                            match state {
+                                Some(state) if on_connection && state.generation == generation => {
+                                    // Fast mode needs the native connection;
+                                    // when it is gone the polls are silently
+                                    // riding HTTP already, so drop back to
+                                    // the HTTP cadence and re-offer the
+                                    // upgrade once the port answers again.
+                                    if state.push == TailPush::Fast {
+                                        let native_up = config.as_ref().is_some_and(|config| {
+                                            zedb_ch::native::pooled(config).is_some()
+                                        });
+                                        if !native_up {
+                                            state.push = TailPush::Poll;
+                                            state.native_available = None;
+                                            lost_native = true;
+                                        }
+                                    }
+                                    (true, state.paused, state.push)
+                                }
+                                _ => (false, true, TailPush::Poll),
+                            }
+                        };
+                        if !live {
+                            return None;
+                        }
+                        if lost_native {
+                            this.flash_notice(
+                                "Native connection lost; tail back to HTTP polling",
+                                cx,
+                            );
+                            this.probe_native_push(tab_id, generation, connection_name.clone(), cx);
+                        }
+                        if !paused && !matches!(push, TailPush::Stream | TailPush::Watch) {
+                            this.tail_poll_once(tab_id, generation, connection_name.clone(), cx);
+                        }
+                        Some(match push {
+                            TailPush::Fast => tail::TAIL_INTERVAL_FAST_MS,
+                            _ => tail::TAIL_INTERVAL_MS,
+                        })
+                    })
+                    .ok()
+                    .flatten();
+                match alive {
+                    Some(next) => interval = next,
+                    None => break,
+                }
             }
         })
         .detach();
@@ -6487,13 +6718,26 @@ impl Workspace {
     /// Stop the tail on a tab (its loop notices the cleared/renumbered
     /// generation and exits). The tab and its rows stay.
     fn stop_tail(&mut self, tab_id: usize, cx: &mut Context<Self>) {
+        let config = self.connected.as_ref().map(|c| c.client_config.clone());
         if let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+            if let Some(stream) = tab.tail.as_mut().and_then(|state| state.stream.take()) {
+                stream.abort.abort();
+            }
+            if let (Some(config), Some(watch)) = (
+                config,
+                tab.tail.as_mut().and_then(|state| state.watch.take()),
+            ) {
+                drop_tail_view(config, watch.view.clone());
+            }
             tab.tail = None;
             cx.notify();
         }
     }
 
     fn toggle_tail_pause(&mut self, tab_id: usize, cx: &mut Context<Self>) {
+        let mut resume_stream = false;
+        let connection_name = self.connected.as_ref().map(|c| c.name.clone());
+        let mut resume_watch_poll = None;
         if let Some(state) = self
             .query_tabs
             .iter_mut()
@@ -6501,7 +6745,28 @@ impl Workspace {
             .and_then(|tab| tab.tail.as_mut())
         {
             state.paused = !state.paused;
+            if state.push == TailPush::Stream {
+                if state.paused {
+                    // Do not buffer an unbounded result while paused. Closing
+                    // the dedicated connection leaves the saved cursor in
+                    // place for an exact resume.
+                    if let Some(stream) = state.stream.take() {
+                        stream.abort.abort();
+                    }
+                } else if state.stream.is_none() {
+                    state.push = TailPush::Poll;
+                    resume_stream = true;
+                }
+            } else if !state.paused && state.push == TailPush::Watch {
+                resume_watch_poll = Some(state.generation);
+            }
             cx.notify();
+        }
+        if resume_stream {
+            self.upgrade_tail_instant(tab_id, cx);
+        }
+        if let (Some(generation), Some(connection_name)) = (resume_watch_poll, connection_name) {
+            self.tail_poll_once(tab_id, generation, connection_name, cx);
         }
     }
 
@@ -6593,6 +6858,15 @@ impl Workspace {
                         state.error = None;
                         state.key_index = key_index.unwrap_or(0);
                         state.last = key_index.and_then(|idx| tail::last_key(&res.rows, idx));
+                        // A stream is bound to the old body and cursor. Stop
+                        // it and re-negotiate against the edited query.
+                        let stale_stream = state.stream.take();
+                        let stale_watch = state.watch.take();
+                        state.stream_cursor = None;
+                        state.stream_rejected = false;
+                        if stale_stream.is_some() || stale_watch.is_some() {
+                            state.push = TailPush::Poll;
+                        }
 
                         if let Some(grid) = grid {
                             let columns = res.columns.clone();
@@ -6612,6 +6886,18 @@ impl Workspace {
                                 tab.result_columns = columns_len;
                             }
                         }
+                        if let Some(stream) = stale_stream {
+                            stream.abort.abort();
+                            this.upgrade_tail_instant(tab_id, cx);
+                        }
+                        if let Some(watch) = stale_watch {
+                            if let Some(config) =
+                                this.connected.as_ref().map(|c| c.client_config.clone())
+                            {
+                                drop_tail_view(config, watch.view.clone());
+                            }
+                            this.upgrade_tail_instant(tab_id, cx);
+                        }
                         this.flash_notice("Tail updated", cx);
                     }
                     Ok(Err(error)) => {
@@ -6628,10 +6914,12 @@ impl Workspace {
         .detach();
     }
 
-    /// Discover whether the connection's host answers on a native
-    /// ClickHouse port (9440 TLS, then 9000). Poll-over-HTTP tail works
-    /// everywhere; a reachable native port means true server-push (`WATCH`)
-    /// is an option, which we surface as an "instant updates" button.
+    /// Discover whether this connection's server is reachable over the
+    /// native (TCP) protocol, by actually establishing the pooled native
+    /// connection: the server names its own ports, the socket is proven
+    /// to be the same server, and general reads start riding it right
+    /// away. Success surfaces the "instant updates" button; poll-over-HTTP
+    /// tail works everywhere regardless.
     fn probe_native_push(
         &mut self,
         tab_id: usize,
@@ -6639,22 +6927,16 @@ impl Workspace {
         connection_name: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(host) = self
+        let Some(config) = self
             .connected
             .as_ref()
-            .and_then(|connected| host_of(&connected.client_config.url))
+            .map(|connected| connected.client_config.clone())
         else {
             return;
         };
-        let task = rt::tokio().spawn(async move {
-            tokio::task::spawn_blocking(move || native_port_reachable(&host)).await
-        });
+        let task = rt::tokio().spawn(async move { zedb_ch::native::connect_pooled(&config).await });
         cx.spawn(async move |this, cx| {
-            let reachable = task
-                .await
-                .ok()
-                .and_then(|joined| joined.ok())
-                .unwrap_or(false);
+            let reachable = task.await.is_ok_and(|connected| connected.is_ok());
             this.update(cx, |this, cx| {
                 if this.connected.as_ref().map(|c| c.name.as_str())
                     != Some(connection_name.as_str())
@@ -6678,6 +6960,434 @@ impl Workspace {
         .detach();
     }
 
+    /// Switch a tail to "instant updates" over native TCP. Experimental
+    /// STREAM is opt-in; WATCH remains the normal push path on versions that
+    /// support Live Views, followed by native fast polling.
+    fn upgrade_tail_instant(&mut self, tab_id: usize, cx: &mut Context<Self>) {
+        let Some(connected) = self.connected.as_ref() else {
+            return;
+        };
+        let config = connected.client_config.clone();
+        let connection_name = connected.name.clone();
+        let Some(state) = self
+            .query_tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .and_then(|tab| tab.tail.as_ref())
+        else {
+            return;
+        };
+        if state.push != TailPush::Poll {
+            return;
+        }
+        let generation = state.generation;
+        let body = state.query.body.clone();
+        let stream_sql = self
+            .preferences
+            .experimental_streaming_queries
+            .then(|| tail::stream_sql(&state.query, state.stream_cursor, state.last.as_deref()))
+            .flatten()
+            .filter(|_| !state.stream_rejected);
+        let stream_requested = stream_sql.is_some();
+        self.next_stream_epoch += 1;
+        let epoch = self.next_stream_epoch;
+        let view = format!("zedb_tail_{epoch}");
+        self.flash_notice("Connecting for instant updates…", cx);
+
+        enum Instant {
+            Stream {
+                receiver: tokio::sync::mpsc::UnboundedReceiver<TailStreamBatch>,
+                abort: tokio::task::AbortHandle,
+            },
+            Watch {
+                receiver: tokio::sync::mpsc::UnboundedReceiver<()>,
+                abort: tokio::task::AbortHandle,
+                stream_rejected: bool,
+            },
+            FastPoll {
+                stream_rejected: bool,
+            },
+        }
+        let read_only = config.read_only;
+        let setup_config = config.clone();
+        let setup_view = view.clone();
+        let task = rt::tokio().spawn(async move {
+            let pooled = zedb_ch::native::connect_pooled(&setup_config).await?;
+            let mut stream_rejected = false;
+            if let Some(stream_sql) = stream_sql {
+                let version = pooled
+                    .query("SELECT version()")
+                    .await
+                    .ok()
+                    .and_then(|result| result.rows.first().cloned())
+                    .and_then(|row| row.first().map(ToString::to_string));
+                if version
+                    .as_deref()
+                    .is_some_and(tail::supports_streaming_version)
+                {
+                    if let Ok(streamer) =
+                        zedb_ch::native::NativeClient::connect(&setup_config).await
+                    {
+                        let preflight = streamer
+                            .query(&format!("EXPLAIN SYNTAX {stream_sql}"))
+                            .await;
+                        if preflight.is_ok() {
+                            let (sender, receiver) =
+                                tokio::sync::mpsc::unbounded_channel::<TailStreamBatch>();
+                            let stream_task = tokio::spawn(async move {
+                                let _ = streamer
+                                    .stream_blocks(&stream_sql, |columns, rows| {
+                                        sender.send((columns, rows)).is_ok()
+                                    })
+                                    .await;
+                            });
+                            let abort = stream_task.abort_handle();
+                            return Ok::<Instant, zedb_ch::ChError>(Instant::Stream {
+                                receiver,
+                                abort,
+                            });
+                        }
+                    }
+                }
+                stream_rejected = true;
+            }
+            if read_only {
+                return Ok(Instant::FastPoll { stream_rejected });
+            }
+            // The WATCH holds its own connection open indefinitely: the
+            // native protocol runs one query at a time per connection, so
+            // it must never share the pooled one.
+            let Ok(watcher) = zedb_ch::native::NativeClient::connect(&setup_config).await else {
+                return Ok(Instant::FastPoll { stream_rejected });
+            };
+            let experimental = watcher
+                .execute("SET allow_experimental_live_view = 1")
+                .await;
+            let created = match experimental {
+                Ok(()) => {
+                    watcher
+                        .execute(&format!(
+                            "CREATE LIVE VIEW {setup_view} AS SELECT count() FROM ({body})"
+                        ))
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            if created.is_err() {
+                // Live views are experimental and semi-deprecated; any
+                // refusal (setting locked, feature removed, no grant)
+                // lands here and fast polling takes over.
+                return Ok(Instant::FastPoll { stream_rejected });
+            }
+            let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<()>();
+            let watch_task = tokio::spawn(async move {
+                // Runs until the server ends the stream, the connection
+                // drops, or the consumer goes away (send fails).
+                let _ = watcher
+                    .stream_blocks(&format!("WATCH {setup_view} EVENTS"), |_, _| {
+                        sender.send(()).is_ok()
+                    })
+                    .await;
+            });
+            let abort = watch_task.abort_handle();
+            Ok::<Instant, zedb_ch::ChError>(Instant::Watch {
+                receiver,
+                abort,
+                stream_rejected,
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| {
+                let alive = this.connected.as_ref().map(|c| c.name.as_str())
+                    == Some(connection_name.as_str());
+                let Some(state) = this
+                    .query_tabs
+                    .iter_mut()
+                    .find(|tab| tab.id == tab_id)
+                    .and_then(|tab| tab.tail.as_mut())
+                    .filter(|state| alive && state.generation == generation)
+                else {
+                    // The tail is gone; if a watch got set up, tear its
+                    // view down (the stream ends when the receiver drops).
+                    if let Ok(Ok(Instant::Watch { abort, .. })) = &outcome {
+                        abort.abort();
+                        drop_tail_view(config.clone(), view.clone());
+                    }
+                    if let Ok(Ok(Instant::Stream { abort, .. })) = &outcome {
+                        abort.abort();
+                    }
+                    return;
+                };
+                match outcome {
+                    Ok(Ok(Instant::Stream { receiver, abort })) => {
+                        state.push = TailPush::Stream;
+                        state.stream = Some(TailStream { epoch, abort });
+                        this.flash_notice("Instant updates on: experimental STREAM over TCP", cx);
+                        this.start_tail_stream_consumer(
+                            tab_id,
+                            generation,
+                            epoch,
+                            connection_name.clone(),
+                            receiver,
+                            cx,
+                        );
+                    }
+                    Ok(Ok(Instant::Watch {
+                        receiver,
+                        abort,
+                        stream_rejected,
+                    })) => {
+                        state.stream_rejected |= stream_rejected;
+                        state.push = TailPush::Watch;
+                        state.watch = Some(TailWatch {
+                            view: view.clone(),
+                            epoch,
+                            abort,
+                        });
+                        this.flash_notice("Instant updates on: server push over TCP", cx);
+                        this.start_tail_watch_consumer(
+                            tab_id,
+                            generation,
+                            epoch,
+                            connection_name.clone(),
+                            receiver,
+                            cx,
+                        );
+                    }
+                    Ok(Ok(Instant::FastPoll { stream_rejected })) => {
+                        state.stream_rejected |= stream_rejected;
+                        state.push = TailPush::Fast;
+                        this.flash_notice(
+                            if stream_requested && stream_rejected {
+                                "STREAM unavailable; using fast native polling"
+                            } else {
+                                "Instant updates on: fast polling over the native connection"
+                            },
+                            cx,
+                        );
+                    }
+                    Ok(Err(error)) => {
+                        state.native_available = Some(false);
+                        this.flash_warning(
+                            format!("Couldn't connect to the native port: {error}"),
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        state.native_available = Some(false);
+                        this.flash_warning(format!("Instant updates failed: {error}"), cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Consume rows returned directly by ClickHouse `STREAM CURSOR`. The two
+    /// private leading columns advance the resumable server cursor and are
+    /// removed before rows reach the grid.
+    fn start_tail_stream_consumer(
+        &mut self,
+        tab_id: usize,
+        generation: u64,
+        epoch: u64,
+        connection_name: String,
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<TailStreamBatch>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            while let Some((mut columns, mut rows)) = receiver.recv().await {
+                let alive = this
+                    .update(cx, |this, cx| {
+                        let on_connection = this.connected.as_ref().map(|c| c.name.as_str())
+                            == Some(connection_name.as_str());
+                        let Some(state) = this
+                            .query_tabs
+                            .iter_mut()
+                            .find(|tab| tab.id == tab_id)
+                            .and_then(|tab| tab.tail.as_mut())
+                            .filter(|state| {
+                                on_connection
+                                    && state.generation == generation
+                                    && state
+                                        .stream
+                                        .as_ref()
+                                        .is_some_and(|stream| stream.epoch == epoch)
+                            })
+                        else {
+                            return false;
+                        };
+                        if columns.len() < 2
+                            || columns[0].name != tail::STREAM_BLOCK_COLUMN
+                            || columns[1].name != tail::STREAM_OFFSET_COLUMN
+                        {
+                            state.error = Some("STREAM did not return a resumable cursor".into());
+                            return false;
+                        }
+                        if let Some(cursor) = rows.last().and_then(|row| tail::stream_cursor(row)) {
+                            state.stream_cursor = Some(cursor);
+                        }
+                        columns.drain(..2);
+                        for row in &mut rows {
+                            if row.len() >= 2 {
+                                row.drain(..2);
+                            }
+                        }
+                        let Some(key_index) = columns
+                            .iter()
+                            .position(|column| column.name == state.query.key)
+                        else {
+                            state.error = Some(format!(
+                                "tail key `{}` is not in the streamed result",
+                                state.query.key
+                            ));
+                            return false;
+                        };
+                        state.key_index = key_index;
+                        if let Some(last) = tail::last_key(&rows, key_index) {
+                            state.last = Some(last);
+                        }
+                        state.error = None;
+                        let cap = state.cap.unwrap_or(usize::MAX);
+                        let grid = this
+                            .query_tabs
+                            .iter()
+                            .find(|tab| tab.id == tab_id)
+                            .map(|tab| tab.result_grid.clone());
+                        if let Some(grid) = grid {
+                            grid.update(cx, |grid, cx| grid.prepend_tail(rows, cap, cx));
+                            let count = grid.read(cx).row_count();
+                            if let Some(tab) =
+                                this.query_tabs.iter_mut().find(|tab| tab.id == tab_id)
+                            {
+                                tab.result_rows = count;
+                                tab.has_result = true;
+                                tab.result_columns = columns.len();
+                            }
+                        }
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !alive {
+                    break;
+                }
+            }
+
+            this.update(cx, |this, cx| {
+                let on_connection = this.connected.as_ref().map(|c| c.name.as_str())
+                    == Some(connection_name.as_str());
+                let ended = this
+                    .query_tabs
+                    .iter_mut()
+                    .find(|tab| tab.id == tab_id)
+                    .and_then(|tab| tab.tail.as_mut())
+                    .filter(|state| {
+                        on_connection
+                            && state.generation == generation
+                            && state
+                                .stream
+                                .as_ref()
+                                .is_some_and(|stream| stream.epoch == epoch)
+                    })
+                    .map(|state| {
+                        state.stream = None;
+                        state.stream_rejected = true;
+                        state.push = TailPush::Poll;
+                    })
+                    .is_some();
+                if ended {
+                    this.flash_notice("Experimental STREAM ended; trying WATCH", cx);
+                    this.upgrade_tail_instant(tab_id, cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Consume one watch's events: each server-pushed event triggers one
+    /// poll (which rides the pooled native connection). When the stream
+    /// ends, the tail drops back to plain polling and the upgrade is
+    /// re-offered once the native port answers again.
+    fn start_tail_watch_consumer(
+        &mut self,
+        tab_id: usize,
+        generation: u64,
+        epoch: u64,
+        connection_name: String,
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<()>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                let event = receiver.recv().await;
+                // Coalesce a burst of events into one poll.
+                while receiver.try_recv().is_ok() {}
+                let ended = event.is_none();
+                let alive = this
+                    .update(cx, |this, cx| {
+                        let on_connection = this.connected.as_ref().map(|c| c.name.as_str())
+                            == Some(connection_name.as_str());
+                        let config = this.connected.as_ref().map(|c| c.client_config.clone());
+                        let mut downgraded = false;
+                        let (live, paused) = {
+                            let state = this
+                                .query_tabs
+                                .iter_mut()
+                                .find(|tab| tab.id == tab_id)
+                                .and_then(|tab| tab.tail.as_mut());
+                            match state {
+                                Some(state)
+                                    if on_connection
+                                        && state.generation == generation
+                                        && state
+                                            .watch
+                                            .as_ref()
+                                            .is_some_and(|watch| watch.epoch == epoch) =>
+                                {
+                                    if ended {
+                                        // Server-push ended (connection
+                                        // drop, live view gone): back to
+                                        // polling, silently resuming from
+                                        // the last-seen key.
+                                        let view =
+                                            state.watch.take().map(|watch| watch.view.clone());
+                                        state.push = TailPush::Poll;
+                                        state.native_available = None;
+                                        downgraded = true;
+                                        if let (Some(config), Some(view)) = (config, view) {
+                                            drop_tail_view(config, view);
+                                        }
+                                    }
+                                    (true, state.paused)
+                                }
+                                _ => (false, true),
+                            }
+                        };
+                        if downgraded {
+                            this.flash_notice("Instant updates ended; tail back to polling", cx);
+                            this.probe_native_push(tab_id, generation, connection_name.clone(), cx);
+                            cx.notify();
+                        }
+                        if live && !ended && !paused {
+                            this.tail_poll_once(tab_id, generation, connection_name.clone(), cx);
+                        }
+                        live
+                    })
+                    .unwrap_or(false);
+                if ended || !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     /// The live-tail status strip above the editor: what's tailing, the
     /// retained row count, and Pause / Stop.
     fn tail_strip(&self, info: TailStripInfo, cx: &mut Context<Self>) -> impl IntoElement {
@@ -6688,6 +7398,8 @@ impl Workspace {
             error,
             rows,
             native_available,
+            push,
+            experimental_streaming_enabled,
             dirty,
         } = info;
         let icon_button = |id: &'static str, icon: &'static str, color: gpui::Hsla| {
@@ -6733,6 +7445,19 @@ impl Workspace {
                     .text_color(theme::text_dim())
                     .child(format!("· {rows} rows")),
             )
+            .when(push != TailPush::Poll, |row| {
+                // Instant updates active: name the mechanism.
+                row.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::accent())
+                        .child(match push {
+                            TailPush::Stream => "· instant (STREAM)",
+                            TailPush::Watch => "· instant (WATCH)",
+                            _ => "· instant (native)",
+                        }),
+                )
+            })
             .when_some(error, |row, error| {
                 row.child(
                     div()
@@ -6769,7 +7494,29 @@ impl Workspace {
                         })),
                 )
             })
-            .when(native_available, |row| {
+            .when(native_available && push == TailPush::Poll, |row| {
+                row.child(
+                    icon_button(
+                        "tail-experimental-settings",
+                        "icons/experimental.svg",
+                        if experimental_streaming_enabled {
+                            theme::warning()
+                        } else {
+                            theme::text_dim()
+                        },
+                    )
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(if experimental_streaming_enabled {
+                            "Experimental STREAM tails enabled. Open Preferences"
+                        } else {
+                            "Experimental STREAM tails disabled. Open Preferences"
+                        })
+                        .build(window, cx)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.open_preferences(cx))),
+                )
+            })
+            .when(native_available && push == TailPush::Poll, |row| {
                 // Discovery found a native port: offer the server-push
                 // upgrade, accent-tinted so it reads as an offer.
                 row.child(
@@ -6785,16 +7532,13 @@ impl Workspace {
                         .child("Get instant updates")
                         .hover(|button| button.bg(theme::hover()).cursor_pointer())
                         .tooltip(|window, cx| {
-                            gpui_component::tooltip::Tooltip::new("Switch to TLS connection")
-                                .build(window, cx)
+                            gpui_component::tooltip::Tooltip::new(
+                                "Switch to the native (TCP) connection for instant updates",
+                            )
+                            .build(window, cx)
                         })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            // Native-protocol push isn't wired yet; the
-                            // discovery and affordance land first.
-                            this.flash_notice(
-                                "Instant updates over the native connection are coming soon",
-                                cx,
-                            );
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.upgrade_tail_instant(tab_id, cx);
                         })),
                 )
             })
@@ -9808,6 +10552,8 @@ impl Workspace {
                 error: state.error.clone(),
                 rows: active.result_rows,
                 native_available: state.native_available == Some(true),
+                push: state.push,
+                experimental_streaming_enabled: self.preferences.experimental_streaming_queries,
                 dirty: editor_text.trim() != state.baseline.trim(),
             }
         });
@@ -10937,46 +11683,15 @@ impl Workspace {
     }
 }
 
-/// The table's real `ORDER BY` columns and `PARTITION BY` expression from
-/// `system.tables`, for the query advisor. `table` is `db.name` from the
-/// EXPLAIN plan. Returns `None` when the table isn't qualified or the
-/// lookup fails.
-/// The host of a ClickHouse HTTP URL (`http(s)://host:port/...` -> `host`),
-/// for probing its native TCP ports.
-fn host_of(url: &str) -> Option<String> {
-    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let authority = after_scheme
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(after_scheme);
-    // Strip credentials and the port, leaving the host.
-    let host_port = authority
-        .rsplit_once('@')
-        .map(|(_, h)| h)
-        .unwrap_or(authority);
-    let host = host_port
-        .rsplit_once(':')
-        .map(|(h, _)| h)
-        .unwrap_or(host_port);
-    (!host.is_empty()).then(|| host.to_string())
-}
-
-/// Whether a native ClickHouse port answers on this host: 9440 (native over
-/// TLS) preferred, then 9000. A quick TCP connect is enough to know a switch
-/// to server-push is possible; it doesn't speak the protocol.
-fn native_port_reachable(host: &str) -> bool {
-    use std::net::ToSocketAddrs;
-    for port in [9440u16, 9000] {
-        let Ok(addresses) = (host, port).to_socket_addrs() else {
-            continue;
-        };
-        for address in addresses {
-            if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(700)).is_ok() {
-                return true;
-            }
+/// Best-effort teardown of a tail's live view, off-thread. The view only
+/// exists on writable connections (watch setup skips read-only ones), and
+/// a failure just leaves an orphan the server drops with the database.
+fn drop_tail_view(config: ChConfig, view: String) {
+    rt::tokio().spawn(async move {
+        if let Ok(native) = zedb_ch::native::connect_pooled(&config).await {
+            let _ = native.execute(&format!("DROP VIEW IF EXISTS {view}")).await;
         }
-    }
-    false
+    });
 }
 
 /// The leading ORDER BY entry as a tailable key: a bare column identifier.
@@ -10990,6 +11705,10 @@ fn first_tail_key(order_by_entry: &str) -> Option<String> {
     simple.then(|| name.to_string())
 }
 
+/// The table's real `ORDER BY` columns and `PARTITION BY` expression from
+/// `system.tables`, for the query advisor. `table` is `db.name` from the
+/// EXPLAIN plan. Returns `None` when the table isn't qualified or the
+/// lookup fails.
 async fn fetch_table_keys(client: &ChClient, table: Option<&str>) -> Option<(Vec<String>, String)> {
     let (database, name) = table?.split_once('.')?;
     let escape = |value: &str| value.replace('\'', "''");

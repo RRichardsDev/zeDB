@@ -5,7 +5,8 @@ this turns the explorer into a real-time console (north-star #5,
 `docs/NORTH-STAR.md`). Reuses the streaming execution + progress plumbing
 already built.
 
-Status: IN PROGRESS. Follows Phase 9 (`docs/PHASE-9.md`).
+Status: IN PROGRESS. Phase 10.1 adds native instant-tail transports. Follows
+Phase 9 (`docs/PHASE-9.md`).
 
 **Increment 1 DONE** (branch `phase-10-live-tail`): poll-over-HTTP tail from
 the schema sidebar's table context menu, on the leading ORDER BY key, off
@@ -13,36 +14,37 @@ the main thread. Retained-row cap chosen up front (20/50/100/500/1000/
 Unlimited); the initial load is always ~20 rows. Newest-first (rows land at
 top, oldest trimmed past the cap), Pause / Resume / Stop, and a live strip
 above the results. Native-port discovery (9440/9000, off-thread) surfaces a
-"Get instant updates" button when a switch to server-push would be possible;
-the switch itself is not wired yet. Core SQL/key logic in
+"Get instant updates" button. The switch now prefers opt-in ClickHouse 26.6
+`STREAM CURSOR`, retains Live View `WATCH` on versions that support it, and
+falls back to fast native polling. Core SQL/key logic lives in
 `crates/zedb-app/src/tail.rs` (unit-tested). Still open below.
 
-## Mechanism: poll over HTTP (decided)
+## Mechanism: layered delivery (amended by Phase 10.1)
 
-Two ways to build live tail; we take the first:
+The monotonic-key polling path remains the universal baseline. Native TCP adds
+optional lower-latency paths without making the tail depend on them:
 
-- **Poll-based (chosen).** A periodic
+- **HTTP polling.** A periodic
   `SELECT ... WHERE key > :last ORDER BY key LIMIT n`, cadence ~1-2s.
   Each poll is an ordinary query over the **HTTP interface zeDB already
   uses** (reqwest + rustls). No new protocol, no persistent socket. It
   is robust for free: it survives proxies, idle timeouts, and reconnects
   because there is nothing long-lived to drop. For the log/event use case
-  this is indistinguishable from a real subscription.
-- **True push (not now).** `WATCH` a live view, server pushes changes.
-  This is genuinely better suited to the **native TCP protocol** (port
-  9000 / 9440 secured), which is built for persistent server-push;
-  `WATCH` over HTTP holds a long chunked response open, which is the
-  fragile part (intermediary idle timeouts, harder reconnect). But it is
-  a much bigger lift (implementing a native-protocol client) built on
-  `WATCH` / live views, an experimental and semi-deprecated corner of
-  ClickHouse. Only reach for it if sub-second server-push is ever a hard
-  requirement; a native-protocol client is its own project (it would
-  also unlock faster bulk reads, so a legit future bet, just not for tail
-  specifically).
+  this remains a dependable default.
+- **Native fast polling.** The same keyed query can ride a pooled native
+  connection at a shorter cadence when push is unavailable.
+- **Live View `WATCH`.** On writable ClickHouse versions that still support
+  Live Views, one dedicated native connection receives change events and
+  triggers the keyed fetch. This path remains for compatibility.
+- **Experimental `STREAM CURSOR`.** When explicitly enabled in Preferences,
+  ClickHouse 26.6 or newer can return inserted rows directly for compatible
+  single-table tails. A persisted block cursor supports exact resume. Any
+  unsupported version, query shape, or server rejection falls through to
+  `WATCH`, then native polling.
 
 Note: "TLS vs HTTP" is not the real axis; TLS is just encryption and
-rides on either interface. The axis is native-TCP vs HTTP, and for tail,
-HTTP wins.
+rides on either interface. The axis is native TCP vs HTTP. HTTP remains the
+baseline; native TCP is an optional latency upgrade.
 
 ## The one thing that matters for cost
 

@@ -8,6 +8,10 @@ use crate::store::StoreError;
 #[serde(default)]
 pub struct Preferences {
     pub vim_mode: bool,
+    /// Opt in to ClickHouse 26.6's experimental `STREAM CURSOR` tail
+    /// transport. Disabled by default; instant tails otherwise keep using
+    /// Live View `WATCH` where supported, then native fast polling.
+    pub experimental_streaming_queries: bool,
     /// Last-opened migration repo, restored on launch (BYO git: this is
     /// just a local checkout path; git stays the user's workflow).
     pub fleet_repo: Option<String>,
@@ -124,6 +128,7 @@ mod tests {
 
         let preferences = Preferences {
             vim_mode: true,
+            experimental_streaming_queries: true,
             fleet_repo: Some("/tmp/repo".into()),
             fleet_cluster: None,
             custom_agents: vec![CustomAgent {

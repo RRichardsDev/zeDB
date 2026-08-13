@@ -5,7 +5,9 @@
 //! poll prunes by the monotonic key instead of rescanning, so cost stays
 //! flat however long the tail runs. This module is the deterministic part,
 //! the SQL strings and the last-seen-key literal, unit-tested; the poll
-//! loop and rendering live in `main.rs`.
+//! loop and rendering live in `main.rs`. ClickHouse 26.6 instant tails use a
+//! direct `STREAM CURSOR` query for simple single-table bodies; richer edited
+//! queries keep using the polling path.
 
 use zedb_core::Value;
 
@@ -15,8 +17,33 @@ pub const TAIL_BATCH: usize = 500;
 /// Rows the initial (priming) load shows, always small: a tail should open
 /// light and only grow if the user chose a larger retention cap.
 pub const TAIL_SEED: usize = 20;
-/// Poll cadence.
+/// Poll cadence over HTTP.
 pub const TAIL_INTERVAL_MS: u64 = 1_500;
+/// Poll cadence in "instant updates" fast mode, where each poll rides the
+/// persistent native (TCP) connection instead of a fresh HTTP request.
+pub const TAIL_INTERVAL_FAST_MS: u64 = 400;
+
+/// Private result-column aliases carried by a direct streaming query. The app
+/// removes both columns before sending rows to the result grid.
+pub const STREAM_BLOCK_COLUMN: &str = "__zedb_stream_block_number";
+pub const STREAM_OFFSET_COLUMN: &str = "__zedb_stream_block_offset";
+
+/// A resumable ClickHouse streaming position. The 26.6 MergeTree stream uses
+/// one `all` cursor containing the last persisted insert block and row offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamCursor {
+    pub block_number: u64,
+    pub block_offset: u64,
+}
+
+impl StreamCursor {
+    fn sql(self) -> String {
+        format!(
+            "{{'all': {{'block_number': {}, 'block_offset': {}}}}}",
+            self.block_number, self.block_offset
+        )
+    }
+}
 
 /// A tail's editable definition. `body` is the user's query with its
 /// top-level `ORDER BY` / `LIMIT` stripped, kept verbatim (columns, WHERE,
@@ -72,6 +99,105 @@ pub fn poll_sql(query: &TailQuery, last: &str, limit: usize) -> String {
         body = query.body,
         key = quote_ident(&query.key),
     )
+}
+
+/// A direct ClickHouse 26.6 streaming query for the deliberately narrow shape
+/// we can rewrite without changing meaning: one simple table source and no
+/// existing top-level filter or aggregation. Unsupported edited queries return
+/// `None` and use native fast polling instead.
+///
+/// Before ClickHouse has emitted a cursor, `last` preserves the existing
+/// monotonic-key boundary. Once a cursor exists it is the primary resume point;
+/// the app still deduplicates by key when applying rows.
+pub fn stream_sql(
+    query: &TailQuery,
+    cursor: Option<StreamCursor>,
+    last: Option<&str>,
+) -> Option<String> {
+    let body = query.body.trim();
+    let clauses = top_clauses(body);
+    let select = clauses.get("SELECT")?;
+    let from = clauses.get("FROM")?;
+    if clauses.contains_key("WHERE") || clauses.contains_key("GROUP BY") {
+        return None;
+    }
+
+    let projection = body[select.value_span.0..from.keyword_start].trim();
+    let projection_upper = projection.to_ascii_uppercase();
+    if projection.is_empty()
+        || projection_upper.starts_with("DISTINCT ")
+        || projection_upper.starts_with("WITH ")
+    {
+        return None;
+    }
+    let source = body[from.value_span.0..from.value_span.1].trim();
+    if !is_simple_table_source(source) {
+        return None;
+    }
+
+    let cursor_sql = cursor.map(StreamCursor::sql).unwrap_or_else(|| "{}".into());
+    let boundary = match (cursor, last) {
+        (None, Some(last)) => format!("\nWHERE {} > {last}", quote_ident(&query.key)),
+        _ => String::new(),
+    };
+    Some(format!(
+        "SELECT _block_number AS {block}, _block_offset AS {offset}, {projection}\n\
+         FROM {source} STREAM CURSOR {cursor_sql}{boundary}\n\
+         SETTINGS enable_streaming_queries = 1",
+        block = STREAM_BLOCK_COLUMN,
+        offset = STREAM_OFFSET_COLUMN,
+    ))
+}
+
+/// Read the two private cursor columns at the front of a streamed row.
+pub fn stream_cursor(row: &[Value]) -> Option<StreamCursor> {
+    let number = row.first().and_then(unsigned_value)?;
+    let offset = row.get(1).and_then(unsigned_value)?;
+    Some(StreamCursor {
+        block_number: number,
+        block_offset: offset,
+    })
+}
+
+/// Version gate for ClickHouse's real streaming-query implementation. Older
+/// parsers can accept trailing `STREAM` as a table alias, so syntax probing is
+/// not a capability check.
+pub fn supports_streaming_version(version: &str) -> bool {
+    let mut parts = version
+        .split('.')
+        .filter_map(|part| part.parse::<u64>().ok());
+    matches!((parts.next(), parts.next()), (Some(major), Some(minor)) if (major, minor) >= (26, 6))
+}
+
+fn unsigned_value(value: &Value) -> Option<u64> {
+    match value {
+        Value::UInt(value) => u64::try_from(*value).ok(),
+        Value::Int(value) => u64::try_from(*value).ok(),
+        _ => None,
+    }
+}
+
+/// A backtick-aware `db.table` check. Anything involving aliases, joins,
+/// functions, or subqueries stays on the polling path until it is separately
+/// characterized against ClickHouse streaming queries.
+fn is_simple_table_source(source: &str) -> bool {
+    if source.is_empty() {
+        return false;
+    }
+    let mut quoted = false;
+    let mut has_name = false;
+    for ch in source.chars() {
+        if ch == '`' {
+            quoted = !quoted;
+        } else if quoted {
+            has_name = true;
+        } else if ch.is_ascii_alphanumeric() || ch == '_' {
+            has_name = true;
+        } else if ch != '.' {
+            return false;
+        }
+    }
+    has_name && !quoted && !source.starts_with('.') && !source.ends_with('.')
 }
 
 /// Parse an edited query into a [`TailQuery`]: the body is everything before
@@ -274,6 +400,76 @@ mod tests {
             "SELECT * FROM (SELECT *\nFROM `logs`.`events`) \
              WHERE `at` > '2026-01-01 00:00:00' ORDER BY `at` ASC LIMIT 500"
         );
+    }
+
+    #[test]
+    fn builds_stream_query_with_key_fallback_then_cursor_resume() {
+        assert_eq!(
+            stream_sql(&query(), None, Some("'2026-01-01 00:00:00'")),
+            Some(
+                "SELECT _block_number AS __zedb_stream_block_number, _block_offset AS \
+                 __zedb_stream_block_offset, *\nFROM `logs`.`events` STREAM CURSOR {}\n\
+                 WHERE `at` > '2026-01-01 00:00:00'\nSETTINGS \
+                 enable_streaming_queries = 1"
+                    .into()
+            )
+        );
+        assert_eq!(
+            stream_sql(
+                &query(),
+                Some(StreamCursor {
+                    block_number: 7,
+                    block_offset: 19,
+                }),
+                Some("'ignored'"),
+            ),
+            Some(
+                "SELECT _block_number AS __zedb_stream_block_number, _block_offset AS \
+                 __zedb_stream_block_offset, *\nFROM `logs`.`events` STREAM CURSOR \
+                 {'all': {'block_number': 7, 'block_offset': 19}}\nSETTINGS \
+                 enable_streaming_queries = 1"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn stream_query_rejects_shapes_not_characterized_for_streaming() {
+        for body in [
+            "SELECT * FROM db.t WHERE kind = 'x'",
+            "SELECT kind, count() FROM db.t GROUP BY kind",
+            "SELECT * FROM db.t AS t",
+            "SELECT * FROM (SELECT * FROM db.t)",
+            "SELECT * FROM db.a JOIN db.b USING id",
+        ] {
+            let query = TailQuery {
+                body: body.into(),
+                key: "id".into(),
+                limit: 500,
+            };
+            assert_eq!(stream_sql(&query, None, Some("1")), None, "{body}");
+        }
+    }
+
+    #[test]
+    fn reads_stream_cursor_columns() {
+        assert_eq!(
+            stream_cursor(&[Value::UInt(3), Value::UInt(9), Value::String("x".into())]),
+            Some(StreamCursor {
+                block_number: 3,
+                block_offset: 9,
+            })
+        );
+        assert_eq!(stream_cursor(&[Value::String("bad".into())]), None);
+    }
+
+    #[test]
+    fn version_gate_does_not_mistake_the_26_3_alias_for_streaming() {
+        assert!(!supports_streaming_version("25.8.25.37"));
+        assert!(!supports_streaming_version("26.3.12.3"));
+        assert!(supports_streaming_version("26.6.2.160"));
+        assert!(supports_streaming_version("27.1.1.1"));
+        assert!(!supports_streaming_version("not-a-version"));
     }
 
     #[test]

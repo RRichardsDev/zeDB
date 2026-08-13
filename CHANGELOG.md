@@ -9,6 +9,12 @@ GitHub release notes.
 
 ## Unreleased
 
+- Instant tails can opt into ClickHouse 26.6 experimental `STREAM CURSOR`
+  delivery in Preferences. The flask beside "Get instant updates" opens that
+  setting; unsupported queries and servers retain the `WATCH`, native-poll,
+  and HTTP-poll fallback ladder.
+- Preference descriptions wrap before their fixed-width controls instead of
+  running underneath them in narrower windows.
 - Query tabs can be reordered by dragging; the drop target shows an accent
   edge and a ghost of the tab follows the cursor.
 - Default query tabs are named "Tab 1", "Tab 2" (was "Query N").
