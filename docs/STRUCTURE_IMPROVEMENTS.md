@@ -30,6 +30,10 @@ Date reviewed: 2026-08-13.
 - Connection form lifecycle, persistence, probing, health polling, disconnect,
   and node selection now live in `features/connections/controller.rs`, reducing
   the application shell by another 990 lines.
+- Connection form rendering, the connected toolbar, node scope selector,
+  cluster overview, and topology rendering now live in
+  `features/connections/view.rs`. `main.rs` is now 3,997 lines, down from
+  11,755 before the feature-controller extractions.
 - The blocking settings-sync workflow now belongs to `zedb-core::sync`.
   `zedb-app` schedules it and translates its typed result into UI state.
 - `Workspace::new` still performs the same initialization, but delegates the

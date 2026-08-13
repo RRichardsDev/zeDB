@@ -1,5 +1,6 @@
 mod controller;
 mod model;
+mod view;
 
 pub(crate) use model::{
     differentiating_cluster, ConnectedCluster, ConnectionDraft, ConnectionForm, ConnectionState,

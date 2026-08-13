@@ -837,6 +837,9 @@ Zero visual change; prerequisite for any future theme system.
 - Connection form and runtime lifecycle methods moved into the connection
   feature, including validation, persistence, endpoint probing, health polling,
   and node switching.
+- Connection form, toolbar, node selector, cluster overview, and topology
+  rendering moved into the connection feature view module without visual or
+  interaction changes.
 - The blocking settings-sync workflow moved into `zedb-core::sync`; the app
   now schedules the operation and presents its typed outcome instead of owning
   git and reconciliation policy.
