@@ -360,7 +360,7 @@ async fn native_stream_cursor_resumes_and_disconnect_cancels() {
 
 fn row_cursor(row: &[Value]) -> Option<(u64, u64)> {
     let unsigned = |value: &Value| match value {
-        Value::UInt(value) => u64::try_from(*value).ok(),
+        Value::UInt(value) => Some(*value),
         Value::Int(value) => u64::try_from(*value).ok(),
         _ => None,
     };

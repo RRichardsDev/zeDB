@@ -171,7 +171,7 @@ pub fn supports_streaming_version(version: &str) -> bool {
 
 fn unsigned_value(value: &Value) -> Option<u64> {
     match value {
-        Value::UInt(value) => u64::try_from(*value).ok(),
+        Value::UInt(value) => Some(*value),
         Value::Int(value) => u64::try_from(*value).ok(),
         _ => None,
     }
@@ -189,9 +189,7 @@ fn is_simple_table_source(source: &str) -> bool {
     for ch in source.chars() {
         if ch == '`' {
             quoted = !quoted;
-        } else if quoted {
-            has_name = true;
-        } else if ch.is_ascii_alphanumeric() || ch == '_' {
+        } else if quoted || ch.is_ascii_alphanumeric() || ch == '_' {
             has_name = true;
         } else if ch != '.' {
             return false;
