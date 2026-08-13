@@ -329,7 +329,7 @@ async fn query_roundtrip_type_zoo() {
 }
 
 #[tokio::test]
-async fn streaming_query_reports_progress_and_honors_cap() {
+async fn streaming_query_honors_cap() {
     let Some(binary) = find_clickhouse() else {
         eprintln!("SKIP: no clickhouse binary found (set ZEDB_CLICKHOUSE_BIN or install one)");
         return;
@@ -342,10 +342,9 @@ async fn streaming_query_reports_progress_and_honors_cap() {
     let mut rows = 0;
     let mut batches = 0;
     let mut received_bytes = 0;
-    let mut saw_server_progress = false;
     let summary = client
         .query_stream(
-            "SELECT number, sleepEachRow(0.0001) FROM numbers(10000)",
+            "SELECT number, number * 2 FROM numbers(10000)",
             1_000,
             |event| match event {
                 QueryStreamEvent::Started { .. } => {}
@@ -356,8 +355,6 @@ async fn streaming_query_reports_progress_and_honors_cap() {
                 }
                 QueryStreamEvent::Progress(progress) => {
                     received_bytes = received_bytes.max(progress.received_bytes);
-                    saw_server_progress |=
-                        progress.read_rows.is_some() && progress.read_bytes.is_some();
                 }
             },
         )
@@ -368,7 +365,47 @@ async fn streaming_query_reports_progress_and_honors_cap() {
     assert_eq!(rows, 1_000);
     assert!(batches > 0);
     assert!(received_bytes > 0);
-    assert!(saw_server_progress);
     assert_eq!(summary.rows, 1_000);
     assert!(summary.capped);
+}
+
+/// Server-side counters are polled from `system.processes` on a 100ms
+/// timer, so they can only be observed while the query is still running.
+/// The row limit sits above the result size on purpose: hitting the cap
+/// returns as soon as the first block lands, which would race the poller.
+/// The row sleeps total ~2s, giving that poller roughly twenty windows,
+/// and stay under the 3s `function_sleep_max_microseconds_per_block` cap.
+#[tokio::test]
+async fn streaming_query_reports_server_progress() {
+    let Some(binary) = find_clickhouse() else {
+        eprintln!("SKIP: no clickhouse binary found (set ZEDB_CLICKHOUSE_BIN or install one)");
+        return;
+    };
+    let server = EphemeralServer::start(&binary);
+    server.wait_ready().await;
+    let client = server.client();
+
+    let mut progress = Vec::new();
+    let summary = client
+        .query_stream(
+            "SELECT number, sleepEachRow(0.001) FROM numbers(2000)",
+            100_000,
+            |event| {
+                if let QueryStreamEvent::Progress(event) = event {
+                    progress.push(event);
+                }
+            },
+        )
+        .await
+        .expect("stream query");
+
+    assert_eq!(summary.rows, 2_000);
+    assert!(!summary.capped);
+    assert!(
+        progress
+            .iter()
+            .any(|event| event.read_rows.is_some() && event.read_bytes.is_some()),
+        "no progress event carried server-side counters; saw {} events: {progress:?}",
+        progress.len()
+    );
 }
