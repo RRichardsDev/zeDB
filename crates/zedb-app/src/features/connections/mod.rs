@@ -1,3 +1,4 @@
+mod controller;
 mod model;
 
 pub(crate) use model::{

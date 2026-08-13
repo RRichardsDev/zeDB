@@ -834,6 +834,9 @@ Zero visual change; prerequisite for any future theme system.
   while object rendering and shared metric formatting moved into a schema
   inspector module. The application shell no longer carries those method
   bodies.
+- Connection form and runtime lifecycle methods moved into the connection
+  feature, including validation, persistence, endpoint probing, health polling,
+  and node switching.
 - The blocking settings-sync workflow moved into `zedb-core::sync`; the app
   now schedules the operation and presents its typed outcome instead of owning
   git and reconciliation policy.

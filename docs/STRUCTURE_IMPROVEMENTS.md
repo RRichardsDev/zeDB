@@ -27,6 +27,9 @@ Date reviewed: 2026-08-13.
   dependencies, projections, storage advice, and the object inspector now live
   in `features/schema`. Together with the query extraction, this reduces
   `main.rs` from 11,755 lines to 5,948 lines in behavior-preserving moves.
+- Connection form lifecycle, persistence, probing, health polling, disconnect,
+  and node selection now live in `features/connections/controller.rs`, reducing
+  the application shell by another 990 lines.
 - The blocking settings-sync workflow now belongs to `zedb-core::sync`.
   `zedb-app` schedules it and translates its typed result into UI state.
 - `Workspace::new` still performs the same initialization, but delegates the
