@@ -813,3 +813,17 @@ Zero visual change; prerequisite for any future theme system.
 - The controlled polling-versus-stream cost comparison remains a manual
   acceptance check. Correctness, feature gating, cursor resume, and lifecycle
   cleanup are automated.
+
+## 2026-08-13: zedb-app boundary cleanup
+
+- Query-buffer parsing, cursor selection, and local variable expansion now
+  live in `features/query/buffer.rs`, with their tests beside the owned logic.
+- Connection, schema inspector, query-tab, and tail state types moved behind
+  private feature modules. The crate root imports their narrow re-exported
+  surface instead of defining every product model in `main.rs`.
+- `Workspace` now owns connection, schema, and query aggregates rather than
+  exposing each feature's fields directly at the shell level. This is an
+  ownership boundary only; orchestration behavior is unchanged.
+- The blocking settings-sync workflow moved into `zedb-core::sync`; the app
+  now schedules the operation and presents its typed outcome instead of owning
+  git and reconciliation policy.

@@ -38,7 +38,7 @@ impl HistoryTab {
 
 impl Workspace {
     pub(crate) fn save_active_query_tab(&mut self, cx: &mut Context<Self>) {
-        let Some(tab) = self.query_tabs.get(self.active_query_tab) else {
+        let Some(tab) = self.query.tabs.get(self.query.active_tab) else {
             self.flash_warning("There is no active query tab to save", cx);
             return;
         };
@@ -68,11 +68,11 @@ impl Workspace {
             return;
         }
         self.saved_tabs = updated;
-        self.query_tabs[self.active_query_tab].saved_tab_id = Some(saved_id);
+        self.query.tabs[self.query.active_tab].saved_tab_id = Some(saved_id);
         self.history_tab = HistoryTab::Tabs;
         self.show_history = true;
         self.history_clear_armed = false;
-        if self.connected.is_some() {
+        if self.connection.connected.is_some() {
             self.show_query_editor = true;
             self.show_ops = false;
             self.show_fleet = false;
@@ -98,7 +98,7 @@ impl Workspace {
             return;
         }
         self.saved_tabs = updated;
-        for tab in &mut self.query_tabs {
+        for tab in &mut self.query.tabs {
             if tab.saved_tab_id.as_deref() == Some(id.as_str()) {
                 tab.name = new_name.clone();
             }
@@ -114,7 +114,7 @@ impl Workspace {
             return;
         }
         self.saved_tabs = updated;
-        for tab in &mut self.query_tabs {
+        for tab in &mut self.query.tabs {
             if tab.saved_tab_id.as_deref() == Some(id) {
                 tab.saved_tab_id = None;
             }
@@ -132,15 +132,15 @@ impl Workspace {
             return;
         };
         let name = saved.name.clone();
-        let id = self.next_query_tab_id;
-        self.next_query_tab_id += 1;
+        let id = self.query.next_tab_id;
+        self.query.next_tab_id += 1;
         let mut tab =
-            Self::make_query_tab(id, &saved.sql, self.schema_provider.clone(), window, cx);
+            Self::make_query_tab(id, &saved.sql, self.schema.provider.clone(), window, cx);
         tab.saved_tab_id = Some(saved.id);
         tab.name = saved.name;
         tab.max_rows = crate::max_rows_from_limit(saved.row_limit);
-        self.query_tabs.push(tab);
-        self.active_query_tab = self.query_tabs.len() - 1;
+        self.query.tabs.push(tab);
+        self.query.active_tab = self.query.tabs.len() - 1;
         self.show_query_editor = true;
         self.show_fleet = false;
         self.show_ops = false;
@@ -150,7 +150,7 @@ impl Workspace {
     pub(crate) fn history_toggle(&mut self, cx: &mut Context<Self>) {
         self.show_history = !self.show_history;
         // The drawer lives beside the editor; surface it.
-        if self.show_history && self.connected.is_some() && !self.show_query_editor {
+        if self.show_history && self.connection.connected.is_some() && !self.show_query_editor {
             self.show_query_editor = true;
             self.show_ops = false;
             self.show_fleet = false;
@@ -167,7 +167,7 @@ impl Workspace {
         rows: Option<u64>,
         error: Option<&str>,
     ) {
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         let connection = connected.name.clone();
@@ -208,7 +208,7 @@ impl Workspace {
     }
 
     fn history_insert(&mut self, sql: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.query_tabs.get(self.active_query_tab) else {
+        let Some(tab) = self.query.tabs.get(self.query.active_tab) else {
             return;
         };
         let editor = tab.editor.clone();
@@ -370,6 +370,7 @@ impl Workspace {
     pub(crate) fn history_drawer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let filter = self.history_search.read(cx).text().trim().to_lowercase();
         let connection = self
+            .connection
             .connected
             .as_ref()
             .map(|connected| connected.name.clone());

@@ -979,7 +979,7 @@ impl Workspace {
             .repo
             .as_ref()
             .map(|repo| repo.root.display().to_string());
-        let connection = self.connected.as_ref().map(|connected| {
+        let connection = self.connection.connected.as_ref().map(|connected| {
             (
                 connected.client_config.url.clone(),
                 connected.client_config.user.clone(),
@@ -998,7 +998,7 @@ impl Workspace {
         if let Some(socket) = bridge_socket {
             config.insert("app_socket".into(), socket.display().to_string().into());
         }
-        if let Some(cache) = &self.schema_cache {
+        if let Some(cache) = &self.schema.cache {
             config.insert(
                 "schema_cache".into(),
                 cache.snapshot_path().display().to_string().into(),
@@ -1319,10 +1319,10 @@ impl Workspace {
         let Some((tab_id, failed_sql)) = self.agent_fix_target.take() else {
             return false;
         };
-        let Some(index) = self.query_tabs.iter().position(|tab| tab.id == tab_id) else {
+        let Some(index) = self.query.tabs.iter().position(|tab| tab.id == tab_id) else {
             return false;
         };
-        let editor = self.query_tabs[index].editor.clone();
+        let editor = self.query.tabs[index].editor.clone();
         let replaced = editor.update(cx, |editor, cx| {
             let text = editor.value().to_string();
             let Some(start) = text.find(&failed_sql) else {
@@ -1341,7 +1341,7 @@ impl Workspace {
         if !replaced {
             return false;
         }
-        self.active_query_tab = index;
+        self.query.active_tab = index;
         self.show_query_editor = true;
         self.show_fleet = false;
         self.show_ops = false;
@@ -1365,7 +1365,7 @@ impl Workspace {
             "connections and schema view"
         };
         lines.push(format!("screen: {screen}"));
-        if let Some(connected) = &self.connected {
+        if let Some(connected) = &self.connection.connected {
             lines.push(format!(
                 "connection: {} ({} tier, {})",
                 connected.name,

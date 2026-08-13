@@ -6,6 +6,7 @@ mod commit;
 mod components;
 mod explain_ui;
 mod export;
+mod features;
 mod fleet;
 mod github;
 mod grid_spike;
@@ -24,7 +25,6 @@ mod vim;
 
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -44,11 +44,9 @@ use gpui_component::{
     scroll::ScrollableElement,
     Disableable, Root, Theme,
 };
-use tokio::task::AbortHandle;
 use zedb_ch::{
-    schema_cache::{CachedObjectKind, SchemaCache},
-    ChClient, ChConfig, ColumnInfo, DatabaseMeta, ObjectDetails, QueryStreamEvent,
-    QueryStreamSummary, SchemaObjectKind, SchemaObjectMeta, TableStorage,
+    schema_cache::SchemaCache, ChClient, ChConfig, QueryStreamEvent, QueryStreamSummary,
+    SchemaObjectKind, SchemaObjectMeta,
 };
 use zedb_core::{
     load_connections, load_preferences, save_connections, save_preferences, ConnectionConfig,
@@ -56,6 +54,20 @@ use zedb_core::{
 };
 
 use components::text_input::{self, TextInput};
+use features::connections::{
+    differentiating_cluster, ConnectedCluster, ConnectionDraft, ConnectionForm, ConnectionState,
+    DriverSettingForm, EndpointHealth, NodeForm,
+};
+use features::query::{
+    max_rows_from_limit, nearest_occurrence, resolve_query_variables, split_statements,
+    statement_at_cursor, tab_display_name, MaxRows, QueryOutcome, QueryResizeTarget, QueryState,
+    QueryTab, RunEvent, TailBatch, TailPush, TailState, TailStream, TailStreamBatch, TailStripInfo,
+    TailWatch,
+};
+use features::schema::{
+    database_nodes_from_cache, schema_object_from_cache, DatabaseNode, ObjectInspectorTab,
+    SchemaState, SelectedSchemaObject,
+};
 use fleet::FleetState;
 use grid_spike::GridSpike;
 use schema_intelligence_ui::{byte_range_to_lsp, SchemaProvider};
@@ -101,40 +113,6 @@ actions!(
         MaxRowsUnlimited
     ]
 );
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum MaxRows {
-    Rows1k,
-    Rows10k,
-    Rows50k,
-    Rows100k,
-    Rows1m,
-    Unlimited,
-}
-
-impl MaxRows {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Rows1k => "1k",
-            Self::Rows10k => "10k",
-            Self::Rows50k => "50k",
-            Self::Rows100k => "100k",
-            Self::Rows1m => "1m",
-            Self::Unlimited => "Unlimited",
-        }
-    }
-
-    fn limit(self) -> Option<usize> {
-        match self {
-            Self::Rows1k => Some(1_000),
-            Self::Rows10k => Some(10_000),
-            Self::Rows50k => Some(50_000),
-            Self::Rows100k => Some(100_000),
-            Self::Rows1m => Some(1_000_000),
-            Self::Unlimited => None,
-        }
-    }
-}
 
 struct Assets;
 
@@ -196,76 +174,6 @@ impl AssetSource for Assets {
             _ => Vec::new(),
         })
     }
-}
-
-struct ConnectionForm {
-    editing: Option<usize>,
-    original_name: Option<String>,
-    name: Entity<TextInput>,
-    nodes: Vec<NodeForm>,
-    user: Entity<TextInput>,
-    database: Entity<TextInput>,
-    password: Entity<TextInput>,
-    tier: EnvTier,
-    read_only: bool,
-    /// Driver settings rows; rows with a blank name or value are
-    /// dropped on save.
-    driver_settings: Vec<DriverSettingForm>,
-}
-
-struct DriverSettingForm {
-    name: Entity<TextInput>,
-    value: Entity<TextInput>,
-}
-
-struct NodeForm {
-    name: Entity<TextInput>,
-    endpoint: Entity<TextInput>,
-}
-
-#[derive(Clone)]
-struct ConnectionDraft {
-    config: ConnectionConfig,
-    password: String,
-    editing: Option<usize>,
-    original_name: Option<String>,
-}
-
-struct ConnectedCluster {
-    name: String,
-    active_node: usize,
-    active_endpoint: String,
-    client_config: ChConfig,
-    /// When set, schema-changing actions (applying a storage suggestion)
-    /// run `ON CLUSTER <name>` so they reach every node, not just the
-    /// active one. None = the active node only. Chosen from the node
-    /// selector, defaults to node scope.
-    apply_cluster: Option<String>,
-}
-
-#[derive(Clone)]
-struct EndpointHealth {
-    node_index: usize,
-    name: String,
-    endpoint: String,
-    reachable: bool,
-    /// This node's shard/replica memberships from its own
-    /// system.clusters (empty when unreachable or unknown).
-    memberships: Vec<zedb_ch::ClusterMembership>,
-}
-
-/// The first cluster in which the two nodes sit on different shards:
-/// switching between them changes which slice local tables show.
-fn differentiating_cluster(
-    a: &[zedb_ch::ClusterMembership],
-    b: &[zedb_ch::ClusterMembership],
-) -> Option<String> {
-    a.iter().find_map(|membership| {
-        b.iter()
-            .find(|other| other.cluster == membership.cluster)
-            .filter(|other| other.shard != membership.shard)
-            .map(|_| membership.cluster.clone())
-    })
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -348,269 +256,6 @@ enum GithubAuth {
     SignedIn(github::Profile),
 }
 
-struct DatabaseNode {
-    meta: DatabaseMeta,
-    expanded: bool,
-    /// While a filter is active every matching database auto-expands;
-    /// this records an explicit collapse under that filter. Reset
-    /// whenever the filter text changes.
-    filter_collapsed: bool,
-    loading: bool,
-    objects: Option<Vec<SchemaObjectMeta>>,
-    error: Option<String>,
-}
-
-fn database_nodes_from_cache(cache: &SchemaCache) -> Vec<DatabaseNode> {
-    let snapshot = cache.snapshot();
-    let mut databases: Vec<_> = snapshot
-        .databases
-        .values()
-        .map(|database| DatabaseNode {
-            meta: DatabaseMeta {
-                name: database.name.clone(),
-            },
-            expanded: false,
-            filter_collapsed: false,
-            loading: false,
-            objects: None,
-            error: None,
-        })
-        .collect();
-    databases.sort_by(|left, right| left.meta.name.cmp(&right.meta.name));
-    databases
-}
-
-fn schema_object_from_cache(object: &zedb_ch::schema_cache::CachedObject) -> SchemaObjectMeta {
-    SchemaObjectMeta {
-        name: object.name.clone(),
-        engine: object.engine.clone(),
-        kind: match object.kind {
-            CachedObjectKind::Table => SchemaObjectKind::Table,
-            CachedObjectKind::View => SchemaObjectKind::View,
-            CachedObjectKind::MaterializedView => SchemaObjectKind::MaterializedView,
-            CachedObjectKind::Dictionary => SchemaObjectKind::Dictionary,
-        },
-        total_rows: object.total_rows,
-        total_bytes: object.total_bytes,
-    }
-}
-
-struct SelectedSchemaObject {
-    database: String,
-    object: SchemaObjectMeta,
-    loading: bool,
-    columns: Vec<ColumnInfo>,
-    details: Option<ObjectDetails>,
-    /// Table-wide compression totals; None until loaded, or for objects
-    /// with no parts (views, dictionaries).
-    storage: Option<TableStorage>,
-    /// Per-column approximate distinct counts (aligned to `columns`),
-    /// filled on demand by the opt-in cardinality probe. None until run.
-    cardinalities: Option<Vec<u64>>,
-    /// The cardinality probe is scanning the table.
-    cardinality_loading: bool,
-    /// The probe failed (e.g. a column type `uniqCombined` rejects).
-    cardinality_error: Option<String>,
-    /// Waiting for the user to confirm that analysing may write temporary
-    /// tables (only asked on writable connections, where measurement runs).
-    cardinality_confirming: bool,
-    /// Measured savings per column index (Tier 3): how many times smaller
-    /// the suggested definition is than the current one. Filled in the
-    /// background after analysis, only on writable connections.
-    measured: HashMap<usize, f64>,
-    /// The column index whose suggestion is currently being applied.
-    applying: Option<usize>,
-    /// The in-flight apply has run long enough to show a spinner.
-    applying_slow: bool,
-    /// Active parts grouped by partition (Phase 9, Part B). None until the
-    /// Parts tab loads them off-thread.
-    partitions: Option<Vec<zedb_ch::PartitionStats>>,
-    partitions_loading: bool,
-    partitions_error: Option<String>,
-    /// Merges in progress for this object, refreshed on a poll while the
-    /// Parts tab is open (Phase 9, Part B).
-    merges: Vec<zedb_ch::MergeInfo>,
-    /// Materialized-view lineage for this object (Phase 9, Part C). None
-    /// until the Dependencies tab loads it.
-    dependencies: Option<zedb_ch::ObjectDependencies>,
-    dependencies_loading: bool,
-    dependencies_error: Option<String>,
-    /// Projections attached to this table (Phase 9, Part C). None until the
-    /// Projections tab loads them.
-    projections: Option<Vec<zedb_ch::ProjectionInfo>>,
-    projections_loading: bool,
-    projections_error: Option<String>,
-    ddl_editor: Entity<InputState>,
-    engine_editor: Entity<InputState>,
-    tab: ObjectInspectorTab,
-    error: Option<String>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ObjectInspectorTab {
-    Overview,
-    Columns,
-    Parts,
-    Projections,
-    Dependencies,
-    Ddl,
-}
-
-struct QueryTab {
-    /// Stable across snapshots and relaunches. Display names are not keys.
-    persistent_id: String,
-    /// The machine-local saved item this editor updates with cmd-s.
-    saved_tab_id: Option<String>,
-    name: String,
-    id: usize,
-    editor: Entity<InputState>,
-    result_grid: Entity<GridSpike>,
-    result_columns: usize,
-    result_rows: usize,
-    has_result: bool,
-    max_rows: MaxRows,
-    result_capped: bool,
-    read_rows: Option<u64>,
-    read_bytes: Option<u64>,
-    total_rows: Option<u64>,
-    received_bytes: u64,
-    editor_height: f32,
-    status_height: f32,
-    outcome: QueryOutcome,
-    started_at: Option<Instant>,
-    elapsed: Option<Duration>,
-    vim: VimController,
-    vim_command_line: Option<CommandLineSnapshot>,
-    vim_recording: Option<char>,
-    schema_analysis_generation: u64,
-    /// An EXPLAIN plan shown in place of the results grid.
-    explain: Option<zedb_ch::explain::ExplainNode>,
-    /// Query advisor result for the displayed statement, shown only when
-    /// explicitly requested (the saved-query Advise button). `None` hides
-    /// the lane; `Some(empty)` shows a "looks fine" note; `Some(findings)`
-    /// lists them. Computed off-thread from the run stats + EXPLAIN.
-    advisor: Option<Vec<query_advisor::QueryFinding>>,
-    /// Set when this run was launched by Advise, so completion computes
-    /// findings; a plain Run leaves it false and shows no lane.
-    advise_pending: bool,
-    /// Generation guarding a late advisor result against a newer run.
-    advisor_generation: u64,
-    /// What the failed run executed, for the error bar's Ask button.
-    failed_sql: Option<String>,
-    /// The last successfully executed statement, i.e. the one whose
-    /// result the grid is showing; header sorts rewrite and re-run it.
-    displayed_statement: Option<String>,
-    /// Byte offset of the displayed statement in the editor at run
-    /// time, so rewrites target the right one among identical twins.
-    displayed_statement_offset: Option<usize>,
-    /// Server-side id of the currently streaming statement, for
-    /// recognizing kills initiated from the ops view.
-    running_query_id: Option<String>,
-    /// Live tail state when this tab is tailing a table (Phase 10); `None`
-    /// for an ordinary query tab.
-    tail: Option<TailState>,
-}
-
-/// A running live tail bound to a query tab: the table, the monotonic key
-/// it advances on, and the last key seen. The poll loop is guarded by
-/// `generation` so a stopped or restarted tail's late polls are ignored.
-struct TailState {
-    /// Display number for the tab label ("Tail 1", "Tail 2", ...).
-    number: usize,
-    /// The editable definition: table, key, filter, LIMIT. The tab editor
-    /// shows [`tail::base_sql`] of this; editing and applying re-parses it.
-    query: tail::TailQuery,
-    /// The editor text the tail last adopted, for dirty-detection (the
-    /// "update tail" button shows when the editor differs from this).
-    baseline: String,
-    /// SQL literal of the last-seen key; `None` until the seed runs.
-    last: Option<String>,
-    /// The key's column index in the result, for reading each batch's max.
-    key_index: usize,
-    /// Retained-row cap the user chose (`None` = unlimited).
-    cap: Option<usize>,
-    /// Native-protocol (TCP) push discovery: `None` while probing, then
-    /// whether a native port (9440 TLS / 9000) is reachable, so we can offer
-    /// "instant updates" only when a switch is actually possible.
-    native_available: Option<bool>,
-    /// How new rows arrive: HTTP-cadence polling, fast polling over the
-    /// native connection, or a direct ClickHouse streaming query.
-    push: TailPush,
-    /// Last server-native cursor emitted by `STREAM CURSOR`, retained across
-    /// reconnects. The monotonic `last` key remains the fallback until this is
-    /// available.
-    stream_cursor: Option<tail::StreamCursor>,
-    /// The dedicated native query backing active streaming, including its
-    /// abort handle and epoch for rejecting late batches.
-    stream: Option<TailStream>,
-    /// The Live View backing an active `WATCH`, retained for servers and
-    /// query shapes where direct streaming is not selected or supported.
-    watch: Option<TailWatch>,
-    /// Do not retry STREAM continuously after it fails for this tail. The
-    /// remaining instant ladder, WATCH then fast polling, stays available.
-    stream_rejected: bool,
-    generation: u64,
-    paused: bool,
-    /// A transient error from the last poll, shown without stopping.
-    error: Option<String>,
-}
-
-/// The tail's delivery mechanism. `Poll` is the universal baseline; the
-/// other two are the "instant updates" upgrade over the native (TCP)
-/// protocol, and both silently fall back to `Poll` when the native
-/// connection goes away (docs/PHASE-10.md).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TailPush {
-    /// `poll_sql` every [`tail::TAIL_INTERVAL_MS`] over HTTP.
-    Poll,
-    /// `poll_sql` every [`tail::TAIL_INTERVAL_FAST_MS`]; each poll rides
-    /// the pooled native connection. Used when streaming is unsupported for
-    /// the server or edited query shape.
-    Fast,
-    /// A dedicated native connection returns inserted rows from ClickHouse
-    /// 26.6 `STREAM CURSOR` directly.
-    Stream,
-    /// A dedicated native connection holds `WATCH <live view> EVENTS` open;
-    /// each notification triggers the existing keyed fetch.
-    Watch,
-}
-
-/// An active direct stream. Aborting its task drops the only handle to the
-/// dedicated native connection, which closes the server query.
-#[derive(Clone, Debug)]
-struct TailStream {
-    epoch: u64,
-    abort: tokio::task::AbortHandle,
-}
-
-impl Drop for TailStream {
-    fn drop(&mut self) {
-        self.abort.abort();
-    }
-}
-
-#[derive(Clone, Debug)]
-struct TailWatch {
-    view: String,
-    epoch: u64,
-    abort: tokio::task::AbortHandle,
-}
-
-impl Drop for TailWatch {
-    fn drop(&mut self) {
-        self.abort.abort();
-    }
-}
-
-type TailStreamBatch = (Vec<zedb_core::ColumnMeta>, Vec<Vec<zedb_core::Value>>);
-
-/// One appendable tail batch: the columns (only on the priming poll, to
-/// install the header) and the rows.
-type TailBatch = (
-    Option<Vec<zedb_core::ColumnMeta>>,
-    Vec<Vec<zedb_core::Value>>,
-);
-
 /// Drag payload for reordering query tabs; also renders the drag ghost.
 #[derive(Clone)]
 struct DragTab {
@@ -631,60 +276,6 @@ impl Render for DragTab {
             .text_color(theme::text())
             .child(self.label.clone())
     }
-}
-
-/// Owned view of a tab's tail for rendering the status strip.
-struct TailStripInfo {
-    tab_id: usize,
-    key: String,
-    paused: bool,
-    error: Option<String>,
-    rows: usize,
-    /// A native port is reachable, so "instant updates" (server-push) is on
-    /// the table; the button only shows when this is true.
-    native_available: bool,
-    /// The active delivery mode, for the instant badge and for hiding the
-    /// upgrade button once instant updates are on.
-    push: TailPush,
-    /// Whether experimental STREAM is opted in, for the adjacent flask icon.
-    experimental_streaming_enabled: bool,
-    /// The editor differs from the adopted query, so "update tail" shows.
-    dirty: bool,
-}
-
-enum QueryOutcome {
-    Idle,
-    Running,
-    Complete {
-        columns: usize,
-        rows: usize,
-        skipped: usize,
-    },
-    Error(String),
-    /// A statement in a multi-statement run failed and the run is paused
-    /// waiting for the user to skip it or cancel the rest.
-    StatementError {
-        index: usize,
-        total: usize,
-        message: String,
-    },
-    Cancelled,
-}
-
-enum RunEvent {
-    Stream(QueryStreamEvent),
-    StatementFailed {
-        index: usize,
-        total: usize,
-        message: String,
-        decision: tokio::sync::oneshot::Sender<bool>,
-    },
-}
-
-#[derive(Clone, Copy)]
-enum QueryResizeTarget {
-    Editor,
-    Status,
 }
 
 struct Workspace {
@@ -723,45 +314,8 @@ struct Workspace {
     health_poll_generation: u64,
     /// Cancels a stale merges poll when the object or tab changes.
     merges_poll_generation: u64,
-    /// Monotonic source for per-tail generation ids; a stopped or restarted
-    /// tail bumps past its old loop so late polls are dropped.
-    next_tail_generation: u64,
-    /// Display counter for tail tabs ("Tail 1", "Tail 2", ...).
-    next_tail_number: usize,
-    /// Monotonic source for STREAM and WATCH epochs. WATCH also uses it for
-    /// unique Live View names.
-    next_stream_epoch: u64,
-    connections: Vec<ConnectionConfig>,
-    selected: Option<usize>,
-    connected: Option<ConnectedCluster>,
-    connecting: Option<String>,
-    endpoint_health: HashMap<String, Vec<EndpointHealth>>,
-    password_cache: HashMap<String, Option<String>>,
-    form: Option<ConnectionForm>,
-    pending_delete: Option<String>,
-    schema_filter: Entity<TextInput>,
-    schema_connection: Option<String>,
-    schema_cache: Option<SchemaCache>,
-    schema_provider: Rc<SchemaProvider>,
-    /// Databases with a column fetch in flight, so warm-up paths
-    /// (sidebar, object clicks, editor references) never double-fetch.
-    schema_warming: HashSet<String>,
-    schema_loading: bool,
-    schema_databases: Vec<DatabaseNode>,
-    schema_error: Option<String>,
-    selected_schema_object: Option<SelectedSchemaObject>,
-    /// Cardinality-probe results kept for this session, keyed by
-    /// (connection, database, object). Once a table has been analyzed
-    /// its distinct counts auto-load on reopen without re-prompting.
-    cardinality_cache: HashMap<(String, String, String), Vec<u64>>,
-    /// Measured codec savings for the session (Tier 3), keyed like the
-    /// cardinality cache: (connection, database, object) -> {column
-    /// index -> times-smaller}. Auto-loads on reopen.
-    measured_cache: HashMap<(String, String, String), HashMap<usize, f64>>,
-    /// A suggestion (column index + statements) awaiting confirmation
-    /// before it runs, because the table is large enough that applying
-    /// rewrites a lot of data. Rendered as a confirm overlay.
-    pending_apply: Option<(usize, Vec<String>)>,
+    connection: ConnectionState,
+    schema: SchemaState,
     notice: Option<String>,
     notice_warning: bool,
     notice_flash_id: u64,
@@ -771,21 +325,12 @@ struct Workspace {
     resizing_sidebar: bool,
     connections_pane_height: f32,
     resizing_sidebar_sections: bool,
-    query_tabs: Vec<QueryTab>,
-    active_query_tab: usize,
-    next_query_tab_id: usize,
+    query: QueryState,
     show_query_editor: bool,
-    query_abort: Option<AbortHandle>,
-    /// The latest header-driven rewrite awaiting its debounced re-run.
-    rerun_pending: Option<String>,
     /// Last window-refocus health/update check, for debounce.
     last_focus_check: Option<Instant>,
     github: GithubAuth,
     github_generation: u64,
-    rerun_generation: u64,
-    query_error_decision: Option<tokio::sync::oneshot::Sender<bool>>,
-    query_run_id: u64,
-    query_resize: Option<(QueryResizeTarget, f32)>,
     preferences: Preferences,
     palette: command_palette::PaletteState,
     settings_sync: settings_sync::SettingsSyncState,
@@ -899,8 +444,8 @@ impl Workspace {
             // chevron over an empty list and the load only fires on the
             // next click (the double-click bug). Cache reads only, so no
             // network and bounded to already-warmed databases.
-            let snapshot = this.schema_cache.as_ref().map(|cache| cache.snapshot());
-            for database in &mut this.schema_databases {
+            let snapshot = this.schema.cache.as_ref().map(|cache| cache.snapshot());
+            for database in &mut this.schema.databases {
                 database.filter_collapsed = false;
                 if database.objects.is_none() {
                     if let Some(cached) = snapshot
@@ -987,7 +532,7 @@ impl Workspace {
                         && event.keystroke.key == "."
                         && this.show_query_editor
                     {
-                        if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                        if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
                             let editor = tab.editor.clone();
                             editor.update(cx, |editor, cx| {
                                 editor.show_completion_menu(window, cx);
@@ -998,7 +543,7 @@ impl Workspace {
                     }
                     // Tab cycles the connection form's fields.
                     if event.keystroke.key == "tab"
-                        && this.form.is_some()
+                        && this.connection.form.is_some()
                         && !event.keystroke.modifiers.platform
                         && !event.keystroke.modifiers.control
                     {
@@ -1020,7 +565,7 @@ impl Workspace {
                     // Escape closes an open filter popover regardless of
                     // where focus sits (checkbox panels hold none).
                     if event.keystroke.key == "escape" {
-                        if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                        if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
                             let closed = tab
                                 .result_grid
                                 .update(cx, |grid, cx| grid.close_filter_panel(cx));
@@ -1083,26 +628,8 @@ impl Workspace {
             .collect();
         match load_connections() {
             Ok(connections) => Self {
-                selected: (!connections.is_empty()).then_some(0),
-                connections,
-                connected: None,
-                connecting: None,
-                endpoint_health: HashMap::new(),
-                password_cache: HashMap::new(),
-                form: None,
-                pending_delete: None,
-                schema_filter,
-                schema_connection: None,
-                schema_cache: None,
-                schema_provider: schema_provider.clone(),
-                schema_warming: HashSet::new(),
-                schema_loading: false,
-                schema_databases: Vec::new(),
-                schema_error: None,
-                selected_schema_object: None,
-                cardinality_cache: HashMap::new(),
-                measured_cache: HashMap::new(),
-                pending_apply: None,
+                connection: ConnectionState::new(connections),
+                schema: SchemaState::new(schema_filter, schema_provider.clone()),
                 notice: None,
                 notice_warning: false,
                 notice_flash_id: 0,
@@ -1112,9 +639,7 @@ impl Workspace {
                 resizing_sidebar: false,
                 connections_pane_height: 430.0,
                 resizing_sidebar_sections: false,
-                query_tabs,
-                active_query_tab,
-                next_query_tab_id,
+                query: QueryState::new(query_tabs, active_query_tab, next_query_tab_id),
                 show_query_editor: false,
                 fleet: FleetState::new(
                     fleet_repo_path.as_deref().unwrap_or(""),
@@ -1147,18 +672,9 @@ impl Workspace {
                 commit: None,
                 health_poll_generation: 0,
                 merges_poll_generation: 0,
-                next_tail_generation: 0,
-                next_tail_number: 0,
-                next_stream_epoch: 0,
-                query_abort: None,
-                rerun_pending: None,
                 last_focus_check: None,
                 github: GithubAuth::SignedOut,
                 github_generation: 0,
-                rerun_generation: 0,
-                query_error_decision: None,
-                query_run_id: 0,
-                query_resize: None,
                 preferences,
                 palette: command_palette::PaletteState::new(cx),
                 settings_sync: settings_sync::SettingsSyncState::new(cx),
@@ -1166,26 +682,8 @@ impl Workspace {
                 show_about: false,
             },
             Err(error) => Self {
-                connections: Vec::new(),
-                selected: None,
-                connected: None,
-                connecting: None,
-                endpoint_health: HashMap::new(),
-                password_cache: HashMap::new(),
-                form: None,
-                pending_delete: None,
-                schema_filter,
-                schema_connection: None,
-                schema_cache: None,
-                schema_provider,
-                schema_warming: HashSet::new(),
-                schema_loading: false,
-                schema_databases: Vec::new(),
-                schema_error: None,
-                selected_schema_object: None,
-                cardinality_cache: HashMap::new(),
-                measured_cache: HashMap::new(),
-                pending_apply: None,
+                connection: ConnectionState::new(Vec::new()),
+                schema: SchemaState::new(schema_filter, schema_provider),
                 notice: Some(format!("Could not load connections: {error}")),
                 notice_warning: false,
                 notice_flash_id: 0,
@@ -1195,9 +693,7 @@ impl Workspace {
                 resizing_sidebar: false,
                 connections_pane_height: 430.0,
                 resizing_sidebar_sections: false,
-                query_tabs,
-                active_query_tab,
-                next_query_tab_id,
+                query: QueryState::new(query_tabs, active_query_tab, next_query_tab_id),
                 show_query_editor: false,
                 fleet: FleetState::new(
                     fleet_repo_path.as_deref().unwrap_or(""),
@@ -1230,18 +726,9 @@ impl Workspace {
                 commit: None,
                 health_poll_generation: 0,
                 merges_poll_generation: 0,
-                next_tail_generation: 0,
-                next_tail_number: 0,
-                next_stream_epoch: 0,
-                query_abort: None,
-                rerun_pending: None,
                 last_focus_check: None,
                 github: GithubAuth::SignedOut,
                 github_generation: 0,
-                rerun_generation: 0,
-                query_error_decision: None,
-                query_run_id: 0,
-                query_resize: None,
                 preferences,
                 palette: command_palette::PaletteState::new(cx),
                 settings_sync: settings_sync::SettingsSyncState::new(cx),
@@ -1397,7 +884,8 @@ impl Workspace {
     fn session_snapshot(&self, cx: &Context<Self>) -> zedb_core::SavedSession {
         zedb_core::SavedSession {
             tabs: self
-                .query_tabs
+                .query
+                .tabs
                 .iter()
                 .map(|tab| zedb_core::SavedQueryTab {
                     id: tab.persistent_id.clone(),
@@ -1406,7 +894,7 @@ impl Workspace {
                     sql: tab.editor.read(cx).value().to_string(),
                 })
                 .collect(),
-            active_tab: self.active_query_tab,
+            active_tab: self.query.active_tab,
         }
     }
 
@@ -1429,7 +917,7 @@ impl Workspace {
     }
 
     fn open_preferences(&mut self, cx: &mut Context<Self>) {
-        self.form = None;
+        self.connection.form = None;
         self.show_preferences = true;
         self.settings_sync_probe_existing(cx);
         cx.notify();
@@ -1486,7 +974,7 @@ impl Workspace {
     fn toggle_vim_mode(&mut self, cx: &mut Context<Self>) {
         self.preferences.vim_mode = !self.preferences.vim_mode;
         if self.preferences.vim_mode {
-            for tab in &mut self.query_tabs {
+            for tab in &mut self.query.tabs {
                 let editor = tab.editor.read(cx);
                 let cursor = editor.cursor_position();
                 tab.vim.reset(
@@ -2158,12 +1646,14 @@ impl Workspace {
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self
+            .connection
             .connections
             .iter()
             .enumerate()
             .map(|(index, connection)| {
-                let selected = self.selected == Some(index);
+                let selected = self.connection.selected == Some(index);
                 let connected = self
+                    .connection
                     .connected
                     .as_ref()
                     .map(|connected| connected.name.as_str())
@@ -2184,14 +1674,15 @@ impl Workspace {
                         // A second click on the already-selected row
                         // brings up its Cluster connection screen (the
                         // only route back to it while connected).
-                        if this.selected == Some(index) && (this.show_query_editor || this.show_ops)
+                        if this.connection.selected == Some(index)
+                            && (this.show_query_editor || this.show_ops)
                         {
                             this.show_query_editor = false;
                             this.show_fleet = false;
                             this.show_ops = false;
                         }
-                        this.selected = Some(index);
-                        this.pending_delete = None;
+                        this.connection.selected = Some(index);
+                        this.connection.pending_delete = None;
                         this.notice = None;
                         cx.notify();
                     }))
@@ -2352,13 +1843,13 @@ impl Workspace {
                             })
                             .children(rows),
                     )
-                    .when(self.selected.is_some(), |sidebar| {
+                    .when(self.connection.selected.is_some(), |sidebar| {
                         sidebar.child(
                             div()
                                 .flex()
                                 .flex_col()
                                 .gap_2()
-                                .when_some(self.pending_delete.as_ref(), |panel, name| {
+                                .when_some(self.connection.pending_delete.as_ref(), |panel, name| {
                                     panel
                                         .child(div().text_xs().text_color(theme::danger()).child(
                                             format!(
@@ -2415,7 +1906,7 @@ impl Workspace {
                                                 ),
                                         )
                                 })
-                                .when(self.pending_delete.is_none(), |panel| {
+                                .when(self.connection.pending_delete.is_none(), |panel| {
                                     panel.child(
                                         div()
                                             .h(px(32.))
@@ -2456,7 +1947,7 @@ impl Workspace {
                                                         .build(window, cx)
                                                     })
                                                     .on_click(cx.listener(|this, _, _, cx| {
-                                                        if let Some(index) = this.selected {
+                                                        if let Some(index) = this.connection.selected {
                                                             this.duplicate_connection(index, cx)
                                                         }
                                                     })),
@@ -2507,7 +1998,7 @@ impl Workspace {
                                                             .size(px(14.))
                                                             .text_color(theme::text_dim()),
                                                     )
-                                                    .when(self.connecting.is_none(), |button| {
+                                                    .when(self.connection.connecting.is_none(), |button| {
                                                         button
                                                             .hover(|button| {
                                                                 button
@@ -2550,8 +2041,8 @@ impl Workspace {
     }
 
     fn schema_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let filter = self.schema_filter.read(cx).text().to_lowercase();
-        let cache_status = self.schema_cache.as_ref().map(|cache| {
+        let filter = self.schema.filter.read(cx).text().to_lowercase();
+        let cache_status = self.schema.cache.as_ref().map(|cache| {
             let snapshot = cache.snapshot();
             format!(
                 "{} of {} databases ready",
@@ -2560,11 +2051,13 @@ impl Workspace {
             )
         });
         let selected = self
-            .selected_schema_object
+            .schema
+            .selected_object
             .as_ref()
             .map(|selected| (selected.database.as_str(), selected.object.name.as_str()));
         let database_rows = self
-            .schema_databases
+            .schema
+            .databases
             .iter()
             .enumerate()
             .filter_map(|(database_index, database)| {
@@ -2621,7 +2114,8 @@ impl Workspace {
                                 // Keep whatever inspector tab is open, so
                                 // moving between tables stays in context.
                                 let tab = this
-                                    .selected_schema_object
+                                    .schema
+                                    .selected_object
                                     .as_ref()
                                     .map(|selected| selected.tab)
                                     .unwrap_or(ObjectInspectorTab::Overview);
@@ -2794,7 +2288,7 @@ impl Workspace {
                     .justify_between()
                     .text_xs()
                     .child("SCHEMA")
-                    .when(self.connected.is_some(), |header| {
+                    .when(self.connection.connected.is_some(), |header| {
                         header.child(
                             div()
                                 .id("refresh-schema")
@@ -2822,8 +2316,8 @@ impl Workspace {
                         )
                     }),
             )
-            .when(self.connected.is_some(), |panel| {
-                panel.child(div().px_2().pb_2().child(self.schema_filter.clone()))
+            .when(self.connection.connected.is_some(), |panel| {
+                panel.child(div().px_2().pb_2().child(self.schema.filter.clone()))
             })
             .when_some(cache_status, |panel, status| {
                 panel.child(
@@ -2842,7 +2336,7 @@ impl Workspace {
                     .min_h_0()
                     .overflow_y_scroll()
                     .px_1()
-                    .when(self.connected.is_none(), |tree| {
+                    .when(self.connection.connected.is_none(), |tree| {
                         tree.child(
                             div()
                                 .px_2()
@@ -2851,10 +2345,10 @@ impl Workspace {
                                 .child("Connect to browse schema"),
                         )
                     })
-                    .when(self.schema_loading, |tree| {
+                    .when(self.schema.loading, |tree| {
                         tree.child(div().px_2().py_2().text_xs().child("Loading databases..."))
                     })
-                    .when_some(self.schema_error.as_ref(), |tree, error| {
+                    .when_some(self.schema.error.as_ref(), |tree, error| {
                         tree.child(
                             div()
                                 .px_2()
@@ -2879,8 +2373,8 @@ impl Workspace {
     }
 
     fn start_add(&mut self, cx: &mut Context<Self>) {
-        self.pending_delete = None;
-        self.form = Some(ConnectionForm {
+        self.connection.pending_delete = None;
+        self.connection.form = Some(ConnectionForm {
             editing: None,
             original_name: None,
             name: Self::input("", "staging", false, cx),
@@ -2900,12 +2394,12 @@ impl Workspace {
     }
 
     fn start_edit(&mut self, cx: &mut Context<Self>) {
-        let Some(index) = self.selected else {
+        let Some(index) = self.connection.selected else {
             return;
         };
-        let connection = self.connections[index].clone();
-        self.pending_delete = None;
-        self.form = Some(ConnectionForm {
+        let connection = self.connection.connections[index].clone();
+        self.connection.pending_delete = None;
+        self.connection.form = Some(ConnectionForm {
             editing: Some(index),
             original_name: Some(connection.name.clone()),
             name: Self::input(connection.name, "staging", false, cx),
@@ -2934,38 +2428,42 @@ impl Workspace {
     }
 
     fn cancel_form(&mut self, cx: &mut Context<Self>) {
-        self.form = None;
+        self.connection.form = None;
         self.notice = None;
         cx.notify();
     }
 
     fn request_delete(&mut self, cx: &mut Context<Self>) {
-        let Some(connection) = self.selected.and_then(|index| self.connections.get(index)) else {
+        let Some(connection) = self
+            .connection
+            .selected
+            .and_then(|index| self.connection.connections.get(index))
+        else {
             return;
         };
-        self.pending_delete = Some(connection.name.clone());
+        self.connection.pending_delete = Some(connection.name.clone());
         self.notice = None;
         cx.notify();
     }
 
     fn cancel_delete(&mut self, cx: &mut Context<Self>) {
-        self.pending_delete = None;
+        self.connection.pending_delete = None;
         cx.notify();
     }
 
     fn confirm_delete(&mut self, cx: &mut Context<Self>) {
-        if self.connecting.is_some() {
+        if self.connection.connecting.is_some() {
             self.notice = Some("Wait for the connection test to finish before deleting".into());
             cx.notify();
             return;
         }
-        let Some(index) = self.selected else {
+        let Some(index) = self.connection.selected else {
             return;
         };
-        let Some(connection) = self.connections.get(index).cloned() else {
+        let Some(connection) = self.connection.connections.get(index).cloned() else {
             return;
         };
-        if self.pending_delete.as_deref() != Some(connection.name.as_str()) {
+        if self.connection.pending_delete.as_deref() != Some(connection.name.as_str()) {
             return;
         }
 
@@ -2985,7 +2483,7 @@ impl Workspace {
             return;
         }
 
-        let mut updated = self.connections.clone();
+        let mut updated = self.connection.connections.clone();
         updated.remove(index);
         if let Err(error) = save_connections(&updated) {
             let restore_error = previous_password.as_deref().and_then(|password| {
@@ -3001,26 +2499,27 @@ impl Workspace {
             return;
         }
 
-        self.connections = updated;
-        self.endpoint_health.remove(&connection.name);
-        self.password_cache.remove(&connection.name);
+        self.connection.connections = updated;
+        self.connection.endpoint_health.remove(&connection.name);
+        self.connection.password_cache.remove(&connection.name);
         if self
+            .connection
             .connected
             .as_ref()
             .map(|connected| connected.name.as_str())
             == Some(connection.name.as_str())
         {
-            self.connected = None;
+            self.connection.connected = None;
             self.fleet.write_unlocked = false;
             self.clear_schema();
         }
-        self.selected = if self.connections.is_empty() {
+        self.connection.selected = if self.connection.connections.is_empty() {
             None
         } else {
-            Some(index.min(self.connections.len() - 1))
+            Some(index.min(self.connection.connections.len() - 1))
         };
-        self.pending_delete = None;
-        self.form = None;
+        self.connection.pending_delete = None;
+        self.connection.form = None;
         self.notice = Some(format!("Deleted {}", connection.name));
         self.settings_sync_tick(cx);
         cx.notify();
@@ -3028,7 +2527,7 @@ impl Workspace {
 
     /// The connection form's inputs in visual order, for tab cycling.
     fn form_focus_order(&self) -> Vec<Entity<components::text_input::TextInput>> {
-        let Some(form) = &self.form else {
+        let Some(form) = &self.connection.form else {
             return Vec::new();
         };
         let mut order = vec![form.name.clone()];
@@ -3065,14 +2564,14 @@ impl Workspace {
     }
 
     fn cycle_tier(&mut self, cx: &mut Context<Self>) {
-        if let Some(form) = &mut self.form {
+        if let Some(form) = &mut self.connection.form {
             form.tier = form.tier.next();
             cx.notify();
         }
     }
 
     fn toggle_read_only(&mut self, cx: &mut Context<Self>) {
-        if let Some(form) = &mut self.form {
+        if let Some(form) = &mut self.connection.form {
             form.read_only = !form.read_only;
             cx.notify();
         }
@@ -3111,7 +2610,7 @@ impl Workspace {
     }
 
     fn remove_driver_setting(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(form) = &mut self.form {
+        if let Some(form) = &mut self.connection.form {
             if index < form.driver_settings.len() {
                 form.driver_settings.remove(index);
                 cx.notify();
@@ -3124,7 +2623,7 @@ impl Workspace {
             name: Self::input("", "setting", false, cx),
             value: Self::input("", "value", false, cx),
         };
-        if let Some(form) = &mut self.form {
+        if let Some(form) = &mut self.connection.form {
             form.driver_settings.push(setting);
             cx.notify();
         }
@@ -3132,6 +2631,7 @@ impl Workspace {
 
     fn add_endpoint(&mut self, cx: &mut Context<Self>) {
         let next_number = self
+            .connection
             .form
             .as_ref()
             .map(|form| form.nodes.len() + 1)
@@ -3140,14 +2640,14 @@ impl Workspace {
             name: Self::input(format!("Node {next_number}"), "Node name", false, cx),
             endpoint: Self::input("", "http://host:8123", false, cx),
         };
-        if let Some(form) = &mut self.form {
+        if let Some(form) = &mut self.connection.form {
             form.nodes.push(node);
             cx.notify();
         }
     }
 
     fn remove_endpoint(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(form) = &mut self.form {
+        if let Some(form) = &mut self.connection.form {
             if form.nodes.len() > 1 && index < form.nodes.len() {
                 form.nodes.remove(index);
                 cx.notify();
@@ -3156,7 +2656,11 @@ impl Workspace {
     }
 
     fn draft_from_form(&self, cx: &Context<Self>) -> Result<ConnectionDraft, String> {
-        let form = self.form.as_ref().ok_or("Connection form is not open")?;
+        let form = self
+            .connection
+            .form
+            .as_ref()
+            .ok_or("Connection form is not open")?;
         let value = |input: &Entity<TextInput>| input.read(cx).text().trim().to_string();
         let name = value(&form.name);
         let user = value(&form.user);
@@ -3184,6 +2688,7 @@ impl Workspace {
             return Err("Node names must be unique within a connection".into());
         }
         if self
+            .connection
             .connections
             .iter()
             .enumerate()
@@ -3229,22 +2734,22 @@ impl Workspace {
     /// in the keychain keyed by connection name, so the copy has no
     /// credentials until its first connect asks for them.
     fn duplicate_connection(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(original) = self.connections.get(index) else {
+        let Some(original) = self.connection.connections.get(index) else {
             return;
         };
         let mut copy = original.clone();
         let base = format!("{} copy", copy.name);
         let mut name = base.clone();
         let mut suffix = 2;
-        while self.connections.iter().any(|c| c.name == name) {
+        while self.connection.connections.iter().any(|c| c.name == name) {
             name = format!("{base} {suffix}");
             suffix += 1;
         }
         copy.name = name.clone();
-        self.connections.push(copy);
-        match save_connections(&self.connections) {
+        self.connection.connections.push(copy);
+        match save_connections(&self.connection.connections) {
             Ok(()) => {
-                self.selected = Some(self.connections.len() - 1);
+                self.connection.selected = Some(self.connection.connections.len() - 1);
                 self.notice = Some(format!(
                     "Duplicated as \"{name}\"; the password is not copied, connecting will ask for it"
                 ));
@@ -3252,7 +2757,7 @@ impl Workspace {
                 self.settings_sync_tick(cx);
             }
             Err(error) => {
-                self.connections.pop();
+                self.connection.connections.pop();
                 self.notice = Some(format!("Could not save connections: {error}"));
                 self.notice_warning = true;
                 self.notice_flash_id += 1;
@@ -3338,7 +2843,7 @@ impl Workspace {
         unlocked_previous_password: Option<&Option<String>>,
     ) -> Result<usize, String> {
         let name = &draft.config.name;
-        let previous_connections = self.connections.clone();
+        let previous_connections = self.connection.connections.clone();
         let previous_password = match draft.original_name.as_deref() {
             None => None,
             Some(_) if unlocked_previous_password.is_some() => {
@@ -3393,21 +2898,22 @@ impl Workspace {
         }
 
         if let Some(old_name) = draft.original_name.as_deref() {
-            self.endpoint_health.remove(old_name);
+            self.connection.endpoint_health.remove(old_name);
             if self
+                .connection
                 .connected
                 .as_ref()
                 .map(|connected| connected.name.as_str())
                 == Some(old_name)
             {
-                self.connected = None;
+                self.connection.connected = None;
                 self.fleet.write_unlocked = false;
                 self.fleet.write_unlocked = false;
                 self.clear_schema();
             }
         }
-        self.connections = updated;
-        self.selected = Some(index);
+        self.connection.connections = updated;
+        self.connection.selected = Some(index);
         Ok(index)
     }
 
@@ -3417,7 +2923,7 @@ impl Workspace {
             .and_then(|draft| self.persist_draft(&draft, None).map(|_| draft.config.name));
         match result {
             Ok(name) => {
-                self.form = None;
+                self.connection.form = None;
                 self.notice = Some(format!("Saved {name} without testing"));
                 self.settings_sync_tick(cx);
             }
@@ -3447,11 +2953,16 @@ impl Workspace {
     }
 
     fn connect_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(index) = self.selected else {
+        let Some(index) = self.connection.selected else {
             return;
         };
-        let connection = self.connections[index].clone();
-        let password = match self.password_cache.get(&connection.name).cloned() {
+        let connection = self.connection.connections[index].clone();
+        let password = match self
+            .connection
+            .password_cache
+            .get(&connection.name)
+            .cloned()
+        {
             Some(password) => password,
             None => match zedb_core::secrets::get_password(&connection.name) {
                 Ok(password) => password,
@@ -3479,7 +2990,7 @@ impl Workspace {
         let read_only = connection.read_only;
         let driver = connection.driver.clone();
         let connected_password = password.clone();
-        self.connecting = Some(name.clone());
+        self.connection.connecting = Some(name.clone());
         self.notice = Some(format!("Testing {} node(s) for {name}...", nodes.len()));
         cx.notify();
 
@@ -3515,20 +3026,20 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let Ok((health, schema_cache)) = task.await else {
                 this.update(cx, |this, cx| {
-                    this.connecting = None;
+                    this.connection.connecting = None;
                     this.flash_warning("Connection task stopped unexpectedly", cx);
                 })
                 .ok();
                 return;
             };
             this.update(cx, |this, cx| {
-                this.connecting = None;
+                this.connection.connecting = None;
                 let active_node = health.iter().find(|node| node.reachable).cloned();
                 let reachable = health.iter().filter(|node| node.reachable).count();
                 let total = health.len();
 
                 let Some(active_node) = active_node else {
-                    this.endpoint_health.insert(name.clone(), health);
+                    this.connection.endpoint_health.insert(name.clone(), health);
                     this.flash_warning(
                         format!("No node accepted the connection details for {name}"),
                         cx,
@@ -3544,11 +3055,11 @@ impl Workspace {
                         cx.notify();
                         return;
                     }
-                    this.form = None;
+                    this.connection.form = None;
                 }
-                this.endpoint_health.insert(name.clone(), health);
+                this.connection.endpoint_health.insert(name.clone(), health);
                 this.fleet.write_unlocked = false;
-                this.connected = Some(ConnectedCluster {
+                this.connection.connected = Some(ConnectedCluster {
                     name: name.clone(),
                     active_node: active_node.node_index,
                     active_endpoint: active_node.endpoint.clone(),
@@ -3562,20 +3073,22 @@ impl Workspace {
                     },
                     apply_cluster: None,
                 });
-                this.password_cache
+                this.connection
+                    .password_cache
                     .insert(name.clone(), connected_password.clone());
                 match schema_cache {
-                    Ok(cache) => this.schema_cache = Some(cache),
+                    Ok(cache) => this.schema.cache = Some(cache),
                     Err(error) => {
-                        this.schema_cache = None;
+                        this.schema.cache = None;
                         this.flash_warning(
                             format!("Connected, but the schema cache could not open: {error}"),
                             cx,
                         );
                     }
                 }
-                this.schema_provider
-                    .set_context(this.schema_cache.clone(), connection.database.clone());
+                this.schema
+                    .provider
+                    .set_context(this.schema.cache.clone(), connection.database.clone());
                 // Land in the query view; the connection screen's job
                 // is done.
                 this.show_fleet = false;
@@ -3625,13 +3138,13 @@ impl Workspace {
 
         // Health probe: one shot of the poll's body; a dead connection
         // disconnects exactly like the poll would.
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         let config = connected.client_config.clone();
         let name = connected.name.clone();
         let node_index = connected.active_node;
-        let schema_cache = self.schema_cache.clone();
+        let schema_cache = self.schema.cache.clone();
         let generation = self.health_poll_generation;
         cx.spawn(async move |this, cx| {
             let healthy = rt::tokio()
@@ -3655,17 +3168,18 @@ impl Workspace {
                     return;
                 }
                 let still_here = this
+                    .connection
                     .connected
                     .as_ref()
                     .is_some_and(|connected| connected.name == name);
                 if !still_here {
                     return;
                 }
-                this.connected = None;
-                this.schema_cache = None;
-                this.schema_provider.set_context(None, None);
+                this.connection.connected = None;
+                this.schema.cache = None;
+                this.schema.provider.set_context(None, None);
                 this.fleet.write_unlocked = false;
-                if let Some(health) = this.endpoint_health.get_mut(&name) {
+                if let Some(health) = this.connection.endpoint_health.get_mut(&name) {
                     if let Some(node) = health.iter_mut().find(|node| node.node_index == node_index)
                     {
                         node.reachable = false;
@@ -3684,13 +3198,13 @@ impl Workspace {
     fn start_health_poll(&mut self, cx: &mut Context<Self>) {
         self.health_poll_generation += 1;
         let generation = self.health_poll_generation;
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         let config = connected.client_config.clone();
         let name = connected.name.clone();
         let node_index = connected.active_node;
-        let schema_cache = self.schema_cache.clone();
+        let schema_cache = self.schema.cache.clone();
         cx.spawn(async move |this, cx| loop {
             Timer::after(Duration::from_secs(300)).await;
             let stale = this
@@ -3723,17 +3237,18 @@ impl Workspace {
                         return true;
                     }
                     let still_here = this
+                        .connection
                         .connected
                         .as_ref()
                         .is_some_and(|connected| connected.name == name);
                     if !still_here {
                         return true;
                     }
-                    this.connected = None;
-                    this.schema_cache = None;
-                    this.schema_provider.set_context(None, None);
+                    this.connection.connected = None;
+                    this.schema.cache = None;
+                    this.schema.provider.set_context(None, None);
                     this.fleet.write_unlocked = false;
-                    if let Some(health) = this.endpoint_health.get_mut(&name) {
+                    if let Some(health) = this.connection.endpoint_health.get_mut(&name) {
                         if let Some(node) =
                             health.iter_mut().find(|node| node.node_index == node_index)
                         {
@@ -3756,11 +3271,11 @@ impl Workspace {
 
     fn disconnect(&mut self, cx: &mut Context<Self>) {
         self.health_poll_generation += 1;
-        if let Some(connected) = self.connected.take() {
+        if let Some(connected) = self.connection.connected.take() {
             self.notice = Some(format!("Disconnected from {}", connected.name));
         }
-        self.schema_cache = None;
-        self.schema_provider.set_context(None, None);
+        self.schema.cache = None;
+        self.schema.provider.set_context(None, None);
         self.clear_schema();
         self.ops_reset(cx);
         cx.notify();
@@ -3769,7 +3284,7 @@ impl Workspace {
     /// Set (or clear) the cluster the schema-apply actions target with
     /// `ON CLUSTER`. Chosen from the node selector.
     fn set_apply_cluster(&mut self, cluster: Option<String>, cx: &mut Context<Self>) {
-        if let Some(connected) = self.connected.as_mut() {
+        if let Some(connected) = self.connection.connected.as_mut() {
             connected.apply_cluster = cluster;
             cx.notify();
         }
@@ -3777,6 +3292,7 @@ impl Workspace {
 
     fn select_node(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(connected_name) = self
+            .connection
             .connected
             .as_ref()
             .map(|connected| connected.name.clone())
@@ -3784,6 +3300,7 @@ impl Workspace {
             return;
         };
         let Some(node) = self
+            .connection
             .endpoint_health
             .get(&connected_name)
             .and_then(|health| health.iter().find(|node| node.node_index == index))
@@ -3793,17 +3310,19 @@ impl Workspace {
             return;
         };
         let previous_memberships = self
+            .connection
             .connected
             .as_ref()
             .map(|connected| connected.active_node)
             .and_then(|active| {
-                self.endpoint_health
+                self.connection
+                    .endpoint_health
                     .get(&connected_name)
                     .and_then(|health| health.iter().find(|node| node.node_index == active))
             })
             .map(|node| node.memberships.clone())
             .unwrap_or_default();
-        let Some(connected) = self.connected.as_mut() else {
+        let Some(connected) = self.connection.connected.as_mut() else {
             return;
         };
         if connected.active_node == node.node_index {
@@ -3834,31 +3353,31 @@ impl Workspace {
     }
 
     fn clear_schema(&mut self) {
-        self.schema_connection = None;
-        self.schema_loading = false;
-        self.schema_databases.clear();
-        self.schema_error = None;
-        self.selected_schema_object = None;
+        self.schema.connection = None;
+        self.schema.loading = false;
+        self.schema.databases.clear();
+        self.schema.error = None;
+        self.schema.selected_object = None;
     }
 
     fn load_schema_databases(&mut self, cx: &mut Context<Self>) {
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             self.clear_schema();
             return;
         };
         let connection_name = connected.name.clone();
         let config = connected.client_config.clone();
-        self.schema_connection = Some(connection_name.clone());
-        self.schema_loading = true;
-        self.schema_databases.clear();
-        self.schema_error = None;
-        self.selected_schema_object = None;
-        if let Some(cache) = &self.schema_cache {
-            self.schema_databases = database_nodes_from_cache(cache);
+        self.schema.connection = Some(connection_name.clone());
+        self.schema.loading = true;
+        self.schema.databases.clear();
+        self.schema.error = None;
+        self.schema.selected_object = None;
+        if let Some(cache) = &self.schema.cache {
+            self.schema.databases = database_nodes_from_cache(cache);
         }
         cx.notify();
 
-        let cache = self.schema_cache.clone();
+        let cache = self.schema.cache.clone();
         let task = rt::tokio().spawn(async move {
             let client = ChClient::new(config);
             if let Some(cache) = cache {
@@ -3890,16 +3409,20 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
-                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                if this
+                    .connection
+                    .connected
+                    .as_ref()
+                    .map(|cluster| cluster.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
                 }
-                this.schema_loading = false;
+                this.schema.loading = false;
                 match result {
-                    Ok(Ok(databases)) => this.schema_databases = databases,
-                    Ok(Err(error)) => this.schema_error = Some(error),
-                    Err(error) => this.schema_error = Some(error.to_string()),
+                    Ok(Ok(databases)) => this.schema.databases = databases,
+                    Ok(Err(error)) => this.schema.error = Some(error),
+                    Err(error) => this.schema.error = Some(error.to_string()),
                 }
                 // The schema context just changed; refresh open editors'
                 // diagnostics so a now-known database drops its stale
@@ -3920,11 +3443,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (Some(cache), Some(connected)) = (self.schema_cache.clone(), self.connected.as_ref())
-        else {
+        let (Some(cache), Some(connected)) = (
+            self.schema.cache.clone(),
+            self.connection.connected.as_ref(),
+        ) else {
             return;
         };
-        if !cache.needs_columns(&database) || !self.schema_warming.insert(database.clone()) {
+        if !cache.needs_columns(&database) || !self.schema.warming.insert(database.clone()) {
             return;
         }
         let config = connected.client_config.clone();
@@ -3938,10 +3463,11 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let warmed = task.await.unwrap_or(false);
             this.update_in(cx, |this, window, cx| {
-                this.schema_warming.remove(&database);
+                this.schema.warming.remove(&database);
                 if warmed {
                     let editors: Vec<(usize, Entity<InputState>)> = this
-                        .query_tabs
+                        .query
+                        .tabs
                         .iter()
                         .map(|tab| (tab.id, tab.editor.clone()))
                         .collect();
@@ -3950,7 +3476,7 @@ impl Workspace {
                     }
                     // If the user already typed the trigger (say `e.`)
                     // while columns were cold, reopen the popup now.
-                    if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                    if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
                         let editor = tab.editor.clone();
                         if editor.read(cx).focus_handle(cx).is_focused(window) {
                             editor.update(cx, |editor, cx| {
@@ -3972,13 +3498,14 @@ impl Workspace {
     /// (read-only) scan straight away.
     fn request_analyze(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let writable = self
+            .connection
             .connected
             .as_ref()
             .map(|cluster| cluster.name.clone())
             .map(|name| self.connection_is_writable(&name))
             .unwrap_or(false);
         if writable {
-            if let Some(selected) = &mut self.selected_schema_object {
+            if let Some(selected) = &mut self.schema.selected_object {
                 selected.cardinality_confirming = true;
             }
             cx.notify();
@@ -3989,14 +3516,14 @@ impl Workspace {
 
     /// The user confirmed the write; clear the prompt and run.
     fn confirm_analyze(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(selected) = &mut self.selected_schema_object {
+        if let Some(selected) = &mut self.schema.selected_object {
             selected.cardinality_confirming = false;
         }
         self.analyze_cardinality(window, cx);
     }
 
     fn cancel_analyze(&mut self, cx: &mut Context<Self>) {
-        if let Some(selected) = &mut self.selected_schema_object {
+        if let Some(selected) = &mut self.schema.selected_object {
             selected.cardinality_confirming = false;
         }
         cx.notify();
@@ -4009,13 +3536,13 @@ impl Workspace {
     /// scan ran) is dropped.
     fn analyze_cardinality(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let (connection_name, config, database_name, object_name, column_names) = {
-            let Some(selected) = &self.selected_schema_object else {
+            let Some(selected) = &self.schema.selected_object else {
                 return;
             };
             if selected.cardinality_loading || selected.columns.is_empty() {
                 return;
             }
-            let Some(connected) = &self.connected else {
+            let Some(connected) = &self.connection.connected else {
                 return;
             };
             (
@@ -4031,7 +3558,7 @@ impl Workspace {
             )
         };
 
-        if let Some(selected) = &mut self.selected_schema_object {
+        if let Some(selected) = &mut self.schema.selected_object {
             selected.cardinality_loading = true;
             selected.cardinality_error = None;
         }
@@ -4049,12 +3576,16 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
-                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                if this
+                    .connection
+                    .connected
+                    .as_ref()
+                    .map(|cluster| cluster.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
                 }
-                let Some(selected) = &mut this.selected_schema_object else {
+                let Some(selected) = &mut this.schema.selected_object else {
                     return;
                 };
                 if selected.database != database_name || selected.object.name != object_name {
@@ -4078,7 +3609,8 @@ impl Workspace {
                 // The `selected` borrow ends here; keep the result for the
                 // session so reopening this table auto-loads it.
                 if let Some(cardinalities) = to_cache {
-                    this.cardinality_cache
+                    this.schema
+                        .cardinality_cache
                         .insert((connection_name, database_name, object_name), cardinalities);
                     // Cardinality is known; measure the actual savings of
                     // the actionable suggestions (Tier 3), writable
@@ -4097,13 +3629,13 @@ impl Workspace {
     /// pass `force` to reload. Guards against a stale connection/object.
     fn load_partitions(&mut self, cx: &mut Context<Self>) {
         let (connection_name, config, database_name, object_name) = {
-            let Some(selected) = &self.selected_schema_object else {
+            let Some(selected) = &self.schema.selected_object else {
                 return;
             };
             if selected.partitions.is_some() || selected.partitions_loading {
                 return;
             }
-            let Some(connected) = &self.connected else {
+            let Some(connected) = &self.connection.connected else {
                 return;
             };
             (
@@ -4114,7 +3646,7 @@ impl Workspace {
             )
         };
 
-        if let Some(selected) = &mut self.selected_schema_object {
+        if let Some(selected) = &mut self.schema.selected_object {
             selected.partitions_loading = true;
             selected.partitions_error = None;
         }
@@ -4132,12 +3664,16 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
-                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                if this
+                    .connection
+                    .connected
+                    .as_ref()
+                    .map(|cluster| cluster.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
                 }
-                let Some(selected) = &mut this.selected_schema_object else {
+                let Some(selected) = &mut this.schema.selected_object else {
                     return;
                 };
                 if selected.database != database_name || selected.object.name != object_name {
@@ -4162,10 +3698,10 @@ impl Workspace {
     fn start_merges_poll(&mut self, cx: &mut Context<Self>) {
         self.merges_poll_generation += 1;
         let generation = self.merges_poll_generation;
-        let Some(selected) = &self.selected_schema_object else {
+        let Some(selected) = &self.schema.selected_object else {
             return;
         };
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         let connection_name = connected.name.clone();
@@ -4177,10 +3713,15 @@ impl Workspace {
             let live = this
                 .update(cx, |this, cx| {
                     let live = this.merges_poll_generation == generation
-                        && this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                        && this
+                            .connection
+                            .connected
+                            .as_ref()
+                            .map(|cluster| cluster.name.as_str())
                             == Some(connection_name.as_str())
                         && this
-                            .selected_schema_object
+                            .schema
+                            .selected_object
                             .as_ref()
                             .is_some_and(|selected| {
                                 selected.tab == ObjectInspectorTab::Parts
@@ -4203,10 +3744,10 @@ impl Workspace {
     /// One off-thread read of the selected object's in-progress merges.
     fn merges_fetch(&mut self, generation: u64, cx: &mut Context<Self>) {
         let (connection_name, config, database, object) = {
-            let Some(selected) = &self.selected_schema_object else {
+            let Some(selected) = &self.schema.selected_object else {
                 return;
             };
-            let Some(connected) = &self.connected else {
+            let Some(connected) = &self.connection.connected else {
                 return;
             };
             (
@@ -4229,12 +3770,16 @@ impl Workspace {
                 if this.merges_poll_generation != generation {
                     return;
                 }
-                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                if this
+                    .connection
+                    .connected
+                    .as_ref()
+                    .map(|cluster| cluster.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
                 }
-                let Some(selected) = &mut this.selected_schema_object else {
+                let Some(selected) = &mut this.schema.selected_object else {
                     return;
                 };
                 if selected.database != guard_database || selected.object.name != guard_object {
@@ -4538,7 +4083,7 @@ impl Workspace {
                                 gpui_component::tooltip::Tooltip::new("Refresh").build(window, cx)
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(selected) = &mut this.selected_schema_object {
+                                if let Some(selected) = &mut this.schema.selected_object {
                                     selected.partitions = None;
                                 }
                                 this.load_partitions(cx);
@@ -4594,13 +4139,13 @@ impl Workspace {
     /// (Phase 9, Part C), off-thread. No-op if already loaded or loading.
     fn load_dependencies(&mut self, cx: &mut Context<Self>) {
         let (connection_name, config, database_name, object_name) = {
-            let Some(selected) = &self.selected_schema_object else {
+            let Some(selected) = &self.schema.selected_object else {
                 return;
             };
             if selected.dependencies.is_some() || selected.dependencies_loading {
                 return;
             }
-            let Some(connected) = &self.connected else {
+            let Some(connected) = &self.connection.connected else {
                 return;
             };
             (
@@ -4611,7 +4156,7 @@ impl Workspace {
             )
         };
 
-        if let Some(selected) = &mut self.selected_schema_object {
+        if let Some(selected) = &mut self.schema.selected_object {
             selected.dependencies_loading = true;
             selected.dependencies_error = None;
         }
@@ -4629,12 +4174,16 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
-                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                if this
+                    .connection
+                    .connected
+                    .as_ref()
+                    .map(|cluster| cluster.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
                 }
-                let Some(selected) = &mut this.selected_schema_object else {
+                let Some(selected) = &mut this.schema.selected_object else {
                     return;
                 };
                 if selected.database != database_name || selected.object.name != object_name {
@@ -4657,13 +4206,13 @@ impl Workspace {
     /// Part C), off-thread. No-op if already loaded or loading.
     fn load_projections(&mut self, cx: &mut Context<Self>) {
         let (connection_name, config, database_name, object_name) = {
-            let Some(selected) = &self.selected_schema_object else {
+            let Some(selected) = &self.schema.selected_object else {
                 return;
             };
             if selected.projections.is_some() || selected.projections_loading {
                 return;
             }
-            let Some(connected) = &self.connected else {
+            let Some(connected) = &self.connection.connected else {
                 return;
             };
             (
@@ -4674,7 +4223,7 @@ impl Workspace {
             )
         };
 
-        if let Some(selected) = &mut self.selected_schema_object {
+        if let Some(selected) = &mut self.schema.selected_object {
             selected.projections_loading = true;
             selected.projections_error = None;
         }
@@ -4692,12 +4241,16 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
-                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                if this
+                    .connection
+                    .connected
+                    .as_ref()
+                    .map(|cluster| cluster.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
                 }
-                let Some(selected) = &mut this.selected_schema_object else {
+                let Some(selected) = &mut this.schema.selected_object else {
                     return;
                 };
                 if selected.database != database_name || selected.object.name != object_name {
@@ -4730,7 +4283,8 @@ impl Workspace {
             return;
         };
         let meta = self
-            .schema_databases
+            .schema
+            .databases
             .iter()
             .find(|node| node.meta.name == database)
             .and_then(|node| node.objects.as_ref())
@@ -5080,7 +4634,8 @@ impl Workspace {
     /// True when the named connection allows writes (needed for the
     /// Tier 3 measurement, which builds a throwaway table).
     fn connection_is_writable(&self, name: &str) -> bool {
-        self.connections
+        self.connection
+            .connections
             .iter()
             .find(|connection| connection.name.as_str() == name)
             .map(|connection| !connection.read_only)
@@ -5093,10 +4648,10 @@ impl Workspace {
     /// result. Only on writable connections; a no-op otherwise.
     fn measure_suggestions(&mut self, cx: &mut Context<Self>) {
         let (connection_name, config, database, table) = {
-            let Some(selected) = &self.selected_schema_object else {
+            let Some(selected) = &self.schema.selected_object else {
                 return;
             };
-            let Some(connected) = &self.connected else {
+            let Some(connected) = &self.connection.connected else {
                 return;
             };
             (
@@ -5112,7 +4667,7 @@ impl Workspace {
 
         // Collect the actionable columns and how to build their trials.
         let jobs: Vec<(usize, String, String, String)> = {
-            let Some(selected) = &self.selected_schema_object else {
+            let Some(selected) = &self.schema.selected_object else {
                 return;
             };
             let Some(cardinalities) = &selected.cardinalities else {
@@ -5181,14 +4736,19 @@ impl Workspace {
                 let result = task.await;
                 this.update(cx, |this, cx| {
                     if let Ok(Ok(Some(ratio))) = result {
-                        this.measured_cache
+                        this.schema
+                            .measured_cache
                             .entry((connection_name.clone(), database.clone(), table.clone()))
                             .or_default()
                             .insert(index, ratio);
-                        if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                        if this
+                            .connection
+                            .connected
+                            .as_ref()
+                            .map(|cluster| cluster.name.as_str())
                             == Some(connection_name.as_str())
                         {
-                            if let Some(selected) = &mut this.selected_schema_object {
+                            if let Some(selected) = &mut this.schema.selected_object {
                                 if selected.database == database && selected.object.name == table {
                                     selected.measured.insert(index, ratio);
                                 }
@@ -5209,8 +4769,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let filter_active = !self.schema_filter.read(cx).text().trim().is_empty();
-        let Some(database) = self.schema_databases.get_mut(database_index) else {
+        let filter_active = !self.schema.filter.read(cx).text().trim().is_empty();
+        let Some(database) = self.schema.databases.get_mut(database_index) else {
             return;
         };
         let shown = if filter_active {
@@ -5221,7 +4781,7 @@ impl Workspace {
             database.expanded
         };
         if shown {
-            if let Some(cache) = &self.schema_cache {
+            if let Some(cache) = &self.schema.cache {
                 cache.touch_database(&database.meta.name);
                 if let Some(cached) = cache.snapshot().database(&database.meta.name) {
                     database.objects = Some(
@@ -5243,12 +4803,12 @@ impl Workspace {
             cx.notify();
             return;
         }
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         let connection_name = connected.name.clone();
         let config = connected.client_config.clone();
-        let Some(database) = self.schema_databases.get_mut(database_index) else {
+        let Some(database) = self.schema.databases.get_mut(database_index) else {
             return;
         };
         database.loading = true;
@@ -5266,13 +4826,18 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
-                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                if this
+                    .connection
+                    .connected
+                    .as_ref()
+                    .map(|cluster| cluster.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
                 }
                 let Some(database) = this
-                    .schema_databases
+                    .schema
+                    .databases
                     .iter_mut()
                     .find(|database| database.meta.name == database_name)
                 else {
@@ -5299,7 +4864,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         let connection_name = connected.name.clone();
@@ -5312,8 +4877,9 @@ impl Workspace {
             database_name.clone(),
             object_name.clone(),
         );
-        let cached_cardinalities = self.cardinality_cache.get(&cache_key).cloned();
+        let cached_cardinalities = self.schema.cardinality_cache.get(&cache_key).cloned();
         let cached_measured = self
+            .schema
             .measured_cache
             .get(&cache_key)
             .cloned()
@@ -5325,7 +4891,7 @@ impl Workspace {
                 .code_editor("sql")
                 .line_number(false)
         });
-        self.selected_schema_object = Some(SelectedSchemaObject {
+        self.schema.selected_object = Some(SelectedSchemaObject {
             database: database_name.clone(),
             object,
             loading: true,
@@ -5368,7 +4934,7 @@ impl Workspace {
             _ => {}
         }
 
-        if let Some(cache) = &self.schema_cache {
+        if let Some(cache) = &self.schema.cache {
             cache.touch_database(&database_name);
         }
         self.warm_schema_columns(database_name.clone(), window, cx);
@@ -5397,12 +4963,16 @@ impl Workspace {
                 .ok();
             }
             this.update(cx, |this, cx| {
-                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                if this
+                    .connection
+                    .connected
+                    .as_ref()
+                    .map(|cluster| cluster.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
                 }
-                let Some(selected) = &mut this.selected_schema_object else {
+                let Some(selected) = &mut this.schema.selected_object else {
                     return;
                 };
                 if selected.database != database_name || selected.object.name != object_name {
@@ -5440,7 +5010,11 @@ impl Workspace {
     }
 
     fn form_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let form = self.form.as_ref().expect("form panel requires a form");
+        let form = self
+            .connection
+            .form
+            .as_ref()
+            .expect("form panel requires a form");
         let endpoint_count = form.nodes.len();
         let endpoint_rows = form
             .nodes
@@ -5698,7 +5272,7 @@ impl Workspace {
                                         .border_1()
                                         .border_color(theme::border())
                                         .child("Cancel")
-                                        .when(self.connecting.is_none(), |button| {
+                                        .when(self.connection.connecting.is_none(), |button| {
                                             button
                                                 .hover(|button| {
                                                     button.bg(theme::bg_sidebar()).cursor_pointer()
@@ -5717,7 +5291,7 @@ impl Workspace {
                                         .border_1()
                                         .border_color(theme::border())
                                         .child("Save without testing")
-                                        .when(self.connecting.is_none(), |button| {
+                                        .when(self.connection.connecting.is_none(), |button| {
                                             button
                                                 .hover(|button| {
                                                     button.bg(theme::bg_sidebar()).cursor_pointer()
@@ -5737,12 +5311,12 @@ impl Workspace {
                                         .rounded(px(3.))
                                         .bg(theme::primary())
                                         .text_color(theme::primary_foreground())
-                                        .child(if self.connecting.is_some() {
+                                        .child(if self.connection.connecting.is_some() {
                                             "Testing nodes..."
                                         } else {
                                             "Save & Connect"
                                         })
-                                        .when(self.connecting.is_none(), |button| {
+                                        .when(self.connection.connecting.is_none(), |button| {
                                             button
                                                 .hover(|button| {
                                                     button
@@ -5814,7 +5388,7 @@ impl Workspace {
                     if this.preferences.vim_mode {
                         let value = state.read(cx).value().to_string();
                         let cursor = state.read(cx).cursor_position();
-                        if let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == id) {
+                        if let Some(tab) = this.query.tabs.iter_mut().find(|tab| tab.id == id) {
                             if tab.vim.text() != value {
                                 tab.vim.reset(
                                     &value,
@@ -5886,7 +5460,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.query_tabs.is_empty() {
+        if self.query.tabs.is_empty() {
             self.add_query_tab(window, cx);
         } else {
             self.show_query_editor = true;
@@ -5902,11 +5476,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let id = self.next_query_tab_id;
-        self.next_query_tab_id += 1;
-        let tab = Self::make_query_tab(id, sql, self.schema_provider.clone(), window, cx);
-        self.query_tabs.push(tab);
-        self.active_query_tab = self.query_tabs.len() - 1;
+        let id = self.query.next_tab_id;
+        self.query.next_tab_id += 1;
+        let tab = Self::make_query_tab(id, sql, self.schema.provider.clone(), window, cx);
+        self.query.tabs.push(tab);
+        self.query.active_tab = self.query.tabs.len() - 1;
         self.show_query_editor = true;
         self.show_fleet = false;
         cx.notify();
@@ -5915,10 +5489,12 @@ impl Workspace {
     /// The environment tier of the active connection (prod/staging/dev).
     fn active_tier(&self) -> Option<EnvTier> {
         let name = self
+            .connection
             .connected
             .as_ref()
             .map(|cluster| cluster.name.as_str())?;
-        self.connections
+        self.connection
+            .connections
             .iter()
             .find(|connection| connection.name == name)
             .map(|connection| connection.tier)
@@ -5939,6 +5515,7 @@ impl Workspace {
     ) {
         let is_prod = self.active_tier() == Some(EnvTier::Production);
         let writable = self
+            .connection
             .connected
             .as_ref()
             .map(|cluster| cluster.name.clone())
@@ -5950,12 +5527,13 @@ impl Workspace {
         }
         const LARGE_TABLE_BYTES: u64 = 1_000_000_000; // ~1 GB
         let large = self
-            .selected_schema_object
+            .schema
+            .selected_object
             .as_ref()
             .and_then(|selected| selected.object.total_bytes)
             .is_some_and(|bytes| bytes > LARGE_TABLE_BYTES);
         if large {
-            self.pending_apply = Some((index, apply));
+            self.schema.pending_apply = Some((index, apply));
             cx.notify();
         } else {
             self.apply_suggestion(index, apply, window, cx);
@@ -5963,13 +5541,13 @@ impl Workspace {
     }
 
     fn confirm_apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((index, apply)) = self.pending_apply.take() {
+        if let Some((index, apply)) = self.schema.pending_apply.take() {
             self.apply_suggestion(index, apply, window, cx);
         }
     }
 
     fn cancel_apply(&mut self, cx: &mut Context<Self>) {
-        self.pending_apply = None;
+        self.schema.pending_apply = None;
         cx.notify();
     }
 
@@ -6009,7 +5587,8 @@ impl Workspace {
     /// the window and dismisses on an outside click.
     fn apply_confirm_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let size = self
-            .selected_schema_object
+            .schema
+            .selected_object
             .as_ref()
             .and_then(|selected| selected.object.total_bytes)
             .map(Self::format_bytes)
@@ -6111,12 +5690,12 @@ impl Workspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         let connection_name = connected.name.clone();
         let config = connected.client_config.clone();
-        let Some(selected) = &mut self.selected_schema_object else {
+        let Some(selected) = &mut self.schema.selected_object else {
             return;
         };
         let database = selected.database.clone();
@@ -6130,7 +5709,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             Timer::after(Duration::from_secs(3)).await;
             this.update(cx, |this, cx| {
-                if let Some(selected) = &mut this.selected_schema_object {
+                if let Some(selected) = &mut this.schema.selected_object {
                     if selected.applying == Some(index) {
                         selected.applying_slow = true;
                         cx.notify();
@@ -6161,18 +5740,22 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
-                if this.connected.as_ref().map(|cluster| cluster.name.as_str())
+                if this
+                    .connection
+                    .connected
+                    .as_ref()
+                    .map(|cluster| cluster.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
                 }
-                if let Some(selected) = &mut this.selected_schema_object {
+                if let Some(selected) = &mut this.schema.selected_object {
                     selected.applying = None;
                     selected.applying_slow = false;
                 }
                 match result {
                     Ok(Ok((columns, storage))) => {
-                        if let Some(selected) = &mut this.selected_schema_object {
+                        if let Some(selected) = &mut this.schema.selected_object {
                             if selected.database == database && selected.object.name == object_name
                             {
                                 selected.columns = columns;
@@ -6197,13 +5780,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+        let Some(tab) = self.query.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
             return;
         };
         tab.schema_analysis_generation += 1;
         let generation = tab.schema_analysis_generation;
         let sql = editor.read(cx).value().to_string();
-        let Some((snapshot, default_database)) = self.schema_provider.snapshot() else {
+        let Some((snapshot, default_database)) = self.schema.provider.snapshot() else {
             editor.update(cx, |editor, cx| {
                 if let Some(diagnostics) = editor.diagnostics_mut() {
                     diagnostics.clear();
@@ -6234,7 +5817,7 @@ impl Workspace {
                 for database in referenced {
                     this.warm_schema_columns(database, window, cx);
                 }
-                let Some(tab) = this.query_tabs.iter().find(|tab| tab.id == tab_id) else {
+                let Some(tab) = this.query.tabs.iter().find(|tab| tab.id == tab_id) else {
                     return;
                 };
                 if tab.schema_analysis_generation != generation {
@@ -6272,14 +5855,15 @@ impl Workspace {
     /// next edit.
     fn refresh_schema_diagnostics(&mut self, cx: &mut Context<Self>) {
         let jobs: Vec<(usize, u64, Entity<InputState>)> = self
-            .query_tabs
+            .query
+            .tabs
             .iter_mut()
             .map(|tab| {
                 tab.schema_analysis_generation += 1;
                 (tab.id, tab.schema_analysis_generation, tab.editor.clone())
             })
             .collect();
-        let snapshot = self.schema_provider.snapshot();
+        let snapshot = self.schema.provider.snapshot();
         for (tab_id, generation, editor) in jobs {
             let Some((snapshot, default_database)) = snapshot.clone() else {
                 // No schema context: clear any stale diagnostics outright.
@@ -6305,7 +5889,7 @@ impl Workspace {
                     return;
                 };
                 this.update(cx, |this, cx| {
-                    let Some(tab) = this.query_tabs.iter().find(|tab| tab.id == tab_id) else {
+                    let Some(tab) = this.query.tabs.iter().find(|tab| tab.id == tab_id) else {
                         return;
                     };
                     if tab.schema_analysis_generation != generation {
@@ -6336,38 +5920,39 @@ impl Workspace {
     }
 
     fn add_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let id = self.next_query_tab_id;
-        self.next_query_tab_id += 1;
-        let tab = Self::make_query_tab(id, "", self.schema_provider.clone(), window, cx);
-        self.query_tabs.push(tab);
-        self.active_query_tab = self.query_tabs.len() - 1;
+        let id = self.query.next_tab_id;
+        self.query.next_tab_id += 1;
+        let tab = Self::make_query_tab(id, "", self.schema.provider.clone(), window, cx);
+        self.query.tabs.push(tab);
+        self.query.active_tab = self.query.tabs.len() - 1;
         self.show_query_editor = true;
         self.show_fleet = false;
         cx.notify();
     }
 
     fn close_query_tab(&mut self, tab_id: usize, cx: &mut Context<Self>) {
-        if self.query_tabs.len() == 1 {
+        if self.query.tabs.len() == 1 {
             return;
         }
-        let Some(index) = self.query_tabs.iter().position(|tab| tab.id == tab_id) else {
+        let Some(index) = self.query.tabs.iter().position(|tab| tab.id == tab_id) else {
             return;
         };
         if matches!(
-            self.query_tabs[index].outcome,
+            self.query.tabs[index].outcome,
             QueryOutcome::Running | QueryOutcome::StatementError { .. }
         ) {
             return;
         }
         self.stop_tail(tab_id, cx);
-        let closed = self.query_tabs.remove(index);
+        let closed = self.query.tabs.remove(index);
         // A closed tab may hold a huge result; clear it into a
         // background drop before the entity goes away.
         closed.result_grid.update(cx, |grid, _| grid.release_rows());
         drop(closed);
-        self.active_query_tab = self
-            .active_query_tab
-            .min(self.query_tabs.len().saturating_sub(1));
+        self.query.active_tab = self
+            .query
+            .active_tab
+            .min(self.query.tabs.len().saturating_sub(1));
         cx.notify();
     }
 
@@ -6384,7 +5969,8 @@ impl Workspace {
             return;
         }
         let tail_ids: Vec<usize> = self
-            .query_tabs
+            .query
+            .tabs
             .iter()
             .filter(|tab| {
                 tab.id != focus_id
@@ -6399,9 +5985,9 @@ impl Workspace {
         for tab_id in tail_ids {
             self.stop_tail(tab_id, cx);
         }
-        let mut kept = Vec::with_capacity(self.query_tabs.len());
+        let mut kept = Vec::with_capacity(self.query.tabs.len());
         let mut dropped = Vec::new();
-        for tab in self.query_tabs.drain(..) {
+        for tab in self.query.tabs.drain(..) {
             let closable = !matches!(
                 tab.outcome,
                 QueryOutcome::Running | QueryOutcome::StatementError { .. }
@@ -6412,19 +5998,21 @@ impl Workspace {
                 kept.push(tab);
             }
         }
-        self.query_tabs = kept;
+        self.query.tabs = kept;
         // A closed tab may hold a huge result; drop it in the background.
         for tab in &dropped {
             tab.result_grid.update(cx, |grid, _| grid.release_rows());
         }
         drop(dropped);
-        self.active_query_tab = self
-            .query_tabs
+        self.query.active_tab = self
+            .query
+            .tabs
             .iter()
             .position(|tab| tab.id == focus_id)
             .unwrap_or_else(|| {
-                self.active_query_tab
-                    .min(self.query_tabs.len().saturating_sub(1))
+                self.query
+                    .active_tab
+                    .min(self.query.tabs.len().saturating_sub(1))
             });
         cx.notify();
     }
@@ -6432,16 +6020,16 @@ impl Workspace {
     /// Move a query tab from one strip position to another (drag reorder),
     /// keeping the currently-active tab active.
     fn reorder_query_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
-        let len = self.query_tabs.len();
+        let len = self.query.tabs.len();
         if from == to || from >= len || to >= len {
             return;
         }
-        let active_id = self.query_tabs.get(self.active_query_tab).map(|tab| tab.id);
-        let tab = self.query_tabs.remove(from);
-        self.query_tabs.insert(to, tab);
+        let active_id = self.query.tabs.get(self.query.active_tab).map(|tab| tab.id);
+        let tab = self.query.tabs.remove(from);
+        self.query.tabs.insert(to, tab);
         if let Some(id) = active_id {
-            if let Some(pos) = self.query_tabs.iter().position(|tab| tab.id == id) {
-                self.active_query_tab = pos;
+            if let Some(pos) = self.query.tabs.iter().position(|tab| tab.id == id) {
+                self.query.active_tab = pos;
             }
         }
         cx.notify();
@@ -6449,7 +6037,8 @@ impl Workspace {
 
     fn close_other_query_tabs(&mut self, keep_id: usize, cx: &mut Context<Self>) {
         let ids: Vec<usize> = self
-            .query_tabs
+            .query
+            .tabs
             .iter()
             .filter(|tab| tab.id != keep_id)
             .map(|tab| tab.id)
@@ -6458,10 +6047,10 @@ impl Workspace {
     }
 
     fn close_query_tabs_to_right(&mut self, from_id: usize, cx: &mut Context<Self>) {
-        let Some(pos) = self.query_tabs.iter().position(|tab| tab.id == from_id) else {
+        let Some(pos) = self.query.tabs.iter().position(|tab| tab.id == from_id) else {
             return;
         };
-        let ids: Vec<usize> = self.query_tabs[pos + 1..]
+        let ids: Vec<usize> = self.query.tabs[pos + 1..]
             .iter()
             .map(|tab| tab.id)
             .collect();
@@ -6479,7 +6068,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(connected) = self.connected.as_ref() else {
+        let Some(connected) = self.connection.connected.as_ref() else {
             self.flash_warning("Connect before tailing a table", cx);
             return;
         };
@@ -6488,12 +6077,12 @@ impl Workspace {
 
         // A dedicated tab hosts the tail so it never fights a real query.
         self.add_query_tab(window, cx);
-        let tab_id = self.query_tabs[self.active_query_tab].id;
+        let tab_id = self.query.tabs[self.query.active_tab].id;
 
-        self.next_tail_generation += 1;
-        let generation = self.next_tail_generation;
-        self.next_tail_number += 1;
-        let number = self.next_tail_number;
+        self.query.next_tail_generation += 1;
+        let generation = self.query.next_tail_generation;
+        self.query.next_tail_number += 1;
+        let number = self.query.next_tail_number;
         let qualified = format!("{database}.{object}");
         let task = rt::tokio().spawn(async move {
             let client = ChClient::new(config);
@@ -6513,7 +6102,7 @@ impl Workspace {
                     // Leave the empty tab in place; the user can close it.
                     return;
                 };
-                if let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                if let Some(tab) = this.query.tabs.iter_mut().find(|tab| tab.id == tab_id) {
                     let query = tail::TailQuery {
                         body: tail::table_body(&database, &object),
                         key,
@@ -6575,13 +6164,19 @@ impl Workspace {
                 Timer::after(Duration::from_millis(interval)).await;
                 let alive = this
                     .update(cx, |this, cx| {
-                        let on_connection = this.connected.as_ref().map(|c| c.name.as_str())
-                            == Some(connection_name.as_str());
-                        let config = this.connected.as_ref().map(|c| c.client_config.clone());
+                        let on_connection =
+                            this.connection.connected.as_ref().map(|c| c.name.as_str())
+                                == Some(connection_name.as_str());
+                        let config = this
+                            .connection
+                            .connected
+                            .as_ref()
+                            .map(|c| c.client_config.clone());
                         let mut lost_native = false;
                         let (live, paused, push) = {
                             let state = this
-                                .query_tabs
+                                .query
+                                .tabs
                                 .iter_mut()
                                 .find(|tab| tab.id == tab_id)
                                 .and_then(|tab| tab.tail.as_mut());
@@ -6647,14 +6242,15 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let (config, sql, key) = {
-            let Some(connected) = self.connected.as_ref() else {
+            let Some(connected) = self.connection.connected.as_ref() else {
                 return;
             };
             if connected.name != connection_name {
                 return;
             }
             let Some(state) = self
-                .query_tabs
+                .query
+                .tabs
                 .iter()
                 .find(|tab| tab.id == tab_id)
                 .and_then(|tab| tab.tail.as_ref())
@@ -6675,21 +6271,24 @@ impl Workspace {
             )
         };
         let priming = self
-            .query_tabs
+            .query
+            .tabs
             .iter()
             .find(|tab| tab.id == tab_id)
             .and_then(|tab| tab.tail.as_ref())
             .map(|state| state.last.is_none())
             .unwrap_or(false);
         let cap = self
-            .query_tabs
+            .query
+            .tabs
             .iter()
             .find(|tab| tab.id == tab_id)
             .and_then(|tab| tab.tail.as_ref())
             .and_then(|state| state.cap)
             .unwrap_or(usize::MAX);
         let Some(grid) = self
-            .query_tabs
+            .query
+            .tabs
             .iter()
             .find(|tab| tab.id == tab_id)
             .map(|tab| tab.result_grid.clone())
@@ -6704,7 +6303,8 @@ impl Workspace {
                 let mut batch: Option<TailBatch> = None;
                 {
                     let Some(state) = this
-                        .query_tabs
+                        .query
+                        .tabs
                         .iter_mut()
                         .find(|tab| tab.id == tab_id)
                         .and_then(|tab| tab.tail.as_mut())
@@ -6745,7 +6345,7 @@ impl Workspace {
                     }
                     grid.update(cx, |grid, cx| grid.prepend_tail(rows, cap, cx));
                     let count = grid.read(cx).row_count();
-                    if let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                    if let Some(tab) = this.query.tabs.iter_mut().find(|tab| tab.id == tab_id) {
                         tab.result_rows = count;
                         tab.has_result = true;
                         if let Some(len) = columns_len {
@@ -6763,8 +6363,12 @@ impl Workspace {
     /// Stop the tail on a tab (its loop notices the cleared/renumbered
     /// generation and exits). The tab and its rows stay.
     fn stop_tail(&mut self, tab_id: usize, cx: &mut Context<Self>) {
-        let config = self.connected.as_ref().map(|c| c.client_config.clone());
-        if let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+        let config = self
+            .connection
+            .connected
+            .as_ref()
+            .map(|c| c.client_config.clone());
+        if let Some(tab) = self.query.tabs.iter_mut().find(|tab| tab.id == tab_id) {
             if let Some(stream) = tab.tail.as_mut().and_then(|state| state.stream.take()) {
                 stream.abort.abort();
             }
@@ -6781,10 +6385,11 @@ impl Workspace {
 
     fn toggle_tail_pause(&mut self, tab_id: usize, cx: &mut Context<Self>) {
         let mut resume_stream = false;
-        let connection_name = self.connected.as_ref().map(|c| c.name.clone());
+        let connection_name = self.connection.connected.as_ref().map(|c| c.name.clone());
         let mut resume_watch_poll = None;
         if let Some(state) = self
-            .query_tabs
+            .query
+            .tabs
             .iter_mut()
             .find(|tab| tab.id == tab_id)
             .and_then(|tab| tab.tail.as_mut())
@@ -6820,12 +6425,17 @@ impl Workspace {
     /// text isn't a tailable `SELECT ... FROM ... ORDER BY key`), the tail is
     /// left running unchanged and the reason is flashed.
     fn update_tail_from_editor(&mut self, tab_id: usize, cx: &mut Context<Self>) {
-        let Some(connection_name) = self.connected.as_ref().map(|c| c.name.clone()) else {
+        let Some(connection_name) = self.connection.connected.as_ref().map(|c| c.name.clone())
+        else {
             return;
         };
-        let config = self.connected.as_ref().map(|c| c.client_config.clone());
+        let config = self
+            .connection
+            .connected
+            .as_ref()
+            .map(|c| c.client_config.clone());
         let (Some(config), Some(tab)) =
-            (config, self.query_tabs.iter().find(|tab| tab.id == tab_id))
+            (config, self.query.tabs.iter().find(|tab| tab.id == tab_id))
         else {
             return;
         };
@@ -6848,7 +6458,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
-                if this.connected.as_ref().map(|c| c.name.as_str())
+                if this.connection.connected.as_ref().map(|c| c.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
@@ -6858,13 +6468,11 @@ impl Workspace {
                     // adopt the query and repaint the grid from them right
                     // now, without waiting for the next poll or new inserts.
                     Ok(Ok(res)) => {
-                        let grid = this
-                            .query_tabs
+                        let grid = this.query.tabs
                             .iter()
                             .find(|tab| tab.id == tab_id)
                             .map(|tab| tab.result_grid.clone());
-                        let cap = this
-                            .query_tabs
+                        let cap = this.query.tabs
                             .iter()
                             .find(|tab| tab.id == tab_id)
                             .and_then(|tab| tab.tail.as_ref())
@@ -6887,8 +6495,7 @@ impl Workspace {
                             cx.notify();
                             return;
                         }
-                        let Some(state) = this
-                            .query_tabs
+                        let Some(state) = this.query.tabs
                             .iter_mut()
                             .find(|tab| tab.id == tab_id)
                             .and_then(|tab| tab.tail.as_mut())
@@ -6924,7 +6531,7 @@ impl Workspace {
                             }
                             let count = grid.read(cx).row_count();
                             if let Some(tab) =
-                                this.query_tabs.iter_mut().find(|tab| tab.id == tab_id)
+                                this.query.tabs.iter_mut().find(|tab| tab.id == tab_id)
                             {
                                 tab.result_rows = count;
                                 tab.has_result = true;
@@ -6937,7 +6544,7 @@ impl Workspace {
                         }
                         if let Some(watch) = stale_watch {
                             if let Some(config) =
-                                this.connected.as_ref().map(|c| c.client_config.clone())
+                                this.connection.connected.as_ref().map(|c| c.client_config.clone())
                             {
                                 drop_tail_view(config, watch.view.clone());
                             }
@@ -6973,6 +6580,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(config) = self
+            .connection
             .connected
             .as_ref()
             .map(|connected| connected.client_config.clone())
@@ -6983,13 +6591,14 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let reachable = task.await.is_ok_and(|connected| connected.is_ok());
             this.update(cx, |this, cx| {
-                if this.connected.as_ref().map(|c| c.name.as_str())
+                if this.connection.connected.as_ref().map(|c| c.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
                 }
                 if let Some(state) = this
-                    .query_tabs
+                    .query
+                    .tabs
                     .iter_mut()
                     .find(|tab| tab.id == tab_id)
                     .and_then(|tab| tab.tail.as_mut())
@@ -7009,13 +6618,14 @@ impl Workspace {
     /// STREAM is opt-in; WATCH remains the normal push path on versions that
     /// support Live Views, followed by native fast polling.
     fn upgrade_tail_instant(&mut self, tab_id: usize, cx: &mut Context<Self>) {
-        let Some(connected) = self.connected.as_ref() else {
+        let Some(connected) = self.connection.connected.as_ref() else {
             return;
         };
         let config = connected.client_config.clone();
         let connection_name = connected.name.clone();
         let Some(state) = self
-            .query_tabs
+            .query
+            .tabs
             .iter()
             .find(|tab| tab.id == tab_id)
             .and_then(|tab| tab.tail.as_ref())
@@ -7034,8 +6644,8 @@ impl Workspace {
             .flatten()
             .filter(|_| !state.stream_rejected);
         let stream_requested = stream_sql.is_some();
-        self.next_stream_epoch += 1;
-        let epoch = self.next_stream_epoch;
+        self.query.next_stream_epoch += 1;
+        let epoch = self.query.next_stream_epoch;
         let view = format!("zedb_tail_{epoch}");
         self.flash_notice("Connecting for instant updates…", cx);
 
@@ -7144,10 +6754,11 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
             this.update(cx, |this, cx| {
-                let alive = this.connected.as_ref().map(|c| c.name.as_str())
+                let alive = this.connection.connected.as_ref().map(|c| c.name.as_str())
                     == Some(connection_name.as_str());
                 let Some(state) = this
-                    .query_tabs
+                    .query
+                    .tabs
                     .iter_mut()
                     .find(|tab| tab.id == tab_id)
                     .and_then(|tab| tab.tail.as_mut())
@@ -7247,10 +6858,12 @@ impl Workspace {
             while let Some((mut columns, mut rows)) = receiver.recv().await {
                 let alive = this
                     .update(cx, |this, cx| {
-                        let on_connection = this.connected.as_ref().map(|c| c.name.as_str())
-                            == Some(connection_name.as_str());
+                        let on_connection =
+                            this.connection.connected.as_ref().map(|c| c.name.as_str())
+                                == Some(connection_name.as_str());
                         let Some(state) = this
-                            .query_tabs
+                            .query
+                            .tabs
                             .iter_mut()
                             .find(|tab| tab.id == tab_id)
                             .and_then(|tab| tab.tail.as_mut())
@@ -7298,7 +6911,8 @@ impl Workspace {
                         state.error = None;
                         let cap = state.cap.unwrap_or(usize::MAX);
                         let grid = this
-                            .query_tabs
+                            .query
+                            .tabs
                             .iter()
                             .find(|tab| tab.id == tab_id)
                             .map(|tab| tab.result_grid.clone());
@@ -7306,7 +6920,7 @@ impl Workspace {
                             grid.update(cx, |grid, cx| grid.prepend_tail(rows, cap, cx));
                             let count = grid.read(cx).row_count();
                             if let Some(tab) =
-                                this.query_tabs.iter_mut().find(|tab| tab.id == tab_id)
+                                this.query.tabs.iter_mut().find(|tab| tab.id == tab_id)
                             {
                                 tab.result_rows = count;
                                 tab.has_result = true;
@@ -7323,10 +6937,11 @@ impl Workspace {
             }
 
             this.update(cx, |this, cx| {
-                let on_connection = this.connected.as_ref().map(|c| c.name.as_str())
+                let on_connection = this.connection.connected.as_ref().map(|c| c.name.as_str())
                     == Some(connection_name.as_str());
                 let ended = this
-                    .query_tabs
+                    .query
+                    .tabs
                     .iter_mut()
                     .find(|tab| tab.id == tab_id)
                     .and_then(|tab| tab.tail.as_mut())
@@ -7376,13 +6991,19 @@ impl Workspace {
                 let ended = event.is_none();
                 let alive = this
                     .update(cx, |this, cx| {
-                        let on_connection = this.connected.as_ref().map(|c| c.name.as_str())
-                            == Some(connection_name.as_str());
-                        let config = this.connected.as_ref().map(|c| c.client_config.clone());
+                        let on_connection =
+                            this.connection.connected.as_ref().map(|c| c.name.as_str())
+                                == Some(connection_name.as_str());
+                        let config = this
+                            .connection
+                            .connected
+                            .as_ref()
+                            .map(|c| c.client_config.clone());
                         let mut downgraded = false;
                         let (live, paused) = {
                             let state = this
-                                .query_tabs
+                                .query
+                                .tabs
                                 .iter_mut()
                                 .find(|tab| tab.id == tab_id)
                                 .and_then(|tab| tab.tail.as_mut());
@@ -7688,7 +7309,7 @@ impl Workspace {
         if key == "<C-x>" {
             return;
         }
-        let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) else {
+        let Some(tab) = self.query.tabs.get_mut(self.query.active_tab) else {
             return;
         };
         if !tab.editor.focus_handle(cx).is_focused(window) {
@@ -7845,8 +7466,9 @@ impl Workspace {
     /// Text the user has highlighted in the active editor, if any.
     fn selected_text(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<String> {
         let editor = self
-            .query_tabs
-            .get(self.active_query_tab)
+            .query
+            .tabs
+            .get(self.query.active_tab)
             .map(|tab| tab.editor.clone())?;
         editor.update(cx, |editor, cx| {
             let selection = EntityInputHandler::selected_text_range(editor, false, window, cx);
@@ -7870,13 +7492,14 @@ impl Workspace {
     fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Run means run: a press during an in-flight query cancels it
         // and starts this one, instead of being silently swallowed.
-        if self.query_abort.is_some() {
+        if self.query.abort.is_some() {
             self.cancel_query(cx);
         }
         let raw_sql = self.run_target_sql(window, cx);
         let full_text = self
-            .query_tabs
-            .get(self.active_query_tab)
+            .query
+            .tabs
+            .get(self.query.active_tab)
             .map(|tab| tab.editor.read(cx).value().to_string())
             .unwrap_or_default();
         let sql = match resolve_query_variables(&raw_sql, &full_text) {
@@ -7887,7 +7510,7 @@ impl Workspace {
             }
         };
         let offset = if sql.trim() == raw_sql.trim() {
-            self.query_tabs.get(self.active_query_tab).and_then(|tab| {
+            self.query.tabs.get(self.query.active_tab).and_then(|tab| {
                 let editor = tab.editor.read(cx);
                 nearest_occurrence(editor.value().as_ref(), raw_sql.trim(), editor.cursor())
             })
@@ -7900,13 +7523,14 @@ impl Workspace {
     /// Run every statement in the selection (or the whole buffer when nothing
     /// is selected) one after another.
     fn run_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.query_abort.is_some() {
+        if self.query.abort.is_some() {
             self.cancel_query(cx);
         }
         let selection = self.selected_text(window, cx);
         let (full_text, cursor) = self
-            .query_tabs
-            .get(self.active_query_tab)
+            .query
+            .tabs
+            .get(self.query.active_tab)
             .map(|tab| {
                 let editor = tab.editor.read(cx);
                 (editor.value().to_string(), editor.cursor())
@@ -7958,7 +7582,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+        let Some(tab) = self.query.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
             return;
         };
         let Some(statement) = tab.displayed_statement.clone() else {
@@ -7972,7 +7596,7 @@ impl Workspace {
     /// distinct values (capped, short-circuiting past ten) so even
     /// non-dictionary columns get checkboxes when they are small.
     fn open_column_filter(&mut self, column: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.query_tabs.get(self.active_query_tab) else {
+        let Some(tab) = self.query.tabs.get(self.query.active_tab) else {
             return;
         };
         let statement = tab.displayed_statement.clone();
@@ -7986,7 +7610,8 @@ impl Workspace {
         if !needs_probe {
             return;
         }
-        let (Some(statement), Some(connected)) = (statement, self.connected.as_ref()) else {
+        let (Some(statement), Some(connected)) = (statement, self.connection.connected.as_ref())
+        else {
             grid.update(cx, |grid, cx| {
                 grid.finish_filter_panel(&column, None, window, cx)
             });
@@ -8050,7 +7675,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+        let Some(tab) = self.query.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
             return;
         };
         let Some(statement) = tab.displayed_statement.clone() else {
@@ -8075,7 +7700,7 @@ impl Workspace {
         if rewritten == statement {
             return;
         }
-        let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) else {
+        let Some(tab) = self.query.tabs.get_mut(self.query.active_tab) else {
             return;
         };
         // Later header interactions compose on this rewrite even before
@@ -8095,7 +7720,7 @@ impl Workspace {
         let splice_at =
             position_match.or_else(|| nearest_occurrence(&value, &statement, offset.unwrap_or(0)));
         if let Some(splice_at) = splice_at {
-            if let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) {
+            if let Some(tab) = self.query.tabs.get_mut(self.query.active_tab) {
                 tab.displayed_statement_offset = Some(splice_at);
             }
             let updated = format!(
@@ -8106,7 +7731,7 @@ impl Workspace {
             );
             editor.update(cx, |editor, cx| editor.set_value(updated, window, cx));
         } else {
-            if let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) {
+            if let Some(tab) = self.query.tabs.get_mut(self.query.active_tab) {
                 tab.displayed_statement_offset = None;
             }
             self.flash_warning(
@@ -8116,24 +7741,25 @@ impl Workspace {
         }
         // Coalesce rapid interactions into one run: debounce a beat and
         // cancel-and-restart anything in flight.
-        self.rerun_generation += 1;
-        let generation = self.rerun_generation;
-        self.rerun_pending = Some(rewritten);
+        self.query.rerun_generation += 1;
+        let generation = self.query.rerun_generation;
+        self.query.rerun_pending = Some(rewritten);
         cx.spawn(async move |this, cx| {
             Timer::after(Duration::from_millis(150)).await;
             this.update(cx, |this, cx| {
-                if this.rerun_generation != generation {
+                if this.query.rerun_generation != generation {
                     return;
                 }
-                let Some(statement) = this.rerun_pending.take() else {
+                let Some(statement) = this.query.rerun_pending.take() else {
                     return;
                 };
-                if this.query_abort.is_some() {
+                if this.query.abort.is_some() {
                     this.cancel_query(cx);
                 }
                 let offset = this
-                    .query_tabs
-                    .get(this.active_query_tab)
+                    .query
+                    .tabs
+                    .get(this.query.active_tab)
                     .and_then(|tab| tab.displayed_statement_offset);
                 this.start_statements(vec![(statement, offset)], cx);
             })
@@ -8147,15 +7773,15 @@ impl Workspace {
         mut statements: Vec<(String, Option<usize>)>,
         cx: &mut Context<Self>,
     ) {
-        if self.query_abort.is_some() {
+        if self.query.abort.is_some() {
             return;
         }
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             self.flash_warning("Connect to a cluster before running a query", cx);
             return;
         };
         statements.retain(|(statement, _)| !statement.trim().is_empty());
-        let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) else {
+        let Some(tab) = self.query.tabs.get_mut(self.query.active_tab) else {
             return;
         };
         if statements.is_empty() {
@@ -8188,8 +7814,8 @@ impl Workspace {
         // For the history record on completion; `statements` moves
         // into the runner task.
         let run_sqls: Vec<String> = statements.iter().map(|(sql, _)| sql.clone()).collect();
-        self.query_run_id += 1;
-        let run_id = self.query_run_id;
+        self.query.run_id += 1;
+        let run_id = self.query.run_id;
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let task = rt::tokio().spawn(async move {
             let client = ChClient::new(config);
@@ -8236,17 +7862,17 @@ impl Workspace {
             }
             Ok((summary, skipped, succeeded))
         });
-        self.query_abort = Some(task.abort_handle());
+        self.query.abort = Some(task.abort_handle());
         cx.notify();
 
         cx.spawn(async move |this, cx| {
             while let Some(event) = receiver.recv().await {
                 let keep_receiving = this
                     .update(cx, |this, cx| {
-                        if this.query_run_id != run_id {
+                        if this.query.run_id != run_id {
                             return false;
                         }
-                        let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id)
+                        let Some(tab) = this.query.tabs.iter_mut().find(|tab| tab.id == tab_id)
                         else {
                             return false;
                         };
@@ -8257,7 +7883,7 @@ impl Workspace {
                                 message,
                                 decision,
                             } => {
-                                this.query_error_decision = Some(decision);
+                                this.query.error_decision = Some(decision);
                                 tab.outcome = QueryOutcome::StatementError {
                                     index,
                                     total,
@@ -8310,12 +7936,12 @@ impl Workspace {
             }
             let result = task.await;
             this.update(cx, |this, cx| {
-                if this.query_run_id != run_id {
+                if this.query.run_id != run_id {
                     return;
                 }
-                this.query_abort = None;
-                this.query_error_decision = None;
-                let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+                this.query.abort = None;
+                this.query.error_decision = None;
+                let Some(tab) = this.query.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
                     return;
                 };
                 let advise_pending = std::mem::take(&mut tab.advise_pending);
@@ -8413,13 +8039,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.connected.is_none() {
+        if self.connection.connected.is_none() {
             self.flash_warning("Connect to a cluster before advising a query", cx);
             return;
         }
         self.open_query_tab_with(&sql, window, cx);
         self.start_statements(vec![(sql, None)], cx);
-        if let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) {
+        if let Some(tab) = self.query.tabs.get_mut(self.query.active_tab) {
             tab.advise_pending = true;
         }
     }
@@ -8430,12 +8056,12 @@ impl Workspace {
     /// invoked, so an empty result shows a "looks fine" note rather than
     /// nothing. A generation + connection guard drops a stale result.
     fn run_query_advisor(&mut self, tab_id: usize, cx: &mut Context<Self>) {
-        let Some(connected) = self.connected.as_ref() else {
+        let Some(connected) = self.connection.connected.as_ref() else {
             return;
         };
         let connection_name = connected.name.clone();
         let config = connected.client_config.clone();
-        let Some(tab) = self.query_tabs.iter().find(|tab| tab.id == tab_id) else {
+        let Some(tab) = self.query.tabs.iter().find(|tab| tab.id == tab_id) else {
             return;
         };
         let Some(sql) = tab.displayed_statement.clone() else {
@@ -8450,7 +8076,7 @@ impl Workspace {
         // Only a read can be EXPLAINed; anything else gets an empty (looks
         // fine) result so the invoked lane still gives feedback.
         if !query_advisor::is_advisable_select(&sql) {
-            if let Some(tab) = self.query_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+            if let Some(tab) = self.query.tabs.iter_mut().find(|tab| tab.id == tab_id) {
                 tab.advisor = Some(Vec::new());
                 cx.notify();
             }
@@ -8545,12 +8171,12 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let findings = task.await.ok().flatten().unwrap_or_default();
             this.update(cx, |this, cx| {
-                if this.connected.as_ref().map(|c| c.name.as_str())
+                if this.connection.connected.as_ref().map(|c| c.name.as_str())
                     != Some(connection_name.as_str())
                 {
                     return;
                 }
-                let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+                let Some(tab) = this.query.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
                     return;
                 };
                 if tab.advisor_generation != generation {
@@ -8640,7 +8266,7 @@ impl Workspace {
                             .hover(|button| button.bg(theme::hover()).cursor_pointer())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(tab) =
-                                    this.query_tabs.iter_mut().find(|tab| tab.id == tab_id)
+                                    this.query.tabs.iter_mut().find(|tab| tab.id == tab_id)
                                 {
                                     tab.advisor = None;
                                     cx.notify();
@@ -8818,8 +8444,10 @@ impl Workspace {
     }
 
     fn refresh_schema_after_statements(&self, statements: &[String]) {
-        let (Some(cache), Some(connected)) = (self.schema_cache.clone(), self.connected.as_ref())
-        else {
+        let (Some(cache), Some(connected)) = (
+            self.schema.cache.clone(),
+            self.connection.connected.as_ref(),
+        ) else {
             return;
         };
         let mut databases = statements
@@ -8851,14 +8479,14 @@ impl Workspace {
     }
 
     fn select_max_rows(&mut self, max_rows: MaxRows, cx: &mut Context<Self>) {
-        if let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) {
+        if let Some(tab) = self.query.tabs.get_mut(self.query.active_tab) {
             tab.max_rows = max_rows;
         }
         cx.notify();
     }
 
     fn max_rows_selector(&self, running: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = &self.query_tabs[self.active_query_tab];
+        let active = &self.query.tabs[self.query.active_tab];
         let selected = active.max_rows;
         let action_context = active.editor.focus_handle(cx);
         Button::new("query-max-rows")
@@ -8907,7 +8535,7 @@ impl Workspace {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                        this.query_resize = Some((target, f32::from(event.position.y)));
+                        this.query.resize = Some((target, f32::from(event.position.y)));
                         cx.notify();
                     }),
                 ),
@@ -8917,13 +8545,14 @@ impl Workspace {
     /// Resume a run paused on a failed statement: skip it and continue, or
     /// cancel the remaining statements.
     fn resolve_statement_failure(&mut self, skip: bool, cx: &mut Context<Self>) {
-        let Some(decision) = self.query_error_decision.take() else {
+        let Some(decision) = self.query.error_decision.take() else {
             return;
         };
         let _ = decision.send(skip);
         if skip {
             if let Some(tab) = self
-                .query_tabs
+                .query
+                .tabs
                 .iter_mut()
                 .find(|tab| matches!(tab.outcome, QueryOutcome::StatementError { .. }))
             {
@@ -8934,13 +8563,13 @@ impl Workspace {
     }
 
     fn cancel_query(&mut self, cx: &mut Context<Self>) {
-        let Some(abort) = self.query_abort.take() else {
+        let Some(abort) = self.query.abort.take() else {
             return;
         };
         abort.abort();
-        self.query_error_decision = None;
-        self.query_run_id += 1;
-        if let Some(tab) = self.query_tabs.iter_mut().find(|tab| {
+        self.query.error_decision = None;
+        self.query.run_id += 1;
+        if let Some(tab) = self.query.tabs.iter_mut().find(|tab| {
             matches!(
                 tab.outcome,
                 QueryOutcome::Running | QueryOutcome::StatementError { .. }
@@ -8953,12 +8582,13 @@ impl Workspace {
     }
 
     fn node_selector(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let connected = self.connected.as_ref()?;
+        let connected = self.connection.connected.as_ref()?;
         let connection = self
+            .connection
             .connections
             .iter()
             .find(|connection| connection.name == connected.name)?;
-        let health = self.endpoint_health.get(&connected.name);
+        let health = self.connection.endpoint_health.get(&connected.name);
         // A cluster that puts any two of these nodes on different shards
         // makes the picker label every node's shard in that cluster.
         let shard_cluster = health.and_then(|health| {
@@ -9002,7 +8632,7 @@ impl Workspace {
             Some(name) => format!("Cluster: {name}"),
             None => active_name,
         };
-        let action_context = self.query_tabs[self.active_query_tab]
+        let action_context = self.query.tabs[self.query.active_tab]
             .editor
             .focus_handle(cx);
 
@@ -9036,19 +8666,25 @@ impl Workspace {
     }
 
     fn connection_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected = self.selected.and_then(|index| self.connections.get(index));
+        let selected = self
+            .connection
+            .selected
+            .and_then(|index| self.connection.connections.get(index));
         let header_connection = self
+            .connection
             .connected
             .as_ref()
             .and_then(|connected| {
-                self.connections
+                self.connection
+                    .connections
                     .iter()
                     .find(|connection| connection.name == connected.name)
             })
             .or(selected);
         let selected_connected = selected
             .map(|connection| {
-                self.connected
+                self.connection
+                    .connected
                     .as_ref()
                     .map(|connected| connected.name.as_str())
                     == Some(connection.name.as_str())
@@ -9095,7 +8731,7 @@ impl Workspace {
                             .rounded(px(3.))
                             .border_1()
                             .map(|button| {
-                                if self.connected.is_none() {
+                                if self.connection.connected.is_none() {
                                     // Disabled: the fleet view is per-connection.
                                     button
                                         .border_color(theme::disabled_border())
@@ -9152,7 +8788,7 @@ impl Workspace {
                             .rounded(px(3.))
                             .border_1()
                             .map(|button| {
-                                if self.connected.is_none() {
+                                if self.connection.connected.is_none() {
                                     button
                                         .border_color(theme::disabled_border())
                                         .child(
@@ -9206,7 +8842,7 @@ impl Workspace {
                             .rounded(px(3.))
                             .border_1()
                             .map(|button| {
-                                if self.connected.is_none() {
+                                if self.connection.connected.is_none() {
                                     // Disabled; running from an existing tab
                                     // still gets the connect-first warning.
                                     button
@@ -9328,7 +8964,7 @@ impl Workspace {
                                 .rounded(px(3.))
                                 .border_1()
                                 .map(|button| {
-                                    if self.connecting.is_some() {
+                                    if self.connection.connecting.is_some() {
                                         button
                                             .border_color(theme::border())
                                             .child(
@@ -9396,7 +9032,10 @@ impl Workspace {
     }
 
     fn cluster_overview(&self) -> impl IntoElement {
-        let selected = self.selected.and_then(|index| self.connections.get(index));
+        let selected = self
+            .connection
+            .selected
+            .and_then(|index| self.connection.connections.get(index));
         let nodes = selected
             .map(|connection| {
                 connection
@@ -9404,15 +9043,16 @@ impl Workspace {
                     .iter()
                     .enumerate()
                     .map(|(index, configured_node)| {
-                        let reachable =
-                            self.endpoint_health
-                                .get(&connection.name)
-                                .and_then(|health| {
-                                    health
-                                        .iter()
-                                        .find(|node| node.node_index == index)
-                                        .map(|node| node.reachable)
-                                });
+                        let reachable = self
+                            .connection
+                            .endpoint_health
+                            .get(&connection.name)
+                            .and_then(|health| {
+                                health
+                                    .iter()
+                                    .find(|node| node.node_index == index)
+                                    .map(|node| node.reachable)
+                            });
                         let (label, color) = match reachable {
                             Some(true) => ("reachable", theme::success()),
                             Some(false) => ("failed", theme::danger()),
@@ -9472,7 +9112,7 @@ impl Workspace {
     /// servers said. Absent topology (never connected, LBs, Cloud)
     /// renders nothing.
     fn topology_section(&self, connection: &ConnectionConfig) -> Option<impl IntoElement> {
-        let health = self.endpoint_health.get(&connection.name)?;
+        let health = self.connection.endpoint_health.get(&connection.name)?;
         // cluster -> shard -> node display names, insertion-ordered.
         type Shards = Vec<(u64, Vec<String>)>;
         let mut clusters: Vec<(String, Shards)> = Vec::new();
@@ -9598,7 +9238,8 @@ impl Workspace {
 
     fn schema_object_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self
-            .selected_schema_object
+            .schema
+            .selected_object
             .as_ref()
             .expect("schema object panel requires a selection");
         let cardinalities = selected.cardinalities.clone();
@@ -9610,6 +9251,7 @@ impl Workspace {
         let advisor_rows = selected.object.total_rows.unwrap_or(0);
         // In cluster scope the generated statements run ON CLUSTER.
         let advisor_cluster = self
+            .connection
             .connected
             .as_ref()
             .and_then(|connected| connected.apply_cluster.clone());
@@ -9923,7 +9565,7 @@ impl Workspace {
                                 .hover(|button| button.text_color(theme::text()).cursor_pointer())
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(selected) = &mut this.selected_schema_object {
+                            if let Some(selected) = &mut this.schema.selected_object {
                                 selected.tab = button_tab;
                                 cx.notify();
                             }
@@ -10480,14 +10122,15 @@ impl Workspace {
 
     fn query_editor_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_rows = self
-            .query_tabs
+            .query
+            .tabs
             .iter()
             .enumerate()
             .map(|(index, tab)| {
                 let tab_id = tab.id;
-                let multiple = self.query_tabs.len() > 1;
-                let has_right = index + 1 < self.query_tabs.len();
-                let active = index == self.active_query_tab;
+                let multiple = self.query.tabs.len() > 1;
+                let has_right = index + 1 < self.query.tabs.len();
+                let active = index == self.query.active_tab;
                 // Tail tabs are labelled "Tail N" and wear a steel-blue,
                 // top-rounded border so they read as a distinct live view.
                 let tail_number = tab.tail.as_ref().map(|state| state.number);
@@ -10523,7 +10166,7 @@ impl Workspace {
                             })
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.active_query_tab = index;
+                        this.query.active_tab = index;
                         cx.notify();
                     }))
                     // Drag to reorder: a ghost of the label follows the
@@ -10563,7 +10206,7 @@ impl Workspace {
                     })
                     .gap_2()
                     .child(label)
-                    .when(self.query_tabs.len() > 1, |tab_row| {
+                    .when(self.query.tabs.len() > 1, |tab_row| {
                         tab_row.child(
                             div()
                                 .id(("close-query-tab", tab_id))
@@ -10598,8 +10241,9 @@ impl Workspace {
             })
             .collect::<Vec<_>>();
         let active = self
-            .query_tabs
-            .get(self.active_query_tab)
+            .query
+            .tabs
+            .get(self.query.active_tab)
             .expect("query editor requires an active tab");
         let running = matches!(
             active.outcome,
@@ -10757,7 +10401,7 @@ impl Workspace {
                                         style.border_l_2().border_color(theme::accent())
                                     })
                                     .on_drop(cx.listener(|this, drag: &DragTab, _, cx| {
-                                        let last = this.query_tabs.len().saturating_sub(1);
+                                        let last = this.query.tabs.len().saturating_sub(1);
                                         this.reorder_query_tab(drag.index, last, cx);
                                     }))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -11182,7 +10826,7 @@ impl Workspace {
         let status = self
             .notice
             .clone()
-            .unwrap_or_else(|| match &self.connected {
+            .unwrap_or_else(|| match &self.connection.connected {
                 Some(connected) => format!(
                     "Connected to {} via {}",
                     connected.name, connected.active_endpoint
@@ -11267,10 +10911,10 @@ impl Workspace {
         Option<CommandLineSnapshot>,
         Option<char>,
     )> {
-        if !self.preferences.vim_mode || self.show_fleet || self.connected.is_none() {
+        if !self.preferences.vim_mode || self.show_fleet || self.connection.connected.is_none() {
             return None;
         }
-        let tab = self.query_tabs.get(self.active_query_tab)?;
+        let tab = self.query.tabs.get(self.query.active_tab)?;
         Some((
             tab.vim.mode() == modalkit::env::vim::VimMode::Normal,
             tab.vim.mode_label(),
@@ -11345,15 +10989,15 @@ impl Render for Workspace {
                 this.duplicate_connection(action.index, cx)
             }))
             .on_action(cx.listener(|this, action: &EditConnection, _, cx| {
-                this.selected = Some(action.index);
+                this.connection.selected = Some(action.index);
                 this.start_edit(cx)
             }))
             .on_action(cx.listener(|this, action: &DeleteConnection, _, cx| {
-                this.selected = Some(action.index);
+                this.connection.selected = Some(action.index);
                 this.request_delete(cx)
             }))
             .on_action(cx.listener(|this, action: &grid_spike::HeaderSort, _, cx| {
-                if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
                     let grid = tab.result_grid.clone();
                     grid.update(cx, |grid, cx| grid.header_sort_action(action, cx));
                 }
@@ -11362,13 +11006,13 @@ impl Render for Workspace {
             // to the window root, so handle it here and delegate to the
             // active tab's grid (cmd-C is handled on the grid itself).
             .on_action(cx.listener(|this, _: &grid_spike::Copy, _, cx| {
-                if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
                     let grid = tab.result_grid.clone();
                     grid.update(cx, |grid, cx| grid.copy_selected(cx));
                 }
             }))
             .on_action(cx.listener(|this, _: &grid_spike::CopyAsCsv, _, cx| {
-                if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
                     let grid = tab.result_grid.clone();
                     grid.update(cx, |grid, cx| grid.copy_selected_csv(cx));
                 }
@@ -11386,7 +11030,8 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, action: &ViewObjectDdl, window, cx| {
                 let object = this
-                    .schema_databases
+                    .schema
+                    .databases
                     .iter()
                     .find_map(|database| {
                         if database.meta.name != action.database {
@@ -11399,7 +11044,7 @@ impl Render for Workspace {
                     .or_else(|| {
                         // The sidebar may not have loaded that database's
                         // objects yet; the schema cache has them.
-                        this.schema_cache.as_ref().and_then(|cache| {
+                        this.schema.cache.as_ref().and_then(|cache| {
                             cache
                                 .snapshot()
                                 .object(&action.database, &action.object)
@@ -11436,7 +11081,7 @@ impl Render for Workspace {
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
                     // Any click that reaches the root dismisses an open
                     // filter popover; clicks inside it stop propagation.
-                    if let Some(tab) = this.query_tabs.get(this.active_query_tab) {
+                    if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
                         let grid = tab.result_grid.clone();
                         grid.update(cx, |grid, cx| {
                             grid.close_filter_panel(cx);
@@ -11473,10 +11118,10 @@ impl Render for Workspace {
                     this.history_width = width.clamp(240.0, 640.0);
                     cx.notify();
                 }
-                if let Some((target, last_y)) = this.query_resize {
+                if let Some((target, last_y)) = this.query.resize {
                     let current_y = f32::from(event.position.y);
                     let delta = current_y - last_y;
-                    if let Some(tab) = this.query_tabs.get_mut(this.active_query_tab) {
+                    if let Some(tab) = this.query.tabs.get_mut(this.query.active_tab) {
                         match target {
                             QueryResizeTarget::Editor => {
                                 tab.editor_height = (tab.editor_height + delta).clamp(80.0, 720.0);
@@ -11486,7 +11131,7 @@ impl Render for Workspace {
                             }
                         }
                     }
-                    this.query_resize = Some((target, current_y));
+                    this.query.resize = Some((target, current_y));
                     cx.notify();
                 }
             }))
@@ -11501,7 +11146,7 @@ impl Render for Workspace {
                         this.preferences.agent_pane_width = Some(this.agent.width);
                         let _ = save_preferences(&this.preferences);
                     }
-                    this.query_resize = None;
+                    this.query.resize = None;
                     this.history_resizing = None;
                 }),
             )
@@ -11512,14 +11157,14 @@ impl Render for Workspace {
                     this.resizing_sidebar_sections = false;
                     this.fleet.resizing_detail = false;
                     this.agent.resizing = false;
-                    this.query_resize = None;
+                    this.query.resize = None;
                     this.history_resizing = None;
                 }),
             )
             .when(self.export.is_some(), |root| {
                 root.child(self.export_overlay(cx))
             })
-            .when(self.pending_apply.is_some(), |root| {
+            .when(self.schema.pending_apply.is_some(), |root| {
                 root.child(self.apply_confirm_overlay(cx))
             })
             .when(self.palette.open, |root| {
@@ -11544,52 +11189,60 @@ impl Render for Workspace {
                             .when(self.show_preferences, |main| {
                                 main.child(self.preferences_panel(cx))
                             })
-                            .when(!self.show_preferences && self.form.is_some(), |main| {
-                                main.child(self.form_panel(cx))
-                            })
-                            .when(!self.show_preferences && self.form.is_none(), |main| {
-                                main.child(self.connection_toolbar(cx)).child(
-                                    div()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .when(self.show_ops, |content| {
-                                            content.child(self.ops_panel(cx))
-                                        })
-                                        .when(!self.show_ops && self.show_query_editor, |content| {
-                                            content.child(self.query_editor_panel(cx))
-                                        })
-                                        .when(
-                                            !self.show_ops
-                                                && !self.show_query_editor
-                                                && self.show_fleet,
-                                            |content| content.child(self.fleet_panel(cx)),
-                                        )
-                                        .when(
-                                            !self.show_ops
-                                                && !self.show_query_editor
-                                                && !self.show_fleet,
-                                            |content| {
-                                                content
-                                                    .when(
-                                                        self.selected_schema_object.is_some(),
-                                                        |content| {
-                                                            content.child(
-                                                                self.schema_object_panel(
-                                                                    window, cx,
-                                                                ),
-                                                            )
-                                                        },
-                                                    )
-                                                    .when(
-                                                        self.selected_schema_object.is_none(),
-                                                        |content| {
-                                                            content.child(self.cluster_overview())
-                                                        },
-                                                    )
-                                            },
-                                        ),
-                                )
-                            }),
+                            .when(
+                                !self.show_preferences && self.connection.form.is_some(),
+                                |main| main.child(self.form_panel(cx)),
+                            )
+                            .when(
+                                !self.show_preferences && self.connection.form.is_none(),
+                                |main| {
+                                    main.child(self.connection_toolbar(cx)).child(
+                                        div()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .when(self.show_ops, |content| {
+                                                content.child(self.ops_panel(cx))
+                                            })
+                                            .when(
+                                                !self.show_ops && self.show_query_editor,
+                                                |content| {
+                                                    content.child(self.query_editor_panel(cx))
+                                                },
+                                            )
+                                            .when(
+                                                !self.show_ops
+                                                    && !self.show_query_editor
+                                                    && self.show_fleet,
+                                                |content| content.child(self.fleet_panel(cx)),
+                                            )
+                                            .when(
+                                                !self.show_ops
+                                                    && !self.show_query_editor
+                                                    && !self.show_fleet,
+                                                |content| {
+                                                    content
+                                                        .when(
+                                                            self.schema.selected_object.is_some(),
+                                                            |content| {
+                                                                content.child(
+                                                                    self.schema_object_panel(
+                                                                        window, cx,
+                                                                    ),
+                                                                )
+                                                            },
+                                                        )
+                                                        .when(
+                                                            self.schema.selected_object.is_none(),
+                                                            |content| {
+                                                                content
+                                                                    .child(self.cluster_overview())
+                                                            },
+                                                        )
+                                                },
+                                            ),
+                                    )
+                                },
+                            ),
                     )
                     .when(self.agent.open, |row| {
                         row.child(self.agent_panel(window, cx))
@@ -11846,191 +11499,6 @@ fn is_range_predicate(conjunct: &str) -> bool {
     compacted.contains('<') || compacted.contains('>')
 }
 
-/// Split `text` into statement byte ranges on top-level semicolons, ignoring
-/// semicolons inside strings and comments. Ranges exclude the semicolon and may
-/// be blank; always returns at least one range.
-fn split_statements(text: &str) -> Vec<(usize, usize)> {
-    let bytes = text.as_bytes();
-    let mut segments: Vec<(usize, usize)> = Vec::new();
-    let mut start = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            quote @ (b'\'' | b'"' | b'`') => {
-                i += 1;
-                while i < bytes.len() {
-                    if bytes[i] == b'\\' && quote != b'`' {
-                        i += 2;
-                    } else if bytes[i] == quote {
-                        i += 1;
-                        break;
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            b'-' if bytes.get(i + 1) == Some(&b'-') => {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i += 2;
-                while i < bytes.len() {
-                    if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
-                        i += 2;
-                        break;
-                    }
-                    i += 1;
-                }
-            }
-            b';' => {
-                segments.push((start, i));
-                i += 1;
-                start = i;
-            }
-            _ => i += 1,
-        }
-    }
-    segments.push((start, text.len()));
-    segments
-}
-
-/// Resolve editor-local `@set name=value` declarations and `${name}` uses.
-/// Declarations come from the full editor buffer, while only declarations in
-/// the execution target are removed from the SQL sent to ClickHouse.
-fn resolve_query_variables(text: &str, editor_text: &str) -> Result<String, String> {
-    let mut variables = HashMap::new();
-    for (line_index, line) in editor_text.lines().enumerate() {
-        let trimmed = line.trim();
-        let directive = if trimmed == "@set" {
-            Some("")
-        } else {
-            trimmed
-                .strip_prefix("@set")
-                .filter(|rest| rest.starts_with(char::is_whitespace))
-        };
-        let Some(directive) = directive else {
-            continue;
-        };
-        let Some((name, value)) = directive.trim().split_once('=') else {
-            return Err(format!(
-                "Invalid query variable on line {}: use @set name=value",
-                line_index + 1
-            ));
-        };
-        let name = name.trim();
-        let value = value.trim();
-        let valid_name = name
-            .chars()
-            .next()
-            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
-            && name
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || character == '_');
-        if !valid_name {
-            return Err(format!(
-                "Invalid query variable name `{name}` on line {}",
-                line_index + 1
-            ));
-        }
-        if value.is_empty() {
-            return Err(format!(
-                "Query variable `{name}` has no value on line {}",
-                line_index + 1
-            ));
-        }
-        variables.insert(name.to_string(), value.to_string());
-    }
-
-    let mut sql = String::with_capacity(text.len());
-    for line in text.split_inclusive('\n') {
-        let content = line.strip_suffix('\n').unwrap_or(line);
-        let trimmed = content.trim();
-        let is_directive = trimmed == "@set"
-            || trimmed
-                .strip_prefix("@set")
-                .is_some_and(|rest| rest.starts_with(char::is_whitespace));
-        if is_directive {
-            if line.ends_with('\n') {
-                sql.push('\n');
-            }
-            continue;
-        }
-
-        let mut remaining = line;
-        while let Some(start) = remaining.find("${") {
-            sql.push_str(&remaining[..start]);
-            let placeholder = &remaining[start + 2..];
-            let Some(end) = placeholder.find('}') else {
-                return Err("Unclosed query variable placeholder".to_string());
-            };
-            let name = &placeholder[..end];
-            let Some(value) = variables.get(name) else {
-                return Err(format!(
-                    "Query variable `${{{name}}}` is not set; add @set {name}=value"
-                ));
-            };
-            sql.push_str(value);
-            remaining = &placeholder[end + 1..];
-        }
-        sql.push_str(remaining);
-    }
-    Ok(sql)
-}
-
-/// Return the statement containing the byte offset `cursor`. When the cursor
-/// sits in blank space between statements, prefer the nearest non-empty
-/// statement before it, then after it.
-/// The occurrence of `needle` in `text` closest to `cursor`, so a
-/// statement resolved by content lands on the instance the user acted
-/// on when the buffer holds identical twins.
-fn nearest_occurrence(text: &str, needle: &str, cursor: usize) -> Option<usize> {
-    if needle.is_empty() {
-        return None;
-    }
-    text.match_indices(needle)
-        .map(|(start, _)| {
-            let end = start + needle.len();
-            let distance = if cursor < start {
-                start - cursor
-            } else {
-                cursor.saturating_sub(end)
-            };
-            (distance, start)
-        })
-        .min()
-        .map(|(_, start)| start)
-}
-
-fn statement_at_cursor(text: &str, cursor: usize) -> Option<&str> {
-    let segments = split_statements(text);
-    let mut idx = segments
-        .iter()
-        .position(|&(start, end)| cursor >= start && cursor <= end)
-        .unwrap_or(segments.len() - 1);
-    // A caret just after a statement's semicolon is byte-wise the
-    // first position of the NEXT segment, but visually still on the
-    // finished statement's line (End, arrow-up to line end, click
-    // past the semicolon). If everything on this line behind the
-    // caret is a finished statement, it is the one meant.
-    if idx > 0 && cursor <= text.len() {
-        let line_start = text[..cursor].rfind('\n').map(|pos| pos + 1).unwrap_or(0);
-        let line_before_cursor = text[line_start..cursor].trim_end();
-        if line_before_cursor.ends_with(';') && segments[idx].0 >= line_start {
-            idx -= 1;
-        }
-    }
-    let pick = |i: usize| {
-        let (start, end) = segments[i];
-        let statement = text[start..end.min(text.len())].trim();
-        (!statement.is_empty()).then_some(statement)
-    };
-    pick(idx)
-        .or_else(|| (0..idx).rev().find_map(pick))
-        .or_else(|| ((idx + 1)..segments.len()).find_map(pick))
-}
-
 fn format_query_duration(duration: Duration) -> String {
     if duration.as_secs() >= 60 {
         let minutes = duration.as_secs() / 60;
@@ -12045,24 +11513,6 @@ fn format_query_duration(duration: Duration) -> String {
     } else {
         format!("{} ms", duration.as_millis())
     }
-}
-
-fn max_rows_from_limit(limit: Option<usize>) -> MaxRows {
-    match limit {
-        Some(1_000) => MaxRows::Rows1k,
-        Some(10_000) => MaxRows::Rows10k,
-        Some(50_000) => MaxRows::Rows50k,
-        Some(1_000_000) => MaxRows::Rows1m,
-        None => MaxRows::Unlimited,
-        _ => MaxRows::Rows100k,
-    }
-}
-
-fn tab_display_name(tab: &QueryTab) -> String {
-    tab.tail
-        .as_ref()
-        .map(|tail| format!("Tail {}", tail.number))
-        .unwrap_or_else(|| tab.name.clone())
 }
 
 /// The two zeDB theme configs (Zed-style JSON), embedded.
@@ -12313,10 +11763,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        format_engine_definition, max_rows_from_limit, resolve_query_variables, split_statements,
-        statement_at_cursor, MaxRows,
-    };
+    use super::format_engine_definition;
 
     #[test]
     fn engine_definition_is_split_at_top_level_clauses() {
@@ -12328,146 +11775,5 @@ mod tests {
             formatted,
             "ENGINE = MergeTree\nORDER BY id\nPARTITION BY toYYYYMM(created_at)\nSETTINGS index_granularity = 8192"
         );
-    }
-
-    fn membership(cluster: &str, shard: u64, replica: u64) -> zedb_ch::ClusterMembership {
-        zedb_ch::ClusterMembership {
-            cluster: cluster.into(),
-            shard,
-            replica,
-        }
-    }
-
-    #[test]
-    fn differentiating_cluster_finds_shard_splits_only() {
-        // Replicas of the same shard: interchangeable.
-        let node_a = vec![membership("default", 1, 1), membership("main", 1, 1)];
-        let node_b = vec![membership("default", 1, 1), membership("main", 1, 2)];
-        assert_eq!(super::differentiating_cluster(&node_a, &node_b), None);
-
-        // Same nodes also form a sharded cluster: that one differentiates,
-        // even though they replicate each other elsewhere.
-        let node_a = vec![membership("main", 1, 1), membership("sharded", 1, 1)];
-        let node_b = vec![membership("main", 1, 2), membership("sharded", 2, 1)];
-        assert_eq!(
-            super::differentiating_cluster(&node_a, &node_b),
-            Some("sharded".into())
-        );
-
-        // Unknown topology (empty memberships) never differentiates.
-        assert_eq!(super::differentiating_cluster(&[], &node_b), None);
-    }
-
-    #[test]
-    fn split_statements_yields_every_statement_in_order() {
-        let text = "SELECT 1;\n-- a; comment\nSELECT ';';\n\nSELECT 3";
-        let statements: Vec<&str> = split_statements(text)
-            .into_iter()
-            .map(|(start, end)| text[start..end].trim())
-            .filter(|statement| !statement.is_empty())
-            .collect();
-        assert_eq!(
-            statements,
-            vec!["SELECT 1", "-- a; comment\nSELECT ';'", "SELECT 3"]
-        );
-    }
-
-    #[test]
-    fn query_variables_are_removed_and_substituted() {
-        let text = "@set db=KPARTS\nselect count() from ${db}.ContactsDim";
-        assert_eq!(
-            resolve_query_variables(text, text).unwrap(),
-            "\nselect count() from KPARTS.ContactsDim"
-        );
-    }
-
-    #[test]
-    fn query_variables_apply_to_a_selected_statement() {
-        let editor = "@set db=KPARTS\nselect 1;\nselect count() from ${db}.ContactsDim";
-        let selected = "select count() from ${db}.ContactsDim";
-        assert_eq!(
-            resolve_query_variables(selected, editor).unwrap(),
-            "select count() from KPARTS.ContactsDim"
-        );
-    }
-
-    #[test]
-    fn query_variables_report_invalid_or_missing_values() {
-        assert_eq!(
-            resolve_query_variables("select ${db}.table", "select ${db}.table").unwrap_err(),
-            "Query variable `${db}` is not set; add @set db=value"
-        );
-        assert_eq!(
-            resolve_query_variables("@set db\nselect 1", "@set db\nselect 1").unwrap_err(),
-            "Invalid query variable on line 1: use @set name=value"
-        );
-    }
-
-    #[test]
-    fn saved_tab_row_limits_restore_to_the_matching_choice() {
-        assert!(matches!(max_rows_from_limit(Some(1_000)), MaxRows::Rows1k));
-        assert!(matches!(
-            max_rows_from_limit(Some(100_000)),
-            MaxRows::Rows100k
-        ));
-        assert!(matches!(max_rows_from_limit(None), MaxRows::Unlimited));
-        assert!(matches!(max_rows_from_limit(Some(123)), MaxRows::Rows100k));
-    }
-
-    #[test]
-    fn statement_at_cursor_picks_statement_under_cursor() {
-        let text = "SELECT 1;\nSELECT 2;\nSELECT 3";
-        assert_eq!(statement_at_cursor(text, 3), Some("SELECT 1"));
-        assert_eq!(statement_at_cursor(text, 12), Some("SELECT 2"));
-        assert_eq!(statement_at_cursor(text, text.len()), Some("SELECT 3"));
-    }
-
-    #[test]
-    fn statement_at_cursor_end_of_line_stays_on_that_line() {
-        // The caret after a statement's semicolon (End, arrow-up to a
-        // shorter line's end) is byte-wise inside the next segment but
-        // visually on the finished statement's line; it must pick the
-        // statement on its own line, not the neighbor below.
-        let text = "DESCRIBE sat.arrayValues;\ndescribe sat.complexTypes;";
-        let after_first_semicolon = text.find(';').unwrap() + 1;
-        assert_eq!(
-            statement_at_cursor(text, after_first_semicolon),
-            Some("DESCRIBE sat.arrayValues")
-        );
-        // Same-line trailing whitespace after the semicolon too.
-        let text = "SELECT 1;  \nSELECT 2;";
-        assert_eq!(statement_at_cursor(text, 10), Some("SELECT 1"));
-        assert_eq!(statement_at_cursor(text, 11), Some("SELECT 1"));
-        // But the start of the NEXT line belongs to the next statement.
-        assert_eq!(statement_at_cursor(text, 12), Some("SELECT 2"));
-        // And a second statement beginning on the same line after the
-        // semicolon still wins once the caret is inside it.
-        let text = "SELECT 1; SELECT 2;";
-        assert_eq!(statement_at_cursor(text, 14), Some("SELECT 2"));
-    }
-
-    #[test]
-    fn statement_at_cursor_handles_single_statement() {
-        assert_eq!(statement_at_cursor("SELECT 1", 4), Some("SELECT 1"));
-        assert_eq!(statement_at_cursor("", 0), None);
-        assert_eq!(statement_at_cursor("  \n ; ; ", 3), None);
-    }
-
-    #[test]
-    fn statement_at_cursor_ignores_semicolons_in_strings_and_comments() {
-        let text = "SELECT ';' AS a; -- trailing; comment\nSELECT /* not; here */ 2";
-        assert_eq!(statement_at_cursor(text, 4), Some("SELECT ';' AS a"));
-        assert_eq!(
-            statement_at_cursor(text, text.len()),
-            Some("-- trailing; comment\nSELECT /* not; here */ 2")
-        );
-    }
-
-    #[test]
-    fn statement_at_cursor_falls_back_to_nearest_statement_from_blank_space() {
-        let text = "SELECT 1;\n\n  \nSELECT 2;\n\n";
-        assert_eq!(statement_at_cursor(text, text.len()), Some("SELECT 2"));
-        let leading = ";\nSELECT 9";
-        assert_eq!(statement_at_cursor(leading, 0), Some("SELECT 9"));
     }
 }

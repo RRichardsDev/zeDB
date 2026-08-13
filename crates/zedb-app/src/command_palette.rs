@@ -98,7 +98,7 @@ impl PaletteCommand {
             | Self::NewQuery
             | Self::ToggleFleet
             | Self::ToggleOps
-            | Self::ExplainQuery => workspace.connected.is_some(),
+            | Self::ExplainQuery => workspace.connection.connected.is_some(),
             Self::ExportResults => workspace.export_available(),
             _ => true,
         }

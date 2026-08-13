@@ -6,7 +6,7 @@
 //! changing since the last sync is last-writer-wins (local pushes; the
 //! repo's version stays in git history).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use gpui::{div, prelude::*, px, svg, Context, Entity};
 use zedb_core::{git, sync};
@@ -66,103 +66,11 @@ impl SettingsSyncState {
     }
 }
 
-enum TickResult {
-    UpToDate,
-    /// The repo had newer settings; apply this payload locally.
-    Applied(Box<sync::Payload>, String),
-    /// Local settings were committed and pushed; true when both sides
-    /// had changed and local won.
-    Pushed {
-        conflicted: bool,
-    },
-    Failed(String),
-}
-
-fn hostname() -> String {
-    std::process::Command::new("hostname")
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "unknown".into())
-}
-
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0)
-}
-
-/// The blocking body of one sync tick, run off the UI thread.
-fn run_tick(
-    root: &Path,
-    preferences: &zedb_core::Preferences,
-    connections: &[zedb_core::ConnectionConfig],
-) -> TickResult {
-    let pull_failed = git::has_upstream(root) && git::pull(root).is_err();
-
-    let repo_payload = match sync::read_payload(root) {
-        Ok(payload) => payload,
-        Err(error) => return TickResult::Failed(error),
-    };
-    let local_hash = sync::content_hash(preferences, connections);
-    let repo_hash = repo_payload.as_ref().map(sync::payload_hash);
-    let state = sync::load_state();
-
-    match sync::reconcile(
-        &local_hash,
-        repo_hash.as_deref(),
-        state.last_synced_hash.as_deref(),
-    ) {
-        sync::Reconcile::UpToDate => {
-            if state.last_synced_hash.as_deref() != Some(local_hash.as_str()) {
-                sync::save_state(&sync::SyncState {
-                    last_synced_hash: Some(local_hash),
-                    last_synced_at: Some(unix_now()),
-                });
-            }
-            TickResult::UpToDate
-        }
-        sync::Reconcile::ApplyRepo => {
-            let payload = repo_payload.expect("ApplyRepo implies a payload");
-            let hash = repo_hash.expect("ApplyRepo implies a hash");
-            TickResult::Applied(Box::new(payload), hash)
-        }
-        decision @ (sync::Reconcile::PushLocal | sync::Reconcile::PushLocalConflict) => {
-            // A failed pull means we cannot know whether the remote moved;
-            // pushing anyway risks silently overwriting it. Wait for a
-            // tick that can pull.
-            if pull_failed {
-                return TickResult::Failed("could not pull the sync repo; push postponed".into());
-            }
-            let payload = sync::build_payload(preferences, connections, unix_now(), hostname());
-            if let Err(error) = sync::write_payload(root, &payload) {
-                return TickResult::Failed(error);
-            }
-            let message = format!("settings: update from {}", payload.updated_by);
-            if let Err(error) = git::commit_paths(root, &[sync::PAYLOAD_FILE.to_string()], &message)
-            {
-                return TickResult::Failed(format!("commit failed: {error}"));
-            }
-            if let Err(first) = git::push_setting_upstream(root) {
-                // One retry after a fast-forward pull; a diverged repo
-                // stays diverged and reports the push error.
-                let retried = git::pull(root).and_then(|_| git::push_setting_upstream(root));
-                if retried.is_err() {
-                    return TickResult::Failed(format!("push failed: {first}"));
-                }
-            }
-            sync::save_state(&sync::SyncState {
-                last_synced_hash: Some(local_hash.clone()),
-                last_synced_at: Some(unix_now()),
-            });
-            TickResult::Pushed {
-                conflicted: matches!(decision, sync::Reconcile::PushLocalConflict),
-            }
-        }
-    }
 }
 
 impl Workspace {
@@ -186,8 +94,9 @@ impl Workspace {
         self.settings_sync.generation += 1;
         let generation = self.settings_sync.generation;
         let preferences = self.preferences.clone();
-        let connections = self.connections.clone();
-        let handle = rt::tokio().spawn(async move { run_tick(&root, &preferences, &connections) });
+        let connections = self.connection.connections.clone();
+        let handle = rt::tokio()
+            .spawn(async move { sync::run_sync_tick(&root, &preferences, &connections) });
         cx.spawn(async move |this, cx| {
             let result = handle.await;
             this.update(cx, |this, cx| {
@@ -196,13 +105,13 @@ impl Workspace {
                     return;
                 }
                 match result {
-                    Ok(TickResult::UpToDate) => {
+                    Ok(sync::SyncTickResult::UpToDate) => {
                         this.settings_sync.status = Some(("Synced".into(), false));
                     }
-                    Ok(TickResult::Applied(payload, hash)) => {
+                    Ok(sync::SyncTickResult::Applied(payload, hash)) => {
                         this.settings_sync_apply(*payload, hash, cx);
                     }
-                    Ok(TickResult::Pushed { conflicted }) => {
+                    Ok(sync::SyncTickResult::Pushed { conflicted }) => {
                         this.settings_sync.status = Some((
                             if conflicted {
                                 "Pushed local settings; the repo's version stays in git history"
@@ -213,7 +122,7 @@ impl Workspace {
                             false,
                         ));
                     }
-                    Ok(TickResult::Failed(error)) => {
+                    Ok(sync::SyncTickResult::Failed(error)) => {
                         this.settings_sync.status = Some((error, true));
                     }
                     Err(_) => {}
@@ -234,7 +143,7 @@ impl Workspace {
         let vim_was_on = self.preferences.vim_mode;
         self.preferences = sync::apply_preferences(&self.preferences, &payload.preferences);
         if self.preferences.vim_mode && !vim_was_on {
-            for tab in &mut self.query_tabs {
+            for tab in &mut self.query.tabs {
                 let editor = tab.editor.read(cx);
                 let cursor = editor.cursor_position();
                 tab.vim.reset(
@@ -250,16 +159,17 @@ impl Workspace {
             self.settings_sync.status = Some((format!("could not save: {error}"), true));
             return;
         }
-        self.connections = payload.connections.clone();
-        if let Err(error) = zedb_core::save_connections(&self.connections) {
+        self.connection.connections = payload.connections.clone();
+        if let Err(error) = zedb_core::save_connections(&self.connection.connections) {
             self.settings_sync.status = Some((format!("could not save: {error}"), true));
             return;
         }
         if self
+            .connection
             .selected
-            .is_some_and(|index| index >= self.connections.len())
+            .is_some_and(|index| index >= self.connection.connections.len())
         {
-            self.selected = None;
+            self.connection.selected = None;
         }
         sync::save_state(&sync::SyncState {
             last_synced_hash: Some(hash),
@@ -277,7 +187,10 @@ impl Workspace {
     /// pushing its own defaults over them.
     fn settings_sync_seed_stamp(&self) {
         sync::save_state(&sync::SyncState {
-            last_synced_hash: Some(sync::content_hash(&self.preferences, &self.connections)),
+            last_synced_hash: Some(sync::content_hash(
+                &self.preferences,
+                &self.connection.connections,
+            )),
             last_synced_at: Some(unix_now()),
         });
     }
@@ -985,7 +898,9 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::Path;
+
+    use zedb_core::sync::{run_sync_tick as run_tick, SyncTickResult as TickResult};
     use zedb_core::{sync, ConnectionConfig, ConnectionNode, EnvTier, Preferences};
 
     fn git_in(dir: &Path, args: &[&str]) {

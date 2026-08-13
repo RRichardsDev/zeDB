@@ -84,18 +84,20 @@ fn default_path(format: ExportFormat) -> String {
 impl Workspace {
     /// Palette entry: only makes sense with a displayed result.
     pub(crate) fn export_available(&self) -> bool {
-        self.connected.is_some()
+        self.connection.connected.is_some()
             && self
-                .query_tabs
-                .get(self.active_query_tab)
+                .query
+                .tabs
+                .get(self.query.active_tab)
                 .and_then(|tab| tab.displayed_statement.as_ref())
                 .is_some()
     }
 
     pub(crate) fn export_open(&mut self, cx: &mut Context<Self>) {
         let Some(statement) = self
-            .query_tabs
-            .get(self.active_query_tab)
+            .query
+            .tabs
+            .get(self.query.active_tab)
             .and_then(|tab| tab.displayed_statement.clone())
         else {
             self.flash_warning("Run a query first, then export its results", cx);
@@ -171,7 +173,7 @@ impl Workspace {
     }
 
     fn export_start(&mut self, cx: &mut Context<Self>) {
-        let Some(connected) = self.connected.as_ref() else {
+        let Some(connected) = self.connection.connected.as_ref() else {
             return;
         };
         let config = connected.client_config.clone();
@@ -286,8 +288,9 @@ impl Workspace {
         };
         let running = export.running;
         let max_rows_label = self
-            .query_tabs
-            .get(self.active_query_tab)
+            .query
+            .tabs
+            .get(self.query.active_tab)
             .map(|tab| tab.max_rows)
             .map(|max_rows| (max_rows.label().to_string(), max_rows.limit()))
             .unwrap_or_else(|| ("100k".into(), Some(100_000)));

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::connection::ConnectionConfig;
+use crate::git;
 use crate::preferences::Preferences;
 
 /// The payload file at the repo root.
@@ -143,6 +144,101 @@ pub enum Reconcile {
     /// Both moved since the last sync. Local wins and is pushed; the
     /// repo's version stays reachable in git history.
     PushLocalConflict,
+}
+
+/// Result of one blocking settings-sync pass. UI and CLI adapters decide how
+/// to present these outcomes; git and reconciliation policy stay in core.
+#[derive(Debug)]
+pub enum SyncTickResult {
+    UpToDate,
+    Applied(Box<Payload>, String),
+    Pushed { conflicted: bool },
+    Failed(String),
+}
+
+/// Pull, reconcile, and persist one settings-sync pass.
+///
+/// This function is blocking by design. Adapters must run it away from their
+/// event loop and then apply the returned outcome on their own thread.
+pub fn run_sync_tick(
+    root: &Path,
+    preferences: &Preferences,
+    connections: &[ConnectionConfig],
+) -> SyncTickResult {
+    let pull_failed = git::has_upstream(root) && git::pull(root).is_err();
+    let repo_payload = match read_payload(root) {
+        Ok(payload) => payload,
+        Err(error) => return SyncTickResult::Failed(error),
+    };
+    let local_hash = content_hash(preferences, connections);
+    let repo_hash = repo_payload.as_ref().map(payload_hash);
+    let state = load_state();
+
+    match reconcile(
+        &local_hash,
+        repo_hash.as_deref(),
+        state.last_synced_hash.as_deref(),
+    ) {
+        Reconcile::UpToDate => {
+            if state.last_synced_hash.as_deref() != Some(local_hash.as_str()) {
+                save_state(&SyncState {
+                    last_synced_hash: Some(local_hash),
+                    last_synced_at: Some(unix_now()),
+                });
+            }
+            SyncTickResult::UpToDate
+        }
+        Reconcile::ApplyRepo => {
+            let payload = repo_payload.expect("ApplyRepo implies a payload");
+            let hash = repo_hash.expect("ApplyRepo implies a hash");
+            SyncTickResult::Applied(Box::new(payload), hash)
+        }
+        decision @ (Reconcile::PushLocal | Reconcile::PushLocalConflict) => {
+            if pull_failed {
+                return SyncTickResult::Failed(
+                    "could not pull the sync repo; push postponed".into(),
+                );
+            }
+            let payload = build_payload(preferences, connections, unix_now(), hostname());
+            if let Err(error) = write_payload(root, &payload) {
+                return SyncTickResult::Failed(error);
+            }
+            let message = format!("settings: update from {}", payload.updated_by);
+            if let Err(error) = git::commit_paths(root, &[PAYLOAD_FILE.to_string()], &message) {
+                return SyncTickResult::Failed(format!("commit failed: {error}"));
+            }
+            if let Err(first) = git::push_setting_upstream(root) {
+                let retried = git::pull(root).and_then(|_| git::push_setting_upstream(root));
+                if retried.is_err() {
+                    return SyncTickResult::Failed(format!("push failed: {first}"));
+                }
+            }
+            save_state(&SyncState {
+                last_synced_hash: Some(local_hash),
+                last_synced_at: Some(unix_now()),
+            });
+            SyncTickResult::Pushed {
+                conflicted: matches!(decision, Reconcile::PushLocalConflict),
+            }
+        }
+    }
+}
+
+fn hostname() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
 }
 
 pub fn reconcile(

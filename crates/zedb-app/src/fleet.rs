@@ -319,7 +319,7 @@ impl Workspace {
             self.notice_warning = false;
             // Pin the engine to the server we are actually connected
             // to instead of the template's placeholder version.
-            if let Some(connected) = &self.connected {
+            if let Some(connected) = &self.connection.connected {
                 let config = connected.client_config.clone();
                 let root = expanded.clone();
                 let handle = rt::tokio()
@@ -516,7 +516,7 @@ impl Workspace {
         let Some(repo) = self.fleet.repo.clone() else {
             return;
         };
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             self.fleet.fetch_error = Some("Connect to a cluster to load fleet status".into());
             cx.notify();
             return;
@@ -615,8 +615,9 @@ impl Workspace {
     }
 
     pub(crate) fn fleet_tier(&self) -> zedb_core::EnvTier {
-        self.selected
-            .and_then(|index| self.connections.get(index))
+        self.connection
+            .selected
+            .and_then(|index| self.connection.connections.get(index))
             .map(|connection| connection.tier)
             .unwrap_or(zedb_core::EnvTier::Dev)
     }
@@ -661,7 +662,7 @@ impl Workspace {
         let Some(repo) = self.fleet.repo.clone() else {
             return;
         };
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         let cluster = self.fleet.selected_cluster.clone();
@@ -833,7 +834,7 @@ impl Workspace {
         let Some(repo) = self.fleet.repo.clone() else {
             return;
         };
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         let Some(binary) = zedb_ch::cached_binary(&repo.config.engine.version) else {
@@ -929,7 +930,7 @@ impl Workspace {
         let Some(repo) = self.fleet.repo.clone() else {
             return;
         };
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         let Some(binary) = zedb_ch::cached_binary(&repo.config.engine.version) else {

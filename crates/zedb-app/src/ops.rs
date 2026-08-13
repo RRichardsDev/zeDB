@@ -285,7 +285,7 @@ fn format_elapsed(seconds: f64) -> String {
 
 impl Workspace {
     pub(crate) fn ops_toggle(&mut self, cx: &mut Context<Self>) {
-        if self.connected.is_none() {
+        if self.connection.connected.is_none() {
             self.flash_warning("Connect to a cluster to see its ops view", cx);
             return;
         }
@@ -306,7 +306,7 @@ impl Workspace {
         self.ops_clear_data();
         // The new target may not know the old scope's cluster.
         self.ops.scope = OpsScope::Node;
-        if self.connected.is_none() {
+        if self.connection.connected.is_none() {
             self.show_ops = false;
         } else if self.show_ops {
             self.ops_start_poll(cx);
@@ -334,10 +334,10 @@ impl Workspace {
     /// dropdown's options. The implicit per-node "default" cluster is
     /// not a topology.
     pub(crate) fn ops_cluster_options(&self) -> Vec<String> {
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return Vec::new();
         };
-        let Some(health) = self.endpoint_health.get(&connected.name) else {
+        let Some(health) = self.connection.endpoint_health.get(&connected.name) else {
             return Vec::new();
         };
         let mut clusters: Vec<String> = health
@@ -382,7 +382,7 @@ impl Workspace {
                 .update(cx, |this, cx| {
                     let live = this.ops.poll_generation == generation
                         && this.show_ops
-                        && this.connected.is_some();
+                        && this.connection.connected.is_some();
                     if live {
                         this.ops.tick += 1;
                         this.ops_fetch(cx);
@@ -404,7 +404,7 @@ impl Workspace {
         if self.ops.fetch_in_flight {
             return;
         }
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         self.ops.fetch_in_flight = true;
@@ -569,7 +569,7 @@ impl Workspace {
         if self.ops.slow_fetch_in_flight {
             return;
         }
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         self.ops.slow_fetch_in_flight = true;
@@ -731,7 +731,7 @@ impl Workspace {
     }
 
     fn ops_kill(&mut self, query_id: String, cx: &mut Context<Self>) {
-        let Some(connected) = &self.connected else {
+        let Some(connected) = &self.connection.connected else {
             return;
         };
         if connected.client_config.read_only {
@@ -776,6 +776,7 @@ impl Workspace {
 
     pub(crate) fn ops_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let read_only = self
+            .connection
             .connected
             .as_ref()
             .map(|connected| connected.client_config.read_only)

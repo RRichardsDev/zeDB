@@ -1,8 +1,27 @@
 # Structure improvements
 
-Status: proposal for review, not an accepted refactor plan.
+Status: accepted direction, incremental refactor in progress.
 
 Date reviewed: 2026-08-13.
+
+## Progress
+
+- Query-buffer parsing, cursor targeting, and local variable expansion now
+  live behind `features/query`, with focused tests beside the implementation.
+- Connection forms, drafts, topology and health models now belong to
+  `features/connections`; schema cache projections and inspector state belong
+  to `features/schema`; query tabs and tail lifecycle state belong to
+  `features/query`.
+- `Workspace` now composes `ConnectionState`, `SchemaState`, and `QueryState`
+  instead of storing those features as several dozen unrelated flat fields.
+  Existing orchestration still lives on `Workspace` for now, which keeps this
+  tranche structural and behavior-preserving.
+- The blocking settings-sync workflow now belongs to `zedb-core::sync`.
+  `zedb-app` schedules it and translates its typed result into UI state.
+- `Workspace::new` still performs the same initialization, but delegates the
+  three extracted feature aggregates to their own constructors. Further
+  decomposition remains deliberately deferred because this constructor has a
+  critical blast radius.
 
 ## Executive assessment
 

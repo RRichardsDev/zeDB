@@ -13,7 +13,7 @@ use crate::{rt, theme, Workspace};
 impl Workspace {
     /// Explain the statement Run would run: same targeting rules.
     pub(crate) fn explain_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.connected.is_none() {
+        if self.connection.connected.is_none() {
             self.flash_warning("Connect to a cluster before explaining a query", cx);
             return;
         }
@@ -22,11 +22,11 @@ impl Workspace {
             self.flash_warning("Nothing to explain", cx);
             return;
         }
-        let Some(connected) = self.connected.as_ref() else {
+        let Some(connected) = self.connection.connected.as_ref() else {
             return;
         };
         let config = connected.client_config.clone();
-        let Some(tab) = self.query_tabs.get(self.active_query_tab) else {
+        let Some(tab) = self.query.tabs.get(self.query.active_tab) else {
             return;
         };
         let tab_id = tab.id;
@@ -47,7 +47,7 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 match outcome {
                     Ok(Ok(plan)) => {
-                        if let Some(tab) = this.query_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                        if let Some(tab) = this.query.tabs.iter_mut().find(|tab| tab.id == tab_id) {
                             tab.explain = Some(plan);
                         }
                     }
@@ -65,8 +65,9 @@ impl Workspace {
     /// statement at the cursor.
     pub(crate) fn run_target_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) -> String {
         self.selected_text(window, cx).unwrap_or_else(|| {
-            self.query_tabs
-                .get(self.active_query_tab)
+            self.query
+                .tabs
+                .get(self.query.active_tab)
                 .map(|tab| {
                     tab.editor.update(cx, |editor, _| {
                         let text = editor.value().to_string();
@@ -123,7 +124,7 @@ impl Workspace {
                                     .cursor_pointer()
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(tab) = this.query_tabs.get_mut(this.active_query_tab) {
+                                if let Some(tab) = this.query.tabs.get_mut(this.query.active_tab) {
                                     tab.explain = None;
                                 }
                                 cx.notify();
