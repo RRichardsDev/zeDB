@@ -857,3 +857,8 @@ Zero visual change; prerequisite for any future theme system.
 - Large connection, query execution, live-tail, agent, fleet, schema, and
   settings-sync modules were decomposed along those boundaries without
   changing their method names, call paths, or runtime behavior.
+- The ClickHouse driver crate was decomposed by responsibility while retaining
+  its public API. HTTP streaming, export, and topology; native connection,
+  decoding, and pooling; migration execution and tracking; schema loading and
+  caching; regeneration phases; and MCP tool handling now have explicit module
+  owners instead of sharing large implementation files.
