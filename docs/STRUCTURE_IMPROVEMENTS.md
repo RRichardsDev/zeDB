@@ -19,6 +19,10 @@ Date reviewed: 2026-08-13.
 - Query history, saved tabs, drawer filtering, rename state, and drawer layout
   now share a `HistoryState` owner instead of adding another set of fields to
   the application shell.
+- Query editor lifecycle, tab management, tailing, input handling, and query
+  execution now live in focused `features/query` modules. This removes more
+  than 3,200 lines from `main.rs`; the crate root retains shell composition and
+  cross-feature rendering rather than the detailed query controller.
 - The blocking settings-sync workflow now belongs to `zedb-core::sync`.
   `zedb-app` schedules it and translates its typed result into UI state.
 - `Workspace::new` still performs the same initialization, but delegates the

@@ -1,5 +1,10 @@
 mod buffer;
+mod editor;
+mod execution;
+mod input;
 mod state;
+mod tabs;
+mod tail_controller;
 
 pub(crate) use buffer::{
     nearest_occurrence, resolve_query_variables, split_statements, statement_at_cursor,

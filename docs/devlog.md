@@ -827,6 +827,9 @@ Zero visual change; prerequisite for any future theme system.
 - Query history and saved-tab drawer state now have the same explicit feature
   ownership boundary, including search, rename, clear confirmation, and resize
   state.
+- The query controller moved out of `main.rs` and was split into editor, tabs,
+  tail, input, and execution modules. Method bodies and call sites are
+  unchanged; this is a source-layout and ownership refactor.
 - The blocking settings-sync workflow moved into `zedb-core::sync`; the app
   now schedules the operation and presents its typed outcome instead of owning
   git and reconciliation policy.
