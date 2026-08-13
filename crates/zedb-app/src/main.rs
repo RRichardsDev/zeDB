@@ -287,26 +287,12 @@ struct Workspace {
     commit: Option<commit::CommitState>,
     show_fleet: bool,
     show_ops: bool,
-    /// Query history + saved queries drawer beside the editor.
-    show_history: bool,
-    history: Vec<zedb_core::HistoryEntry>,
-    history_search: Entity<TextInput>,
-    /// A saved query being renamed inline: (original name, input).
-    history_renaming: Option<(String, Entity<TextInput>)>,
-    /// A saved tab being renamed inline: (id, name, input).
-    saved_tab_renaming: Option<(String, String, Entity<TextInput>)>,
-    saved_tabs: Vec<zedb_core::SavedTab>,
-    /// Clear-history asked once; the next click clears.
-    history_clear_armed: bool,
+    history: query_history::HistoryState,
     /// Where an error-bar ask came from: (query tab id, failed sql).
     /// An agent-proposed query replaces that statement in place.
     agent_fix_target: Option<(usize, String)>,
     /// The export dialog, when open.
     export: Option<export::ExportState>,
-    history_width: f32,
-    /// An active drawer-edge drag: (start width, start mouse x).
-    history_resizing: Option<(f32, f32)>,
-    history_tab: query_history::HistoryTab,
     ops: ops::OpsState,
     /// query_ids killed from the ops view; errors on these statements
     /// report the kill instead of a transport failure.
@@ -649,18 +635,13 @@ impl Workspace {
                 ),
                 show_fleet: false,
                 show_ops: false,
-                show_history: false,
-                history: zedb_core::load_history(),
-                history_search: Self::input("", "Search queries", false, cx),
-                history_renaming: None,
-                saved_tab_renaming: None,
-                saved_tabs: zedb_core::load_saved_tabs(),
-                history_clear_armed: false,
+                history: query_history::HistoryState::new(
+                    zedb_core::load_history(),
+                    zedb_core::load_saved_tabs(),
+                    Self::input("", "Search queries", false, cx),
+                ),
                 agent_fix_target: None,
                 export: None,
-                history_width: 320.0,
-                history_resizing: None,
-                history_tab: query_history::HistoryTab::default(),
                 ops: ops::OpsState::default(),
                 ops_killed: std::collections::HashSet::new(),
                 agent: agent_pane::AgentPaneState::new(
@@ -703,18 +684,13 @@ impl Workspace {
                 ),
                 show_fleet: false,
                 show_ops: false,
-                show_history: false,
-                history: zedb_core::load_history(),
-                history_search: Self::input("", "Search queries", false, cx),
-                history_renaming: None,
-                saved_tab_renaming: None,
-                saved_tabs: zedb_core::load_saved_tabs(),
-                history_clear_armed: false,
+                history: query_history::HistoryState::new(
+                    zedb_core::load_history(),
+                    zedb_core::load_saved_tabs(),
+                    Self::input("", "Search queries", false, cx),
+                ),
                 agent_fix_target: None,
                 export: None,
-                history_width: 320.0,
-                history_resizing: None,
-                history_tab: query_history::HistoryTab::default(),
                 ops: ops::OpsState::default(),
                 ops_killed: std::collections::HashSet::new(),
                 agent: agent_pane::AgentPaneState::new(
@@ -10529,10 +10505,10 @@ impl Workspace {
                                     .items_center()
                                     .justify_center()
                                     .rounded(px(3.))
-                                    .when(self.show_history, |button| button.bg(theme::hover()))
+                                    .when(self.history.open, |button| button.bg(theme::hover()))
                                     .child(
                                         svg().path("icons/history.svg").size(px(14.)).text_color(
-                                            if self.show_history {
+                                            if self.history.open {
                                                 theme::text()
                                             } else {
                                                 theme::text_dim()
@@ -10816,7 +10792,7 @@ impl Workspace {
             .size_full()
             .flex()
             .child(editor_column)
-            .when(self.show_history, |root| {
+            .when(self.history.open, |root| {
                 root.child(self.history_resize_handle(cx))
                     .child(self.history_drawer(cx))
             })
@@ -11113,9 +11089,9 @@ impl Render for Workspace {
                         .clamp(280.0, (viewport_width - 400.0).max(280.0));
                     cx.notify();
                 }
-                if let Some((start_width, start_x)) = this.history_resizing {
+                if let Some((start_width, start_x)) = this.history.resizing {
                     let width = start_width + (start_x - f32::from(event.position.x));
-                    this.history_width = width.clamp(240.0, 640.0);
+                    this.history.width = width.clamp(240.0, 640.0);
                     cx.notify();
                 }
                 if let Some((target, last_y)) = this.query.resize {
@@ -11147,7 +11123,7 @@ impl Render for Workspace {
                         let _ = save_preferences(&this.preferences);
                     }
                     this.query.resize = None;
-                    this.history_resizing = None;
+                    this.history.resizing = None;
                 }),
             )
             .on_mouse_up_out(
@@ -11158,7 +11134,7 @@ impl Render for Workspace {
                     this.fleet.resizing_detail = false;
                     this.agent.resizing = false;
                     this.query.resize = None;
-                    this.history_resizing = None;
+                    this.history.resizing = None;
                 }),
             )
             .when(self.export.is_some(), |root| {

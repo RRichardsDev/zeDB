@@ -824,6 +824,9 @@ Zero visual change; prerequisite for any future theme system.
 - `Workspace` now owns connection, schema, and query aggregates rather than
   exposing each feature's fields directly at the shell level. This is an
   ownership boundary only; orchestration behavior is unchanged.
+- Query history and saved-tab drawer state now have the same explicit feature
+  ownership boundary, including search, rename, clear confirmation, and resize
+  state.
 - The blocking settings-sync workflow moved into `zedb-core::sync`; the app
   now schedules the operation and presents its typed outcome instead of owning
   git and reconciliation policy.

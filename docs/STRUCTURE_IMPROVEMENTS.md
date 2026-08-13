@@ -16,6 +16,9 @@ Date reviewed: 2026-08-13.
   instead of storing those features as several dozen unrelated flat fields.
   Existing orchestration still lives on `Workspace` for now, which keeps this
   tranche structural and behavior-preserving.
+- Query history, saved tabs, drawer filtering, rename state, and drawer layout
+  now share a `HistoryState` owner instead of adding another set of fields to
+  the application shell.
 - The blocking settings-sync workflow now belongs to `zedb-core::sync`.
   `zedb-app` schedules it and translates its typed result into UI state.
 - `Workspace::new` still performs the same initialization, but delegates the

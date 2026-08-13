@@ -274,7 +274,7 @@ impl Workspace {
         if self.agent.open {
             // The agent pane and the history/saved drawer both dock right;
             // opening one closes the other so they never fight for space.
-            self.show_history = false;
+            self.history.open = false;
             self.agent_refresh_registry();
             self.agent_focus_composer(window, cx);
         }

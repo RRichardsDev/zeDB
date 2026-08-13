@@ -11,10 +11,44 @@ use std::collections::HashMap;
 use gpui::{div, prelude::*, px, svg, Context, Focusable as _, HighlightStyle, Window};
 use zedb_core::{HistoryEntry, SavedQuery};
 
-use crate::{theme, Workspace};
+use crate::{theme, TextInput, Workspace};
 
 /// Rows shown per section before search narrows things down.
 const HISTORY_SHOWN: usize = 200;
+
+pub(crate) struct HistoryState {
+    pub(crate) open: bool,
+    pub(crate) entries: Vec<HistoryEntry>,
+    pub(crate) search: gpui::Entity<TextInput>,
+    pub(crate) renaming: Option<(String, gpui::Entity<TextInput>)>,
+    pub(crate) saved_tab_renaming: Option<(String, String, gpui::Entity<TextInput>)>,
+    pub(crate) saved_tabs: Vec<zedb_core::SavedTab>,
+    pub(crate) clear_armed: bool,
+    pub(crate) width: f32,
+    pub(crate) resizing: Option<(f32, f32)>,
+    pub(crate) tab: HistoryTab,
+}
+
+impl HistoryState {
+    pub(crate) fn new(
+        entries: Vec<HistoryEntry>,
+        saved_tabs: Vec<zedb_core::SavedTab>,
+        search: gpui::Entity<TextInput>,
+    ) -> Self {
+        Self {
+            open: false,
+            entries,
+            search,
+            renaming: None,
+            saved_tab_renaming: None,
+            saved_tabs,
+            clear_armed: false,
+            width: 320.0,
+            resizing: None,
+            tab: HistoryTab::default(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum HistoryTab {
@@ -54,7 +88,7 @@ impl Workspace {
             row_limit: tab.max_rows.limit(),
             saved_at: unix_now(),
         };
-        let mut updated = self.saved_tabs.clone();
+        let mut updated = self.history.saved_tabs.clone();
         if let Some(index) = updated.iter().position(|tab| tab.id == saved_id) {
             updated.remove(index);
             updated.insert(0, saved);
@@ -67,11 +101,11 @@ impl Workspace {
             self.flash_warning(format!("Could not save tab: {error}"), cx);
             return;
         }
-        self.saved_tabs = updated;
+        self.history.saved_tabs = updated;
         self.query.tabs[self.query.active_tab].saved_tab_id = Some(saved_id);
-        self.history_tab = HistoryTab::Tabs;
-        self.show_history = true;
-        self.history_clear_armed = false;
+        self.history.tab = HistoryTab::Tabs;
+        self.history.open = true;
+        self.history.clear_armed = false;
         if self.connection.connected.is_some() {
             self.show_query_editor = true;
             self.show_ops = false;
@@ -81,7 +115,7 @@ impl Workspace {
     }
 
     fn saved_tab_rename_commit(&mut self, cx: &mut Context<Self>) {
-        let Some((id, original, input)) = self.saved_tab_renaming.take() else {
+        let Some((id, original, input)) = self.history.saved_tab_renaming.take() else {
             return;
         };
         let new_name = input.read(cx).text().trim().to_string();
@@ -89,7 +123,7 @@ impl Workspace {
             cx.notify();
             return;
         }
-        let mut updated = self.saved_tabs.clone();
+        let mut updated = self.history.saved_tabs.clone();
         if let Some(saved) = updated.iter_mut().find(|saved| saved.id == id) {
             saved.name = new_name.clone();
         }
@@ -97,7 +131,7 @@ impl Workspace {
             self.flash_warning(format!("Could not rename saved tab: {error}"), cx);
             return;
         }
-        self.saved_tabs = updated;
+        self.history.saved_tabs = updated;
         for tab in &mut self.query.tabs {
             if tab.saved_tab_id.as_deref() == Some(id.as_str()) {
                 tab.name = new_name.clone();
@@ -107,13 +141,13 @@ impl Workspace {
     }
 
     fn saved_tab_delete(&mut self, id: &str, cx: &mut Context<Self>) {
-        let mut updated = self.saved_tabs.clone();
+        let mut updated = self.history.saved_tabs.clone();
         updated.retain(|saved| saved.id != id);
         if let Err(error) = zedb_core::save_saved_tabs(&updated) {
             self.flash_warning(format!("Could not delete saved tab: {error}"), cx);
             return;
         }
-        self.saved_tabs = updated;
+        self.history.saved_tabs = updated;
         for tab in &mut self.query.tabs {
             if tab.saved_tab_id.as_deref() == Some(id) {
                 tab.saved_tab_id = None;
@@ -124,6 +158,7 @@ impl Workspace {
 
     fn saved_tab_open(&mut self, saved_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(saved) = self
+            .history
             .saved_tabs
             .iter()
             .find(|saved| saved.id == saved_id)
@@ -148,9 +183,9 @@ impl Workspace {
     }
 
     pub(crate) fn history_toggle(&mut self, cx: &mut Context<Self>) {
-        self.show_history = !self.show_history;
+        self.history.open = !self.history.open;
         // The drawer lives beside the editor; surface it.
-        if self.show_history && self.connection.connected.is_some() && !self.show_query_editor {
+        if self.history.open && self.connection.connected.is_some() && !self.show_query_editor {
             self.show_query_editor = true;
             self.show_ops = false;
             self.show_fleet = false;
@@ -193,7 +228,7 @@ impl Workspace {
                     line
                 });
             zedb_core::push_entry(
-                &mut self.history,
+                &mut self.history.entries,
                 HistoryEntry {
                     sql: sql.clone(),
                     connection: connection.clone(),
@@ -204,7 +239,7 @@ impl Workspace {
                 },
             );
         }
-        let _ = zedb_core::save_history(&self.history);
+        let _ = zedb_core::save_history(&self.history.entries);
     }
 
     fn history_insert(&mut self, sql: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -277,7 +312,7 @@ impl Workspace {
     }
 
     fn history_rename_commit(&mut self, cx: &mut Context<Self>) {
-        let Some((original, input)) = self.history_renaming.take() else {
+        let Some((original, input)) = self.history.renaming.take() else {
             return;
         };
         let new_name = input.read(cx).text().trim().to_string();
@@ -304,9 +339,9 @@ impl Workspace {
     }
 
     fn history_clear(&mut self, cx: &mut Context<Self>) {
-        self.history.clear();
-        let _ = zedb_core::save_history(&self.history);
-        self.history_clear_armed = false;
+        self.history.entries.clear();
+        let _ = zedb_core::save_history(&self.history.entries);
+        self.history.clear_armed = false;
         cx.notify();
     }
 
@@ -359,8 +394,8 @@ impl Workspace {
                 .on_mouse_down(
                     gpui::MouseButton::Left,
                     cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                        this.history_resizing =
-                            Some((this.history_width, f32::from(event.position.x)));
+                        this.history.resizing =
+                            Some((this.history.width, f32::from(event.position.x)));
                         cx.notify();
                     }),
                 ),
@@ -368,13 +403,13 @@ impl Workspace {
     }
 
     pub(crate) fn history_drawer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let filter = self.history_search.read(cx).text().trim().to_lowercase();
+        let filter = self.history.search.read(cx).text().trim().to_lowercase();
         let connection = self
             .connection
             .connected
             .as_ref()
             .map(|connected| connected.name.clone());
-        let active_tab = self.history_tab;
+        let active_tab = self.history.tab;
 
         let tabs = div()
             .flex()
@@ -405,8 +440,8 @@ impl Workspace {
                             })
                             .hover(|label| label.text_color(theme::text()).cursor_pointer())
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.history_tab = tab;
-                                this.history_clear_armed = false;
+                                this.history.tab = tab;
+                                this.history.clear_armed = false;
                                 cx.notify();
                             }))
                             .child(tab.label())
@@ -436,7 +471,7 @@ impl Workspace {
                                 .cursor_pointer()
                         })
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.show_history = false;
+                            this.history.open = false;
                             cx.notify();
                         })),
                 ),
@@ -445,8 +480,8 @@ impl Workspace {
             // against this container reliably.
             .child(
                 div()
-                    .w(px(self.history_width - 24.0))
-                    .child(self.history_search.clone()),
+                    .w(px(self.history.width - 24.0))
+                    .child(self.history.search.clone()),
             )
             .child(tabs);
 
@@ -454,6 +489,7 @@ impl Workspace {
             HistoryTab::History => {
                 let entries: Vec<&HistoryEntry> = self
                     .history
+                    .entries
                     .iter()
                     .filter(|entry| filter.is_empty() || entry.sql.to_lowercase().contains(&filter))
                     .take(HISTORY_SHOWN)
@@ -586,7 +622,7 @@ impl Workspace {
                     .into_any_element()
             }
             HistoryTab::Saved => {
-                let renaming_name = self.history_renaming.as_ref().map(|(name, _)| name.clone());
+                let renaming_name = self.history.renaming.as_ref().map(|(name, _)| name.clone());
                 let saved: Vec<&SavedQuery> = self
                     .preferences
                     .saved_queries
@@ -625,7 +661,8 @@ impl Workspace {
 
                         if renaming {
                             let input = self
-                                .history_renaming
+                                .history
+                                .renaming
                                 .as_ref()
                                 .map(|(_, input)| input.clone())
                                 .expect("renaming row has an input");
@@ -636,7 +673,7 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().w(px(self.history_width - 130.0)).child(input))
+                                .child(div().w(px(self.history.width - 130.0)).child(input))
                                 .child(
                                     div()
                                         .id(("rename-commit", index))
@@ -663,7 +700,7 @@ impl Workspace {
                                         .child("\u{00d7}")
                                         .hover(|button| button.bg(theme::hover()).cursor_pointer())
                                         .on_click(cx.listener(|this, _, _, cx| {
-                                            this.history_renaming = None;
+                                            this.history.renaming = None;
                                             cx.notify();
                                         })),
                                 );
@@ -770,7 +807,7 @@ impl Workspace {
                                                 })
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     cx.stop_propagation();
-                                                    this.history_renaming = Some((
+                                                    this.history.renaming = Some((
                                                         rename_name.clone(),
                                                         Self::input(
                                                             rename_name.clone(),
@@ -850,10 +887,12 @@ impl Workspace {
             }
             HistoryTab::Tabs => {
                 let renaming_id = self
+                    .history
                     .saved_tab_renaming
                     .as_ref()
                     .map(|(id, _, _)| id.clone());
                 let saved: Vec<&zedb_core::SavedTab> = self
+                    .history
                     .saved_tabs
                     .iter()
                     .filter(|saved| {
@@ -880,6 +919,7 @@ impl Workspace {
 
                         if renaming {
                             let input = self
+                                .history
                                 .saved_tab_renaming
                                 .as_ref()
                                 .map(|(_, _, input)| input.clone())
@@ -891,7 +931,7 @@ impl Workspace {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().w(px(self.history_width - 130.0)).child(input))
+                                .child(div().w(px(self.history.width - 130.0)).child(input))
                                 .child(
                                     div()
                                         .id(("saved-tab-rename-commit", index))
@@ -918,7 +958,7 @@ impl Workspace {
                                         .child("\u{00d7}")
                                         .hover(|button| button.bg(theme::hover()).cursor_pointer())
                                         .on_click(cx.listener(|this, _, _, cx| {
-                                            this.saved_tab_renaming = None;
+                                            this.history.saved_tab_renaming = None;
                                             cx.notify();
                                         })),
                                 );
@@ -994,7 +1034,7 @@ impl Workspace {
                                                 })
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     cx.stop_propagation();
-                                                    this.saved_tab_renaming = Some((
+                                                    this.history.saved_tab_renaming = Some((
                                                         rename_id.clone(),
                                                         rename_name.clone(),
                                                         Self::input(
@@ -1078,74 +1118,75 @@ impl Workspace {
             }
         };
 
-        let footer = (active_tab == HistoryTab::History && !self.history.is_empty()).then(|| {
-            let armed = self.history_clear_armed;
-            let count = self.history.len();
-            div()
-                .flex_none()
-                .h(px(26.))
-                .px_3()
-                .border_t_1()
-                .border_color(theme::border())
-                .flex()
-                .items_center()
-                .justify_end()
-                .gap_2()
-                .when(armed, |gutter| {
-                    gutter.child(
+        let footer =
+            (active_tab == HistoryTab::History && !self.history.entries.is_empty()).then(|| {
+                let armed = self.history.clear_armed;
+                let count = self.history.entries.len();
+                div()
+                    .flex_none()
+                    .h(px(26.))
+                    .px_3()
+                    .border_t_1()
+                    .border_color(theme::border())
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .when(armed, |gutter| {
+                        gutter.child(
+                            div()
+                                .id("history-clear-cancel")
+                                .px_1p5()
+                                .rounded(px(3.))
+                                .text_xs()
+                                .text_color(theme::text_dim())
+                                .child("Cancel")
+                                .hover(|button| {
+                                    button
+                                        .bg(theme::hover())
+                                        .text_color(theme::text())
+                                        .cursor_pointer()
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.history.clear_armed = false;
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .child(
                         div()
-                            .id("history-clear-cancel")
+                            .id("history-clear")
                             .px_1p5()
                             .rounded(px(3.))
                             .text_xs()
-                            .text_color(theme::text_dim())
-                            .child("Cancel")
+                            .map(|button| {
+                                if armed {
+                                    button
+                                        .text_color(theme::danger())
+                                        .child(format!("Clear {count} entries?"))
+                                } else {
+                                    button.text_color(theme::text_dim()).child("Clear history")
+                                }
+                            })
                             .hover(|button| {
                                 button
-                                    .bg(theme::hover())
-                                    .text_color(theme::text())
+                                    .bg(theme::danger_hover())
+                                    .text_color(theme::danger())
                                     .cursor_pointer()
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.history_clear_armed = false;
-                                cx.notify();
+                                if this.history.clear_armed {
+                                    this.history_clear(cx);
+                                } else {
+                                    this.history.clear_armed = true;
+                                    cx.notify();
+                                }
                             })),
                     )
-                })
-                .child(
-                    div()
-                        .id("history-clear")
-                        .px_1p5()
-                        .rounded(px(3.))
-                        .text_xs()
-                        .map(|button| {
-                            if armed {
-                                button
-                                    .text_color(theme::danger())
-                                    .child(format!("Clear {count} entries?"))
-                            } else {
-                                button.text_color(theme::text_dim()).child("Clear history")
-                            }
-                        })
-                        .hover(|button| {
-                            button
-                                .bg(theme::danger_hover())
-                                .text_color(theme::danger())
-                                .cursor_pointer()
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if this.history_clear_armed {
-                                this.history_clear(cx);
-                            } else {
-                                this.history_clear_armed = true;
-                                cx.notify();
-                            }
-                        })),
-                )
-        });
+            });
 
         div()
-            .w(px(self.history_width))
+            .w(px(self.history.width))
             .flex_none()
             .h_full()
             .flex()
