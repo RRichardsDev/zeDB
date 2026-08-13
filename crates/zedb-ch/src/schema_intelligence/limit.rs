@@ -1,4 +1,4 @@
-use super::*;
+use super::tokens::tokenize;
 
 /// Remove the top-level LIMIT (and its OFFSET) from one statement, for
 /// probes that need to see past the visible window.

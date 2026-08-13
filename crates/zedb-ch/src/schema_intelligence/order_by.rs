@@ -1,4 +1,4 @@
-use super::*;
+use super::tokens::tokenize;
 
 /// Whether trailing statement text begins with a top-level clause
 /// keyword that reads best on its own line.

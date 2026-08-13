@@ -1,5 +1,5 @@
 use super::order_by::starts_with_clause;
-use super::*;
+use super::tokens::tokenize;
 
 /// The byte span of the top-level WHERE clause content (after the
 /// keyword, through the end of its predicate), plus where a new clause
