@@ -862,3 +862,42 @@ Zero visual change; prerequisite for any future theme system.
   decoding, and pooling; migration execution and tracking; schema loading and
   caching; regeneration phases; and MCP tool handling now have explicit module
   owners instead of sharing large implementation files.
+- SQL name intelligence was the one module left half-split, so it was finished
+  the same way: `tokens` scans, `bindings` resolves what a statement puts in
+  scope, and `analysis`, `completions`, `hover`, and `search` are the entry
+  points over them. The shared vocabulary types stay in the parent, and the
+  tests moved next to the code they cover over a single shared fixture. No
+  entry point changed name or signature.
+
+## zedb-ch integration tests interfere when run in parallel (open)
+
+CI has been intermittently red since around v0.1.28, on a different test each
+run: `query_roundtrip_type_zoo`, then `runner_walks_the_chain_on_a_real_server`
+and `verify_detects_drift_at_chain_position`. It is not caused by any of the
+decomposition work; the commit before it fails harder.
+
+Measured on one machine, same CPU load throughout, 12 runs each:
+
+| Condition | Failures |
+| --- | --- |
+| Pre-refactor commit, parallel | 11/12 |
+| Current tree, parallel | 5/12 |
+| Current tree, `--test-threads=1` | 0/12 |
+| The failing test alone in its process | 0/12 |
+
+So it is purely cross-test interference, not a defect in any single test. The
+signature is always a test reading state from somewhere it never wrote to:
+`verify` sees an empty `system.tables` for a database whose tables it just
+created, and in CI `demo_a` reported `head: None` immediately after a
+successful upgrade.
+
+The channel is still unknown. Ruled out so far: ephemeral server port
+collision (probing binds and releases a port, so a race exists, but holding
+the listeners until spawn and making readiness prove the server's identity
+changed nothing, 4/12); `LocalReplay`, which shells out to `clickhouse local`
+and binds no port at all; and shared mutable global state in the crate, of
+which there is none beyond regexes and a query-id counter.
+
+CI runs the crate's tests serially until this is understood. That is a
+mitigation, not a fix: the interference is real and would also bite anyone
+running the suite locally in parallel.

@@ -40,7 +40,13 @@ jobs:
       - name: Clippy
         run: cargo clippy -p zedb-core -p zedb-ch -p zedb-cli --all-targets -- -D warnings
       - name: Test
-        run: cargo test -p zedb-core -p zedb-ch -p zedb-cli
+        run: |
+          cargo test -p zedb-core -p zedb-cli
+          # zedb-ch's integration tests each stand up their own ephemeral
+          # ClickHouse and interfere with each other when run concurrently:
+          # a test reads state from a server it never wrote to. Serial is
+          # green, parallel fails intermittently. See docs/devlog.md.
+          cargo test -p zedb-ch -- --test-threads=1
 
   app:
     name: App (macOS gpui build)
