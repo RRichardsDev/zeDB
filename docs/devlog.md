@@ -840,6 +840,13 @@ Zero visual change; prerequisite for any future theme system.
 - Connection form, toolbar, node selector, cluster overview, and topology
   rendering moved into the connection feature view module without visual or
   interaction changes.
+- The app source tree was regrouped by ownership. Historical top-level modules
+  moved under their feature, platform, UI, or shell owner while retaining their
+  existing Rust module names and call paths.
+- The remaining shell was split into chrome, navigation, workspace, render,
+  and overlay modules. Agent, fleet, history, operations, schema, and query-grid
+  files were split further where state, orchestration, and rendering had
+  distinct responsibilities.
 - The blocking settings-sync workflow moved into `zedb-core::sync`; the app
   now schedules the operation and presents its typed outcome instead of owning
   git and reconciliation policy.

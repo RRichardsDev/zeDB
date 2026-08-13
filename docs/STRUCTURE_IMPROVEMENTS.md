@@ -34,6 +34,16 @@ Date reviewed: 2026-08-13.
   cluster overview, and topology rendering now live in
   `features/connections/view.rs`. `main.rs` is now 3,997 lines, down from
   11,755 before the feature-controller extractions.
+- The app source tree is now ownership-oriented: feature code lives under
+  `features/`, platform adapters under `platform/`, shared UI under `ui/`, and
+  top-level composition under `shell/`. `src/` itself contains only `main.rs`.
+- `main.rs` is now 1,126 lines. Shell chrome, navigation, workspace content,
+  rendering, and overlays are separate components. Fleet, agent, history,
+  operations, schema, and the query grid are also split internally by model,
+  actions/controller, and view or render responsibility.
+- The query result grid is a query-owned component under
+  `features/query/components/grid`; the shared text input remains under
+  `ui/components` because it has consumers across six features.
 - The blocking settings-sync workflow now belongs to `zedb-core::sync`.
   `zedb-app` schedules it and translates its typed result into UI state.
 - `Workspace::new` still performs the same initialization, but delegates the
