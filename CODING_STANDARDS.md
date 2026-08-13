@@ -199,6 +199,10 @@ submitter responsibility, current component style, compatibility evidence, and
 tests. Those principles are the model for this document, while the specific
 Rust, GPUI, ClickHouse, and repository rules above are zeDB's own.
 
+## Comments
+
+The type of comment should be clear and consistent. Only ever stating why a particular decision was made, not what the code is doing. And only ever why it would be unclear to the reader.
+
 References:
 
 - [Wine GitLab workflow proposal](https://www.winehq.org/pipermail/wine-devel/2022-April/214894.html)
