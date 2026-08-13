@@ -65,6 +65,7 @@ pub struct Runner<'a> {
 
 /// Which databases an operation targets; `All` discovers from the server
 /// and skips exclusion groups out loud.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Targets {
     Databases(Vec<String>),
     Group(String),

@@ -868,6 +868,17 @@ Zero visual change; prerequisite for any future theme system.
   points over them. The shared vocabulary types stay in the parent, and the
   tests moved next to the code they cover over a single shared fixture. No
   entry point changed name or signature.
+- The CLI was the last crate with no module structure: one 785-line `main.rs`
+  whose `run` was a 509-line match over 16 subcommands. The clap surface now
+  sits in `cli`, and each command group owns a module under `commands/` over a
+  few shared openers, which retires the repo/runner/targets/runtime preamble
+  that was copied into seven arms and the pinned-binary lookup copied into
+  three. The longest function in the crate is now 97 lines.
+- It also had no tests at all. The argument surface now has ten, covering
+  target precedence, the refusal to run unscoped, empty passwords becoming
+  absent credentials rather than blank ones, every mutually exclusive flag
+  pair, and clap's own `debug_assert` on the command definition. `Targets`
+  gained the derives needed to assert on it.
 
 ## zedb-ch integration tests interfere when run in parallel (open)
 
