@@ -7,12 +7,28 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.27 - 2026-08-13
 
-- Instant tails can opt into ClickHouse 26.6 experimental `STREAM CURSOR`
-  delivery in Preferences. The flask beside "Get instant updates" opens that
-  setting; unsupported queries and servers retain the `WATCH`, native-poll,
-  and HTTP-poll fallback ladder.
+Native ClickHouse connections make reads and live tails faster, with an
+opt-in preview of ClickHouse 26.6 streaming queries. This release also rolls
+up a set of everyday tab, grid, connection-list, and error-bar refinements.
+
+### Instant tails
+
+- Read queries automatically use a persistent native TCP connection when the
+  server exposes one, while retaining safe HTTP fallback.
+- "Get instant updates" now works: compatible servers use Live View `WATCH`
+  over native TCP, then fall back to fast native polling when `WATCH` is not
+  supported.
+- ClickHouse 26.6 `STREAM CURSOR` delivery is available as an experimental,
+  disabled-by-default preference for compatible single-table tails. The flask
+  beside "Get instant updates" opens the setting; unsupported queries and
+  servers continue through the normal fallback ladder.
+- Pausing, stopping, editing, or closing an instant tail releases its dedicated
+  native query and resumes from the saved cursor where available.
+
+### Everyday polish
+
 - Preference descriptions wrap before their fixed-width controls instead of
   running underneath them in narrower windows.
 - Query tabs can be reordered by dragging; the drop target shows an accent
