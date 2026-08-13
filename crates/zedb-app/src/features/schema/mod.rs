@@ -1,3 +1,5 @@
+mod controller;
+mod inspector;
 mod model;
 
 pub(crate) use model::{

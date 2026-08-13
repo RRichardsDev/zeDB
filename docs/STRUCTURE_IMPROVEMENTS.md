@@ -23,6 +23,10 @@ Date reviewed: 2026-08-13.
   execution now live in focused `features/query` modules. This removes more
   than 3,200 lines from `main.rs`; the crate root retains shell composition and
   cross-feature rendering rather than the detailed query controller.
+- Schema loading, cardinality analysis, parts and merge inspection,
+  dependencies, projections, storage advice, and the object inspector now live
+  in `features/schema`. Together with the query extraction, this reduces
+  `main.rs` from 11,755 lines to 5,948 lines in behavior-preserving moves.
 - The blocking settings-sync workflow now belongs to `zedb-core::sync`.
   `zedb-app` schedules it and translates its typed result into UI state.
 - `Workspace::new` still performs the same initialization, but delegates the
