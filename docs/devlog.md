@@ -850,3 +850,10 @@ Zero visual change; prerequisite for any future theme system.
 - The blocking settings-sync workflow moved into `zedb-core::sync`; the app
   now schedules the operation and presents its typed outcome instead of owning
   git and reconciliation policy.
+- Feature internals now use responsibility-based submodules consistently:
+  `controller/` for orchestration and side effects, `view/` for feature-owned
+  GPUI rendering, and `model.rs` or `state.rs` for owned data. The term
+  `components` is reserved for reusable UI controls shared across features.
+- Large connection, query execution, live-tail, agent, fleet, schema, and
+  settings-sync modules were decomposed along those boundaries without
+  changing their method names, call paths, or runtime behavior.

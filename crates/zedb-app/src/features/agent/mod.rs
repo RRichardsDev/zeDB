@@ -269,4 +269,12 @@ fn agent_log(kind: &str, data: serde_json::Value) {
 }
 
 mod controller;
+#[path = "controller/bridge.rs"]
+mod controller_bridge;
+#[path = "controller/events.rs"]
+mod controller_events;
+#[path = "controller/messages.rs"]
+mod controller_messages;
+#[path = "controller/registry.rs"]
+mod controller_registry;
 mod view;
