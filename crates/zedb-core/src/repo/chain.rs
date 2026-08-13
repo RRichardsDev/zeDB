@@ -1,3 +1,10 @@
+//! The migration chain on disk: discovering `migrations/YYYY/MM/NNNNN/`,
+//! parsing each one, and refusing a chain that cannot be ordered.
+//!
+//! Numbering is the chain's identity, so duplicates and dates that run
+//! backwards are hard errors rather than warnings: a chain that two people
+//! can order differently is not a chain.
+
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;

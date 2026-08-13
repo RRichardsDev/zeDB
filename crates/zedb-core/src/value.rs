@@ -1,3 +1,6 @@
+//! The driver-agnostic result shape every backend decodes into, so the grid
+//! and the export paths never learn a driver's wire types.
+
 use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 

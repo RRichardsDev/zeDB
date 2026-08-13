@@ -1,3 +1,9 @@
+//! `${name}` placeholders in migration SQL, and rendering them.
+//!
+//! Rendering fails on an undeclared or unsupplied placeholder rather than
+//! substituting an empty string: SQL that silently loses its database
+//! qualifier would run somewhere nobody intended.
+
 use std::collections::BTreeMap;
 
 use super::RepoError;

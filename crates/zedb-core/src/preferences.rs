@@ -1,3 +1,10 @@
+//! User preferences, saved queries, and custom agents, persisted as one
+//! settings file.
+//!
+//! Every field defaults, and the file is read with `serde(default)`, so a
+//! settings file written by an older build still loads after an upgrade adds
+//! a preference.
+
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};

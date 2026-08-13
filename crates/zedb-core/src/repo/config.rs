@@ -1,3 +1,9 @@
+//! `zedb.toml`: the repo's declared format, pinned engine, scopes, and
+//! parameters.
+//!
+//! Unknown fields are rejected rather than ignored, so a typo in a key is a
+//! loud error instead of a setting that silently never applied.
+
 use std::collections::BTreeMap;
 use std::path::Path;
 

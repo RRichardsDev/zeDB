@@ -1,3 +1,8 @@
+//! `exclusions.toml`: databases a fleet-wide run must skip.
+//!
+//! Each group has to carry a reason. Skipping a production database is the
+//! kind of decision that needs to explain itself to whoever reads it next.
+
 use std::collections::BTreeMap;
 use std::path::Path;
 

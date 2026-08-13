@@ -879,6 +879,24 @@ Zero visual change; prerequisite for any future theme system.
   absent credentials rather than blank ones, every mutually exclusive flag
   pair, and clap's own `debug_assert` on the command definition. `Targets`
   gained the derives needed to assert on it.
+- zedb-core was measured and deliberately not decomposed. Its largest file is
+  461 lines and its longest function 68, against the CLI's 509-line `run`, so
+  splitting it would have copied the shape of the other crates without their
+  reason. The gaps there were coverage and orientation, and those were closed
+  instead: `import_repo` went from no tests to eight, and the eight files
+  missing `//!` headers got them.
+- `import_repo` is a one-shot, one-way conversion of someone's real repo, so
+  the new tests lean on the refusals: it must not convert into a directory
+  that already holds a repo, must not accept a directory that only looks like
+  an ancestor, and must fail rather than guess when `pin.py` has no
+  `CH_VERSION`. The happy path asserts migrations copy byte for byte and that
+  the generated `zedb.toml` actually opens as a repo, which is what proves it
+  valid rather than merely present.
+- `secrets.rs` stays untested on purpose. Every function is a thin Keychain
+  call with no logic of its own, the module is gated to Apple targets so it
+  does not build on the Linux CI runner, and testing it on macOS would mean
+  creating and deleting items in a real Keychain. Uncovered is the honest
+  state, not an oversight to correct later.
 
 ## zedb-ch integration tests interfere when run in parallel (open)
 

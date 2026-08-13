@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use super::RepoError;
 
+#[derive(Debug)]
 pub struct ImportReport {
     pub destination: PathBuf,
     pub migrations: usize,

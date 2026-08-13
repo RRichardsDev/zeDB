@@ -1,3 +1,9 @@
+//! Creating a repo, and scaffolding the next migration into it.
+//!
+//! Scaffolding writes the templates rather than empty files so a new
+//! migration starts already declaring its rollback class, which run time
+//! otherwise has to treat as irreversible.
+
 use std::path::{Path, PathBuf};
 
 use chrono::Datelike;

@@ -1,3 +1,10 @@
+//! Saved connections as they persist to the settings store.
+//!
+//! A connection carries its environment tier so the UI can make production
+//! unmistakable at a glance, and multiple nodes so a cluster is one entry
+//! rather than one per replica. Passwords are deliberately absent: they live
+//! in the Keychain (see [`crate::secrets`]) and never touch this file.
+
 use serde::{Deserialize, Serialize};
 
 /// Environment tier of a connection. Drives the visual identity in the UI
