@@ -24,9 +24,26 @@ decides, applies, and owns every write.**
 - **Steer attention, not the wheel**: `navigate` switches views;
   `highlight_control` flashes a purple border on one fleet control
   (lock, upgrade_all, rollback, new_migration, regen, check_chain,
-  verify_all) for a few seconds. Pointing at a button the agent
-  cannot press is the intended pattern, e.g. a failed `check_chain`
-  caused by stale current-state highlights `regen`.
+  verify_all) for a few seconds.
+- **Edit repo files with its own tools, on request.** The migration
+  repo is ordinary files, and the agent runs with the user's own
+  file access; editing `current-state/` or drafting by hand is
+  legitimate once the user chooses that route. The canonical Regen
+  write stays a button.
+
+## Etiquette: diagnose, explain, then ask
+
+A failure is a question, not a cue to point. The expected flow:
+
+1. Find out why with the read-only tools (`check_chain`,
+   `regen_preview`, `drift`).
+2. Explain the cause in plain words.
+3. Offer the choice: highlight the control so the user acts, or do
+   what the agent's own tools can legitimately do (e.g. update
+   `current-state/` files to match `regen_preview`).
+
+`highlight_control` fires only when the user picks that option or
+asks where something is; never as a reflex on seeing a failure.
 
 ## What the agent CANNOT do, by construction
 

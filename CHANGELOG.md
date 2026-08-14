@@ -23,6 +23,9 @@ GitHub release notes.
   a few seconds so the agent can point at buttons it deliberately
   cannot press (the lock, Upgrade all, rollback). Server writes stay
   unreachable; the contract is written down in docs/ACP-STANDARDS.md.
+  The primer's etiquette: diagnose and explain a failure first, then
+  offer the choice between highlighting the control for the user or
+  fixing repo files itself; highlighting is never a reflex.
 - A failed chain check turns the regen icon yellow with "Chain check
   failed. Please regen.", pointing at the most common cause (stale
   current-state) and its fix in one glance.
