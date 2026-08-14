@@ -1038,10 +1038,8 @@ impl Workspace {
                         .text_xs()
                         .text_color(theme::text_dim())
                         .child(
-                            "A migration repo is the versioned home of your schema: the \
-                         chain of migrations, the expected current-state, and \
-                         zedb.toml. Open a checkout, clone one from your git host, \
-                         or start a new one in an empty folder.",
+                            "Open an existing migration repo, clone one from your \
+                             git host, or start a new one in an empty folder.",
                         ),
                 );
                 if let crate::GithubAuth::SignedIn(profile) = &self.github {

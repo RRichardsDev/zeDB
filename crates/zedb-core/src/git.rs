@@ -218,6 +218,45 @@ pub fn is_remote_url(text: &str) -> bool {
 
 /// The checkout directory name a remote URL clones into: its last path
 /// segment minus `.git`, sanitized to filesystem-safe characters.
+/// Boil git's stderr down to the lines that say something: the
+/// `remote:` banner noise (empty lines, ==== rules) drops, prefixes
+/// strip, and ERROR/fatal lines lead.
+pub fn summarize_git_error(raw: &str) -> String {
+    let mut meaningful: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        let line = line.strip_prefix("remote:").unwrap_or(line).trim();
+        if line.is_empty() || line.chars().all(|c| c == '=' || c == '-') {
+            continue;
+        }
+        if line.starts_with("Cloning into") || line.starts_with("clone failed") {
+            continue;
+        }
+        meaningful.push(line.to_string());
+    }
+    let lead = meaningful
+        .iter()
+        .position(|line| line.contains("ERROR") || line.contains("fatal:"));
+    let summary = match lead {
+        Some(index) => meaningful[index..].join(" "),
+        None => meaningful.join(" "),
+    };
+    let mut summary = summary.trim().to_string();
+    if summary.len() > 240 {
+        let mut cut = 240;
+        while !summary.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        summary.truncate(cut);
+        summary.push('\u{2026}');
+    }
+    if summary.is_empty() {
+        raw.trim().to_string()
+    } else {
+        summary
+    }
+}
+
 pub fn clone_directory_name(url: &str) -> String {
     let tail = url
         .trim()
@@ -305,6 +344,20 @@ fn parse_porcelain_v2(text: &str) -> GitStatus {
         branch,
         dirty,
         ahead_behind,
+    }
+}
+
+#[cfg(test)]
+mod tests_git_error {
+    use super::summarize_git_error;
+
+    #[test]
+    fn strips_remote_banner_noise() {
+        let raw = "Cloning into '/tmp/x'...\nremote:\nremote: ========================\nremote:\nremote: ERROR: The project you were looking for could not be found or you don't have permission to view it.\nremote:\nfatal: Could not read from remote repository.";
+        let summary = summarize_git_error(raw);
+        assert!(summary.starts_with("ERROR: The project"));
+        assert!(!summary.contains("===="));
+        assert!(!summary.contains("Cloning into"));
     }
 }
 

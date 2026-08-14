@@ -222,7 +222,22 @@ impl Workspace {
                         this.fleet_open_local(dest, url, cx);
                     }
                     Ok(Err(error)) | Err(error) => {
-                        this.fleet.repo_error = Some(format!("clone failed: {error}"));
+                        let summary = zedb_core::git::summarize_git_error(&error);
+                        this.fleet.repo_error = Some(
+                            if summary.contains("could not be found")
+                                || summary.contains("Permission denied")
+                                || summary.contains("access rights")
+                            {
+                                format!(
+                                    "clone failed: {summary} \u{b7} zeDB clones with \
+                                     your own git over SSH; check that your SSH key \
+                                     is registered with the host and can reach this \
+                                     repo"
+                                )
+                            } else {
+                                format!("clone failed: {summary}")
+                            },
+                        );
                         this.notice = None;
                     }
                 }

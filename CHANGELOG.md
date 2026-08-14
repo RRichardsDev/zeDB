@@ -36,6 +36,10 @@ GitHub release notes.
 - The fleet toolbar's "Upgrade all" button only appears while
   something is actually pending; a fully applied fleet shows a green
   "Up to date" tick instead.
+- Clone failures read like sentences now: git's remote banner noise
+  is boiled down to the actual error line, and a not-found or
+  permission failure explains that zeDB clones with your own git over
+  SSH and points at the SSH key.
 - Opening a migration repo grew a real picker: with no path set, the
   folder button offers "Local folder" (the native directory dialog)
   or, when signed in to GitHub/GitLab, your repositories (elevated
