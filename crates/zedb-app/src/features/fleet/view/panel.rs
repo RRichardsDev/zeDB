@@ -1033,6 +1033,61 @@ impl Workspace {
                 };
                 card = card.child(
                     div()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(theme::text_dim())
+                        .child(
+                            "A migration repo is the versioned home of your schema: the \
+                         chain of migrations, the expected current-state, and \
+                         zedb.toml. Open a checkout, clone one from your git host, \
+                         or start a new one in an empty folder.",
+                        ),
+                );
+                if let crate::GithubAuth::SignedIn(profile) = &self.github {
+                    let provider = profile.provider;
+                    card = card
+                        .child(
+                            div().flex().items_center().gap_2().px_2().py_1().child(
+                                icon_choice("repo-picker-git")
+                                    .child(
+                                        svg()
+                                            .path(provider.icon())
+                                            .size(px(16.))
+                                            .text_color(theme::text()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme::text_dim())
+                                            .child(format!("\u{b7} {}", profile.login)),
+                                    )
+                                    .tooltip(move |window, cx| {
+                                        gpui_component::tooltip::Tooltip::new(format!(
+                                            "Pick from your {} repositories",
+                                            provider.name()
+                                        ))
+                                        .build(window, cx)
+                                    })
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.repo_picker_git(cx)),
+                                    ),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().flex_1().h(px(1.)).bg(theme::border()))
+                                .child(div().text_xs().text_color(theme::text_dim()).child("or"))
+                                .child(div().flex_1().h(px(1.)).bg(theme::border())),
+                        );
+                }
+                card = card.child(
+                    div()
                         .flex()
                         .items_center()
                         .gap_2()
@@ -1056,45 +1111,6 @@ impl Workspace {
                                 .on_click(cx.listener(|this, _, _, cx| this.repo_picker_local(cx))),
                         ),
                 );
-                if let crate::GithubAuth::SignedIn(profile) = &self.github {
-                    let provider = profile.provider;
-                    card = card.child(
-                        div().flex().items_center().gap_2().px_2().py_1().child(
-                            icon_choice("repo-picker-git")
-                                .child(
-                                    svg()
-                                        .path(provider.icon())
-                                        .size(px(16.))
-                                        .text_color(theme::text()),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme::text_dim())
-                                        .child(format!("\u{b7} {}", profile.login)),
-                                )
-                                .tooltip(move |window, cx| {
-                                    gpui_component::tooltip::Tooltip::new(format!(
-                                        "Pick from your {} repositories",
-                                        provider.name()
-                                    ))
-                                    .build(window, cx)
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| this.repo_picker_git(cx))),
-                        ),
-                    );
-                } else {
-                    card = card.child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .text_color(theme::text_dim())
-                            .child(
-                            "Sign in to a git host in Preferences to pick from your repositories",
-                        ),
-                    );
-                }
             }
             RepoPicker::Authorizing { user_code } => {
                 card = card.child(div().px_2().py_1().text_color(theme::text()).child(format!(
