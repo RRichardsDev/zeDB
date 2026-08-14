@@ -235,7 +235,9 @@ impl McpServer {
             "run_query" => self.tool_run_query(&arguments).await,
             "schema_search" => self.tool_schema_search(&arguments),
             "lint_sql" => self.tool_lint_sql(&arguments),
-            "propose_migration" | "propose_query" | "navigate" => {
+            "check_chain" => self.tool_check_chain().await,
+            "regen_preview" => self.tool_regen_preview().await,
+            "propose_migration" | "propose_query" | "navigate" | "highlight_control" => {
                 self.forward_app_tool(name, &arguments).await
             }
             other => Err(format!("unknown tool: {other}")),
@@ -359,6 +361,16 @@ fn tool_definitions(with_app_tools: bool, with_schema_cache: bool) -> Value {
             },
         }));
     }
+    items.push(json!({
+        "name": "check_chain",
+        "description": "Run the repo's chain checks (sql parse, current-state equivalence, lifecycle up-down-up) against the pinned ClickHouse harness. Read-only and slow (a cold harness downloads first). The fleet toolbar's check-chain icon shows the same verdicts.",
+        "inputSchema": { "type": "object", "properties": {} },
+    }));
+    items.push(json!({
+        "name": "regen_preview",
+        "description": "Replay the migration chain and diff the canonical current-state tree against the repo's files. Read-only preview of what the fleet view's Regen would write; nothing is written.",
+        "inputSchema": { "type": "object", "properties": {} },
+    }));
     if with_app_tools {
         items.push(json!({
             "name": "propose_migration",
@@ -378,6 +390,20 @@ fn tool_definitions(with_app_tools: bool, with_schema_cache: bool) -> Value {
             "name": "propose_query",
             "description": "Put SQL into a zeDB query editor tab for the user to run themselves. Use this for any statement you cannot or should not run (writes, DDL) and for queries the user asked to have in the editor.",
             "inputSchema": string_arg("sql", "the SQL to place in the editor"),
+        }));
+        items.push(json!({
+            "name": "highlight_control",
+            "description": "Draw the user's eye to one fleet-view control: its border flashes purple for a few seconds. Use this instead of describing where a button is, especially for the consent-gated write controls you cannot press (lock, upgrade_all, rollback).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "control": {
+                        "type": "string",
+                        "enum": ["lock", "upgrade_all", "rollback", "new_migration", "regen", "check_chain", "verify_all"],
+                    },
+                },
+                "required": ["control"],
+            },
         }));
         items.push(json!({
             "name": "navigate",

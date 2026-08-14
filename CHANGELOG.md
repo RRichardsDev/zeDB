@@ -16,6 +16,13 @@ GitHub release notes.
   instead of restarting; Close hides the window without stopping a
   run. Concurrent harness downloads (checks plus verify at once) are
   serialized so they cannot corrupt the cache.
+- The in-app agent gains two read-only tools and a pointer:
+  `check_chain` runs the sql/equivalence/lifecycle checks,
+  `regen_preview` shows what Regen would write without writing, and
+  `highlight_control` flashes a purple border on a fleet control for
+  a few seconds so the agent can point at buttons it deliberately
+  cannot press (the lock, Upgrade all, rollback). Server writes stay
+  unreachable; the contract is written down in docs/ACP-STANDARDS.md.
 - A failed chain check turns the regen icon yellow with "Chain check
   failed. Please regen.", pointing at the most common cause (stale
   current-state) and its fix in one glance.

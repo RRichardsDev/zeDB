@@ -263,6 +263,13 @@ fn fleet_icon_button(
         .on_click(on_click)
 }
 
+impl Workspace {
+    /// Whether the agent asked to point at this control right now.
+    pub(crate) fn agent_highlight(&self, control: &str) -> bool {
+        self.control_highlight.as_deref() == Some(control)
+    }
+}
+
 fn action_button(
     id: &'static str,
     label: String,

@@ -217,7 +217,11 @@ impl Workspace {
                     actions = actions.child(action_button(
                         "fleet-act-rollback",
                         format!("Roll back {head:05}"),
-                        theme::danger(),
+                        if self.agent_highlight("rollback") {
+                            theme::filter_tint()
+                        } else {
+                            theme::danger()
+                        },
                         {
                             let database = database.clone();
                             cx.listener(move |this, _, _, cx| {

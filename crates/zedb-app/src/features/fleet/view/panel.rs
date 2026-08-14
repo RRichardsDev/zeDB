@@ -151,12 +151,17 @@ impl Workspace {
                         cx.notify();
                     })),
             )
-            .child(fleet_icon_button(
-                "fleet-new-migration",
-                "icons/migration-plus.svg",
-                "New migration: author a draft against the pinned server",
-                cx.listener(|this, _, window, cx| this.author_open(window, cx)),
-            ))
+            .child(
+                fleet_icon_button(
+                    "fleet-new-migration",
+                    "icons/migration-plus.svg",
+                    "New migration: author a draft against the pinned server",
+                    cx.listener(|this, _, window, cx| this.author_open(window, cx)),
+                )
+                .when(self.agent_highlight("new_migration"), |button| {
+                    button.border_color(theme::filter_tint())
+                }),
+            )
             .child({
                 let regen_status = self.regen_status;
                 // A failed chain check is the regen's cue: stale
@@ -182,7 +187,11 @@ impl Workspace {
                     .justify_center()
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(theme::border())
+                    .border_color(if self.agent_highlight("regen") {
+                        theme::filter_tint()
+                    } else {
+                        theme::border()
+                    })
                     .child(
                         svg()
                             .path("icons/regen.svg")
@@ -240,7 +249,11 @@ impl Workspace {
                     .justify_center()
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(theme::border())
+                    .border_color(if self.agent_highlight("check_chain") {
+                        theme::filter_tint()
+                    } else {
+                        theme::border()
+                    })
                     .child(if checks_running {
                         use gpui::{percentage, Animation, AnimationExt as _, Transformation};
                         use gpui_component::Sizable as _;
@@ -326,7 +339,9 @@ impl Workspace {
                     .justify_center()
                     .rounded(px(3.))
                     .border_1()
-                    .border_color(if unlocked {
+                    .border_color(if self.agent_highlight("lock") {
+                        theme::filter_tint()
+                    } else if unlocked {
                         theme::danger()
                     } else {
                         theme::border()
@@ -403,7 +418,11 @@ impl Workspace {
                             .py_1()
                             .rounded(px(3.))
                             .border_1()
-                            .border_color(theme::warning())
+                            .border_color(if self.agent_highlight("upgrade_all") {
+                                theme::filter_tint()
+                            } else {
+                                theme::warning()
+                            })
                             .text_color(theme::warning())
                             .child("Upgrade all")
                             .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
@@ -845,7 +864,11 @@ impl Workspace {
             .justify_center()
             .rounded(px(3.))
             .border_1()
-            .border_color(theme::border())
+            .border_color(if self.agent_highlight("verify_all") {
+                theme::filter_tint()
+            } else {
+                theme::border()
+            })
             .hover(|button| button.bg(theme::hover()).cursor_pointer())
             .on_click(cx.listener(|this, _, _, cx| this.fleet_verify_all(cx)));
         match phase {

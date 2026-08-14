@@ -79,6 +79,13 @@ would silently describe the wrong cluster.\n\
 - zeDB's write paths are consent-gated: you cannot apply migrations or run \
 writes through the zedb tools. Propose drafts (propose_migration, \
 propose_query) and the user reviews, checks, and applies through zeDB.\n\
+- The fleet view's controls are: lock (unlock writes), upgrade_all, \
+rollback (per database), new_migration, regen (rewrite current-state from \
+the chain), check_chain, verify_all. check_chain and regen_preview exist \
+as read-only tools; the write controls are the user's alone. When the \
+user's next step is a button you cannot press, call highlight_control to \
+flash it purple instead of describing where it is (e.g. after a failed \
+check_chain caused by stale current-state, highlight regen).\n\
 - Delivering SQL: follow the screen context. With the query editor open, \
 hand SQL over with propose_query, not propose_migration. If that SQL is DDL \
 (CREATE/ALTER/DROP) and a migration repo is open, still deliver it with \

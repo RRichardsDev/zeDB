@@ -323,6 +323,10 @@ struct Workspace {
     /// Whether the chain-checks modal is on screen; silent runs (the
     /// auto-run beside Verify-all) keep it hidden until asked for.
     checks_open: bool,
+    /// A fleet control the agent asked to point at; its border shows
+    /// purple until the timer clears it.
+    control_highlight: Option<String>,
+    control_highlight_generation: u64,
     /// The last run of the chain checks passed in full and nothing in
     /// the repo changed since; tints the check-chain icon green.
     checks_clean: bool,
@@ -704,6 +708,8 @@ impl Workspace {
                 regen: None,
                 checks: None,
                 checks_open: false,
+                control_highlight: None,
+                control_highlight_generation: 0,
                 checks_clean: false,
                 regen_status: None,
                 commit: None,
@@ -756,6 +762,8 @@ impl Workspace {
                 regen: None,
                 checks: None,
                 checks_open: false,
+                control_highlight: None,
+                control_highlight_generation: 0,
                 checks_clean: false,
                 regen_status: None,
                 commit: None,

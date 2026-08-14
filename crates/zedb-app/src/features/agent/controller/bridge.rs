@@ -109,6 +109,41 @@ impl Workspace {
                     .unwrap_or_default(),
                 false,
             ),
+            "highlight_control" => {
+                const CONTROLS: [&str; 7] = [
+                    "lock",
+                    "upgrade_all",
+                    "rollback",
+                    "new_migration",
+                    "regen",
+                    "check_chain",
+                    "verify_all",
+                ];
+                let control = arguments
+                    .get("control")
+                    .and_then(|control| control.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if !CONTROLS.contains(&control.as_str()) {
+                    return (format!("unknown control: {control}"), true);
+                }
+                self.control_highlight = Some(control.clone());
+                self.control_highlight_generation += 1;
+                let generation = self.control_highlight_generation;
+                cx.spawn(async move |this, cx| {
+                    gpui::Timer::after(std::time::Duration::from_secs(4)).await;
+                    this.update(cx, |this, cx| {
+                        if this.control_highlight_generation == generation {
+                            this.control_highlight = None;
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
+                narrate(self, format!("agent: pointed at the {control} control"), cx);
+                (format!("{control} is highlighted for a few seconds"), false)
+            }
             "navigate" => {
                 let view = arguments
                     .get("view")
