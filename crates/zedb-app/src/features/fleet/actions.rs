@@ -244,6 +244,25 @@ impl Workspace {
         .detach();
     }
 
+    /// The connection target changed: everything the fleet view learned
+    /// from the previous cluster (status rows, drift, a half-configured
+    /// action) is about a different world now. The repo stays open;
+    /// the next fleet open refetches against the new cluster.
+    pub(crate) fn fleet_connection_reset(&mut self) {
+        self.fleet.rows.clear();
+        self.fleet.fetched_at = None;
+        self.fleet.fetch_error = None;
+        self.fleet.selected = None;
+        self.fleet.drift.clear();
+        self.fleet.drift_loading.clear();
+        self.fleet.drift_error = None;
+        self.fleet.harness_phase = None;
+        self.fleet.verify_total = 0;
+        self.fleet.pending_action = None;
+        self.fleet.ack_structural = false;
+        self.fleet.action_running = false;
+    }
+
     pub(crate) fn fleet_refresh(&mut self, cx: &mut Context<Self>) {
         let Some(repo) = self.fleet.repo.clone() else {
             return;

@@ -127,6 +127,9 @@ impl Workspace {
                 // the previous cluster's ops on screen.
                 this.show_ops = false;
                 this.show_query_editor = true;
+                // Same for the fleet: its rows and drift describe the
+                // previous cluster.
+                this.fleet_connection_reset();
                 this.start_health_poll(cx);
                 this.notice = Some(format!(
                     "Connected to {name} via {} ({reachable}/{total} nodes reachable)",
