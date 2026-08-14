@@ -9,6 +9,11 @@ GitHub release notes.
 
 ## Unreleased
 
+- Fixed empty databases being invisible in the schema sidebar: the
+  schema cache was built purely from `system.tables`, so a freshly
+  created database (or a brand-new service where every database is
+  empty) showed nothing until its first table. The cache now carries
+  the database list alongside the tables.
 - Fixed the agent pane's zedb tools (mcp__zedb__*) silently missing
   from sessions: the MCP server's delete-on-read credentials file
   died when the agent runtime respawned the server. Config now
