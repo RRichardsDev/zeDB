@@ -210,7 +210,12 @@ impl Workspace {
                                         // label stays readable on top.
                                         .bg(theme::success().opacity(0.35)),
                                 )
-                                .child(div().relative().child("Downloading\u{2026}"))
+                                .child(div().relative().child(match total {
+                                    // The label is the number; the tooltip
+                                    // keeps the words and the bytes.
+                                    Some(_) => format!("{:.0}%", fraction * 100.0),
+                                    None => "Downloading\u{2026}".to_string(),
+                                }))
                                 .tooltip(move |window, cx| {
                                     gpui_component::tooltip::Tooltip::new(match total {
                                         Some(total) => format!(

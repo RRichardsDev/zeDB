@@ -28,8 +28,8 @@ GitHub release notes.
   baseline does create the database are unaffected.
 - The authoring overlay's Check button now shows what it is doing
   when the ClickHouse harness has to be fetched first: the label
-  reads "Downloading", the button's background fills green with the
-  actual download progress, and the tooltip carries the byte count. When the
+  shows the download percentage while the button's background fills
+  green with the actual progress, and the tooltip carries the byte count. When the
   download is done but macOS is still verifying the fresh binary
   (that long first-run pause), the button says "Verifying" with a
   lock icon instead of looking stuck, and a spinning hourglass marks
