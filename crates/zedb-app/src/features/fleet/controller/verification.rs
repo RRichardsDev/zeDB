@@ -18,14 +18,6 @@ impl Workspace {
         let Some(connected) = &self.connection.connected else {
             return;
         };
-        let Some(binary) = zedb_ch::cached_binary(&repo.config.engine.version) else {
-            self.fleet.drift_error = Some(format!(
-                "pinned ClickHouse {} is not cached; run `zedb pin` first",
-                repo.config.engine.version
-            ));
-            cx.notify();
-            return;
-        };
         let databases: Vec<String> = self
             .fleet
             .rows
@@ -49,6 +41,20 @@ impl Workspace {
             tokio::sync::mpsc::unbounded_channel::<(String, Result<Vec<String>, String>)>();
         let task_databases = databases.clone();
         rt::tokio().spawn(async move {
+            // Resolve (and download, with the closest-release fallback)
+            // in the task, like Check does; nothing to pre-cache.
+            let binary = match zedb_ch::ensure_binary(&repo.config.engine.version).await {
+                Ok(binary) => binary,
+                Err(error) => {
+                    let message = error.to_string();
+                    for database in task_databases {
+                        if results_tx.send((database, Err(message.clone()))).is_err() {
+                            break;
+                        }
+                    }
+                    return;
+                }
+            };
             let runner = Runner::new(
                 &repo,
                 RunnerOptions {
@@ -114,14 +120,6 @@ impl Workspace {
         let Some(connected) = &self.connection.connected else {
             return;
         };
-        let Some(binary) = zedb_ch::cached_binary(&repo.config.engine.version) else {
-            self.fleet.drift_error = Some(format!(
-                "pinned ClickHouse {} is not cached; run `zedb pin` first",
-                repo.config.engine.version
-            ));
-            cx.notify();
-            return;
-        };
         if self.fleet.drift_loading.contains(&database) {
             return;
         }
@@ -132,6 +130,9 @@ impl Workspace {
 
         let task_database = database.clone();
         let handle = rt::tokio().spawn(async move {
+            let binary = zedb_ch::ensure_binary(&repo.config.engine.version)
+                .await
+                .map_err(|error| error.to_string())?;
             let runner = Runner::new(
                 &repo,
                 RunnerOptions {

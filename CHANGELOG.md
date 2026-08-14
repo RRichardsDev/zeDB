@@ -26,6 +26,10 @@ GitHub release notes.
   provision the database up front, the way a real fleet's bootstrap
   does, so chains that only create tables check clean. Chains whose
   baseline does create the database are unaffected.
+- Verify (single database and whole fleet) now fetches its ClickHouse
+  harness itself, with the same closest-release fallback as Check,
+  instead of failing with "not cached; run `zedb pin` first" on a
+  machine that never ran the CLI.
 - The authoring overlay's Check button now shows what it is doing
   when the ClickHouse harness has to be fetched first: the label
   shows the download percentage while the button's background fills
