@@ -43,7 +43,8 @@ GitHub release notes.
   state throughout: download percentage over a green fill, a lock
   that blinks open and shut while macOS verifies the fresh binary,
   and a spinning hourglass (with N/M done in the tooltip) while
-  databases are diffed.
+  databases are diffed. Once every database verifies clean, the
+  verify icon turns green until a row goes unverified again.
 - The authoring overlay's Check button now shows what it is doing
   when the ClickHouse harness has to be fetched first: the label
   shows the download percentage while the button's background fills

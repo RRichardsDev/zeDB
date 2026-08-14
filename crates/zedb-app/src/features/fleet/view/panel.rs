@@ -755,6 +755,21 @@ impl Workspace {
         let phase = self.fleet.harness_phase;
         let in_flight = self.fleet.drift_loading.len();
         let total = self.fleet.verify_total;
+        // Every database verified and none drifted: the icon earns
+        // its green (the state decays as soon as a row is unverified).
+        let all_clean = in_flight == 0
+            && !self.fleet.rows.is_empty()
+            && self
+                .fleet
+                .rows
+                .iter()
+                .filter(|row| row.excluded.is_none())
+                .all(|row| {
+                    self.fleet
+                        .drift
+                        .get(&row.database)
+                        .is_some_and(|info| info.findings.is_empty())
+                });
         let button = div()
             .id("fleet-verify-all")
             .group("fleet-verify-all")
@@ -845,13 +860,23 @@ impl Workspace {
                     svg()
                         .path("icons/verify.svg")
                         .size(px(14.))
-                        .text_color(theme::text_dim())
-                        .group_hover("fleet-verify-all", |icon| icon.text_color(theme::text())),
+                        .text_color(if all_clean {
+                            theme::success()
+                        } else {
+                            theme::text_dim()
+                        })
+                        .when(!all_clean, |icon| {
+                            icon.group_hover("fleet-verify-all", |icon| {
+                                icon.text_color(theme::text())
+                            })
+                        }),
                 )
-                .tooltip(|window, cx| {
-                    gpui_component::tooltip::Tooltip::new(
-                        "Verify all: diff every database's live schema against its chain position",
-                    )
+                .tooltip(move |window, cx| {
+                    gpui_component::tooltip::Tooltip::new(if all_clean {
+                        "Verified: every database matches its chain position \u{b7} click to re-verify"
+                    } else {
+                        "Verify all: diff every database's live schema against its chain position"
+                    })
                     .build(window, cx)
                 }),
         }
