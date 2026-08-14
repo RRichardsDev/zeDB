@@ -7,6 +7,12 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Fixed `PRIMARY KEY` not being split onto its own line in the schema
+  panel's engine definition, so a table with an explicit primary key now
+  reads as cleanly as one without.
+
 ## v0.1.29 - 2026-08-14
 
 No functional changes. Internal code maintainability improvements.

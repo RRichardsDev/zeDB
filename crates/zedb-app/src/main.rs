@@ -114,7 +114,7 @@ fn format_engine_definition(engine: &str) -> String {
     let mut formatted = format!("ENGINE = {engine}");
     for clause in [
         " PARTITION BY ",
-        " theme::primary() KEY ",
+        " PRIMARY KEY ",
         " ORDER BY ",
         " SAMPLE BY ",
         " TTL ",
@@ -1121,6 +1121,18 @@ mod tests {
         assert_eq!(
             formatted,
             "ENGINE = MergeTree\nORDER BY id\nPARTITION BY toYYYYMM(created_at)\nSETTINGS index_granularity = 8192"
+        );
+    }
+
+    #[test]
+    fn engine_definition_splits_primary_key_and_sample_by() {
+        let formatted = format_engine_definition(
+            "MergeTree PARTITION BY toYYYYMM(created_at) PRIMARY KEY (tenant, id) ORDER BY (tenant, id, created_at) SAMPLE BY id TTL created_at + INTERVAL 90 DAY",
+        );
+
+        assert_eq!(
+            formatted,
+            "ENGINE = MergeTree\nPARTITION BY toYYYYMM(created_at)\nPRIMARY KEY (tenant, id)\nORDER BY (tenant, id, created_at)\nSAMPLE BY id\nTTL created_at + INTERVAL 90 DAY"
         );
     }
 }
