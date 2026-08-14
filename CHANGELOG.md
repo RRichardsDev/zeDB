@@ -44,7 +44,10 @@ GitHub release notes.
   from the picker's approval is kept, per host), so cloning and
   pushing no longer depend on the machine's SSH keys and switching
   git accounts stops being an SSH puzzle. Typed git@ URLs keep using
-  your own git and keys.
+  your own git and keys. Brokered runs also clear git's configured
+  credential helpers (macOS ships osxkeychain), which otherwise
+  answered with whatever account they stored last and caused
+  not-found failures on private repos of the right account.
 - Clone failures read like sentences now: git's remote banner noise
   is boiled down to the actual error line, and a not-found or
   permission failure explains that zeDB clones with your own git over
