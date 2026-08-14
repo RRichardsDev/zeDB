@@ -206,7 +206,9 @@ impl Workspace {
                                         .bottom_0()
                                         .w(gpui::relative(fraction.clamp(0.02, 1.0)))
                                         .rounded(px(3.))
-                                        .bg(theme::hover()),
+                                        // Green, but quiet enough that the
+                                        // label stays readable on top.
+                                        .bg(theme::success().opacity(0.35)),
                                 )
                                 .child(div().relative().child("Downloading\u{2026}"))
                                 .tooltip(move |window, cx| {
