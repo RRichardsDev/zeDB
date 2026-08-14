@@ -9,6 +9,10 @@ GitHub release notes.
 
 ## Unreleased
 
+- One cluster selector instead of two: the fleet's inline "cluster:"
+  chip is gone, and fleet operations take their ON CLUSTER choice
+  from the top toolbar's node selector (the same place schema apply
+  already did).
 - The fleet toolbar's "Upgrade all" button only appears while
   something is actually pending; a fully applied fleet shows a green
   "Up to date" tick instead.

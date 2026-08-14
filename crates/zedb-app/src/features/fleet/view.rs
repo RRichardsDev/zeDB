@@ -121,10 +121,6 @@ pub struct FleetState {
     pub write_unlocked: bool,
     /// Cluster names discovered from system.clusters on refresh.
     pub clusters: Vec<String>,
-    /// The ${cluster} value for fleet operations; None means declustered.
-    pub selected_cluster: Option<String>,
-    /// The cluster dropdown is open.
-    pub cluster_open: bool,
     pub pending_action: Option<FleetAction>,
     pub ack_structural: bool,
     pub confirm_input: Entity<TextInput>,
@@ -150,7 +146,7 @@ pub struct FleetState {
 impl FleetState {
     pub fn new(
         initial_path: &str,
-        initial_cluster: &str,
+        _initial_cluster: &str,
         window: &mut gpui::Window,
         cx: &mut Context<Workspace>,
     ) -> Self {
@@ -178,8 +174,6 @@ impl FleetState {
             verify_total: 0,
             write_unlocked: false,
             clusters: Vec::new(),
-            selected_cluster: (!initial_cluster.is_empty()).then(|| initial_cluster.to_string()),
-            cluster_open: false,
             pending_action: None,
             ack_structural: false,
             confirm_input,

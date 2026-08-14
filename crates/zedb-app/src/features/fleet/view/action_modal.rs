@@ -44,7 +44,12 @@ impl Workspace {
                     params.insert(name.clone(), default.clone());
                 }
             }
-            if let Some(cluster) = &self.fleet.selected_cluster {
+            if let Some(cluster) = self
+                .connection
+                .connected
+                .as_ref()
+                .and_then(|connected| connected.apply_cluster.as_ref())
+            {
                 params.insert("cluster".into(), cluster.clone());
             }
             let with_db = |database: &str| {

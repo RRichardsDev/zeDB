@@ -148,7 +148,6 @@ impl Workspace {
                     .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.fleet.filter_open = !this.fleet.filter_open;
-                        this.fleet.cluster_open = false;
                         cx.notify();
                     })),
             )
@@ -319,41 +318,9 @@ impl Workspace {
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.fleet.write_unlocked = !this.fleet.write_unlocked;
-                        this.fleet.cluster_open = false;
                         cx.notify();
                     })),
             )
-            .when(unlocked, |controls| {
-                controls.child(
-                    div()
-                        .id("fleet-cluster")
-                        .px_3()
-                        .py_1()
-                        .rounded(px(3.))
-                        .border_1()
-                        .border_color(theme::border())
-                        .text_color(theme::text_dim())
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(format!(
-                            "cluster: {}",
-                            self.fleet.selected_cluster.as_deref().unwrap_or("none")
-                        ))
-                        .child(
-                            svg()
-                                .path("icons/chevron-down.svg")
-                                .size(px(12.))
-                                .text_color(theme::text_dim()),
-                        )
-                        .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.fleet.cluster_open = !this.fleet.cluster_open;
-                            this.fleet.filter_open = false;
-                            cx.notify();
-                        })),
-                )
-            })
             .map(|controls| {
                 // "Upgrade all" only while there is anything to
                 // upgrade; a fully applied fleet says so instead.
@@ -760,55 +727,6 @@ impl Workspace {
                                 if !this.fleet.hidden_databases.remove(&database) {
                                     this.fleet.hidden_databases.insert(database.clone());
                                 }
-                                cx.notify();
-                            })),
-                    );
-                }
-                root.child(card)
-            })
-            .when(self.fleet.cluster_open, |root| {
-                let mut card = div()
-                    .id("fleet-cluster-list")
-                    .absolute()
-                    .top(px(84.))
-                    .left(px(150.))
-                    .w(px(240.))
-                    .max_h(px(300.))
-                    .overflow_y_scroll()
-                    .rounded(px(4.))
-                    .border_1()
-                    .border_color(theme::border())
-                    .bg(theme::bg_sidebar())
-                    .p_1()
-                    .flex()
-                    .flex_col();
-                let mut options: Vec<Option<String>> = vec![None];
-                options.extend(self.fleet.clusters.iter().cloned().map(Some));
-                for (index, option) in options.into_iter().enumerate() {
-                    let selected = self.fleet.selected_cluster == option;
-                    let label = option
-                        .clone()
-                        .unwrap_or_else(|| "none (declustered)".into());
-                    card = card.child(
-                        div()
-                            .id(("fleet-cluster-item", index))
-                            .px_2()
-                            .py_1()
-                            .rounded(px(3.))
-                            .text_color(if selected {
-                                theme::text()
-                            } else {
-                                theme::text_dim()
-                            })
-                            .when(selected, |item| item.bg(theme::selected()))
-                            .child(label)
-                            .hover(|item| item.bg(theme::hover()).cursor_pointer())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.fleet.selected_cluster = option.clone();
-                                this.fleet.cluster_open = false;
-                                this.preferences.fleet_cluster =
-                                    this.fleet.selected_cluster.clone();
-                                let _ = zedb_core::save_preferences(&this.preferences);
                                 cx.notify();
                             })),
                     );
