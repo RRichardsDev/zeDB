@@ -254,10 +254,11 @@ impl LocalReplay {
             .collect();
 
         let mut script = String::new();
+        // Every side database is provisioned up front, like the real
+        // fleet where databases exist before migrations run; chains
+        // whose baseline creates ${db} itself are unaffected.
         for database in &all_databases {
-            if database.contains("__") {
-                script.push_str(&format!("CREATE DATABASE IF NOT EXISTS {database};\n"));
-            }
+            script.push_str(&format!("CREATE DATABASE IF NOT EXISTS {database};\n"));
         }
         for side in sides {
             script.push_str(&Self::prepare(side, params, shared_databases)?);

@@ -21,6 +21,11 @@ GitHub release notes.
   closest published release stands in for replay (same major.minor
   first, else the nearest newer, else the newest older), remembered
   beside the binary cache.
+- Chain checks no longer require the migration chain to create its
+  own `${db}` database: the equivalence and lifecycle harnesses now
+  provision the database up front, the way a real fleet's bootstrap
+  does, so chains that only create tables check clean. Chains whose
+  baseline does create the database are unaffected.
 - The authoring overlay's Check button now shows what it is doing
   when the ClickHouse harness has to be fetched first: the label
   reads "Downloading", the button's background fills with the actual
