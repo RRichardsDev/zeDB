@@ -31,9 +31,34 @@ impl Workspace {
         for database in &databases {
             self.fleet.drift_loading.insert(database.clone());
         }
+        self.fleet.verify_total = databases.len();
         self.fleet.drift_error = None;
         let config = connected.client_config.clone();
         cx.notify();
+
+        // Harness progress (download, then macOS verification) drains
+        // into the Verify-all button; the channel closes when the
+        // resolve finishes and the phase clears with it.
+        let (phase_tx, mut phase_rx) =
+            tokio::sync::mpsc::unbounded_channel::<zedb_ch::pin::PinPhase>();
+        let phase_progress: zedb_ch::pin::DownloadProgress = std::sync::Arc::new(move |phase| {
+            let _ = phase_tx.send(phase);
+        });
+        cx.spawn(async move |this, cx| {
+            while let Some(phase) = phase_rx.recv().await {
+                this.update(cx, |this, cx| {
+                    this.fleet.harness_phase = Some(phase);
+                    cx.notify();
+                })
+                .ok();
+            }
+            this.update(cx, |this, cx| {
+                this.fleet.harness_phase = None;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
 
         // Stream results per database so badges appear as each verify
         // lands rather than in one batch at the end.
@@ -43,7 +68,12 @@ impl Workspace {
         rt::tokio().spawn(async move {
             // Resolve (and download, with the closest-release fallback)
             // in the task, like Check does; nothing to pre-cache.
-            let binary = match zedb_ch::ensure_binary(&repo.config.engine.version).await {
+            let binary = match zedb_ch::pin::ensure_binary_with_progress(
+                &repo.config.engine.version,
+                Some(phase_progress),
+            )
+            .await
+            {
                 Ok(binary) => binary,
                 Err(error) => {
                     let message = error.to_string();

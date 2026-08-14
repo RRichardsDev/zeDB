@@ -34,7 +34,10 @@ GitHub release notes.
 - Verify (single database and whole fleet) now fetches its ClickHouse
   harness itself, with the same closest-release fallback as Check,
   instead of failing with "not cached; run `zedb pin` first" on a
-  machine that never ran the CLI.
+  machine that never ran the CLI. The Verify-all button shows its
+  state throughout: download percentage over a green fill, a lock
+  while macOS verifies the fresh binary, and a spinning hourglass
+  (with N/M done in the tooltip) while databases are diffed.
 - The authoring overlay's Check button now shows what it is doing
   when the ClickHouse harness has to be fetched first: the label
   shows the download percentage while the button's background fills

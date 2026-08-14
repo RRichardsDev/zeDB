@@ -110,6 +110,12 @@ pub struct FleetState {
     pub drift: HashMap<String, DriftInfo>,
     pub drift_loading: HashSet<String>,
     pub drift_error: Option<String>,
+    /// While a verify pass fetches its ClickHouse harness: download
+    /// progress, then macOS verifying the fresh binary.
+    pub harness_phase: Option<zedb_ch::pin::PinPhase>,
+    /// How many databases the running verify pass covers, for the
+    /// button's progress tooltip.
+    pub verify_total: usize,
     /// Explicit per-session consent to mutate through this connection;
     /// reset whenever the connection changes.
     pub write_unlocked: bool,
@@ -168,6 +174,8 @@ impl FleetState {
             drift: HashMap::new(),
             drift_loading: HashSet::new(),
             drift_error: None,
+            harness_phase: None,
+            verify_total: 0,
             write_unlocked: false,
             clusters: Vec::new(),
             selected_cluster: (!initial_cluster.is_empty()).then(|| initial_cluster.to_string()),

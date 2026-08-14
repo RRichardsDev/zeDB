@@ -170,12 +170,7 @@ impl Workspace {
                 "Check chain: sql, equivalence, and lifecycle against the pinned server",
                 cx.listener(|this, _, _, cx| this.codegen_start_checks(cx)),
             ))
-            .child(fleet_icon_button(
-                "fleet-verify-all",
-                "icons/verify.svg",
-                "Verify all: diff every database's live schema against its chain position",
-                cx.listener(|this, _, _, cx| this.fleet_verify_all(cx)),
-            ))
+            .child(self.fleet_verify_all_button(cx))
             .when(
                 self.fleet.git.as_ref().is_some_and(|git| git.dirty > 0),
                 |controls| {
@@ -727,5 +722,121 @@ impl Workspace {
             .when_some(self.author_panel(cx), |root, panel| root.child(panel))
             .when_some(self.codegen_panel(cx), |root, panel| root.child(panel))
             .when_some(self.commit_panel(cx), |root, panel| root.child(panel))
+    }
+}
+
+impl Workspace {
+    /// The Verify-all icon button with its live state: percentage over
+    /// a green fill while the harness downloads, a lock while macOS
+    /// verifies it, a spinning hourglass while databases are diffed.
+    fn fleet_verify_all_button(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let phase = self.fleet.harness_phase;
+        let in_flight = self.fleet.drift_loading.len();
+        let total = self.fleet.verify_total;
+        let button = div()
+            .id("fleet-verify-all")
+            .group("fleet-verify-all")
+            .size(px(28.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(3.))
+            .border_1()
+            .border_color(theme::border())
+            .hover(|button| button.bg(theme::hover()).cursor_pointer())
+            .on_click(cx.listener(|this, _, _, cx| this.fleet_verify_all(cx)));
+        match phase {
+            Some(zedb_ch::pin::PinPhase::Downloading { received, total }) => {
+                let fraction = total
+                    .filter(|total| *total > 0)
+                    .map(|total| received as f32 / total as f32)
+                    .unwrap_or(0.0);
+                button
+                    .relative()
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(gpui::relative(fraction.clamp(0.02, 1.0)))
+                            .rounded(px(3.))
+                            .bg(theme::success().opacity(0.35)),
+                    )
+                    .child(
+                        div()
+                            .relative()
+                            .text_xs()
+                            .text_color(theme::text())
+                            .child(format!("{:.0}%", fraction * 100.0)),
+                    )
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(match total {
+                            Some(total) => format!(
+                                "Getting a ClickHouse harness to verify against \u{b7} {} of {}",
+                                Workspace::format_bytes(received),
+                                Workspace::format_bytes(total),
+                            ),
+                            None => "Getting a ClickHouse harness to verify against".into(),
+                        })
+                        .build(window, cx)
+                    })
+            }
+            Some(zedb_ch::pin::PinPhase::Verifying) => button
+                .child(
+                    svg()
+                        .path("icons/lock.svg")
+                        .size(px(14.))
+                        .text_color(theme::text_dim()),
+                )
+                .tooltip(|window, cx| {
+                    gpui_component::tooltip::Tooltip::new(
+                        "macOS is verifying the ClickHouse harness (first run only)",
+                    )
+                    .build(window, cx)
+                }),
+            None if in_flight > 0 => {
+                use gpui::{percentage, Animation, AnimationExt as _, Transformation};
+                use gpui_component::Sizable as _;
+                let done = total.saturating_sub(in_flight);
+                button
+                    .child(
+                        gpui_component::Icon::empty()
+                            .path("icons/hourglass.svg")
+                            .with_size(gpui_component::Size::Small)
+                            .text_color(theme::text_dim())
+                            .with_animation(
+                                "fleet-verify-spin",
+                                Animation::new(std::time::Duration::from_secs(1)).repeat(),
+                                |icon, delta| {
+                                    icon.transform(Transformation::rotate(percentage(delta)))
+                                },
+                            ),
+                    )
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(if total > 0 {
+                            format!("Verifying \u{b7} {done}/{total} databases done")
+                        } else {
+                            "Verifying\u{2026}".to_string()
+                        })
+                        .build(window, cx)
+                    })
+            }
+            None => button
+                .child(
+                    svg()
+                        .path("icons/verify.svg")
+                        .size(px(14.))
+                        .text_color(theme::text_dim())
+                        .group_hover("fleet-verify-all", |icon| icon.text_color(theme::text())),
+                )
+                .tooltip(|window, cx| {
+                    gpui_component::tooltip::Tooltip::new(
+                        "Verify all: diff every database's live schema against its chain position",
+                    )
+                    .build(window, cx)
+                }),
+        }
     }
 }
