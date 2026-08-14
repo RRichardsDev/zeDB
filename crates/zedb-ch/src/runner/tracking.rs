@@ -82,8 +82,18 @@ impl Runner<'_> {
         );
         let result = match self.client.query(&sql).await {
             Ok(result) => result,
-            // A missing tracking table means nothing was ever applied.
-            Err(error) if error.to_string().contains("UNKNOWN_TABLE") => {
+            // A missing tracking table or database (code 60 / 81:
+            // a server where nothing was ever applied, e.g. a fresh
+            // Cloud service) means exactly that: nothing applied.
+            Err(error)
+                if {
+                    let text = error.to_string();
+                    text.contains("UNKNOWN_TABLE")
+                        || text.contains("UNKNOWN_DATABASE")
+                        || text.contains("(code 60)")
+                        || text.contains("(code 81)")
+                } =>
+            {
                 return Ok(Vec::new());
             }
             Err(error) => return Err(RunnerError::Server(error.to_string())),

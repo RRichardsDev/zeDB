@@ -78,8 +78,101 @@ pub async fn discover_server_version(config: ChConfig) -> Result<String, PinErro
         .ok_or_else(|| PinError::Discovery("SELECT version() returned no rows".into()))
 }
 
-/// Return the cached binary for `version`, downloading it first if needed.
+/// Return the cached binary for `version`, downloading it first if
+/// needed. Cloud servers pin builds (e.g. 26.2.1.558) that have no
+/// OSS release asset; when the exact version is not published, the
+/// nearest published release of the same major.minor stands in, and
+/// the substitution is remembered beside the cache so the release
+/// listing is not re-fetched every check.
 pub async fn ensure_binary(version: &str) -> Result<PathBuf, PinError> {
+    let exact = ensure_exact_binary(version).await;
+    let Err(PinError::DownloadFailed { .. }) = &exact else {
+        return exact;
+    };
+    let alias_path = binary_cache_dir().join(version).join("fallback-version");
+    let remembered = std::fs::read_to_string(&alias_path)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let fallback = match remembered {
+        Some(fallback) => Some(fallback),
+        None => nearest_published_release(version).await?,
+    };
+    let Some(fallback) = fallback else {
+        return exact;
+    };
+    let path = ensure_exact_binary(&fallback).await?;
+    if let Some(parent) = alias_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&alias_path, &fallback);
+    Ok(path)
+}
+
+/// The newest published release sharing `version`'s major.minor, from
+/// the GitHub releases listing; None when none is published.
+async fn nearest_published_release(version: &str) -> Result<Option<String>, PinError> {
+    let mut parts = version.split('.');
+    let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
+        return Ok(None);
+    };
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("zeDB/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| PinError::Http(error.to_string()))?;
+    let body = client
+        .get("https://api.github.com/repos/ClickHouse/ClickHouse/releases?per_page=100")
+        .send()
+        .await
+        .map_err(|error| PinError::Http(error.to_string()))?
+        .error_for_status()
+        .map_err(|error| PinError::Http(error.to_string()))?
+        .text()
+        .await
+        .map_err(|error| PinError::Http(error.to_string()))?;
+    let releases: serde_json::Value =
+        serde_json::from_str(&body).map_err(|error| PinError::Http(error.to_string()))?;
+    let tags = releases
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|release| release.get("tag_name").and_then(|tag| tag.as_str()));
+    Ok(best_release_tag(&format!("{major}.{minor}."), tags))
+}
+
+/// Pick the highest version among tags like `v26.2.1.9999-stable`
+/// whose version starts with `prefix`.
+fn best_release_tag<'a>(prefix: &str, tags: impl Iterator<Item = &'a str>) -> Option<String> {
+    let mut best: Option<(Vec<u64>, String)> = None;
+    for tag in tags {
+        let Some(candidate) = tag
+            .strip_prefix('v')
+            .and_then(|tag| tag.rsplit_once('-'))
+            .map(|(version, _)| version)
+        else {
+            continue;
+        };
+        if !candidate.starts_with(prefix) {
+            continue;
+        }
+        let key: Vec<u64> = candidate
+            .split('.')
+            .map(|part| part.parse().unwrap_or(0))
+            .collect();
+        if best
+            .as_ref()
+            .map(|(existing, _)| key > *existing)
+            .unwrap_or(true)
+        {
+            best = Some((key, candidate.to_string()));
+        }
+    }
+    best.map(|(_, candidate)| candidate)
+}
+
+/// Return the cached binary for exactly `version`, downloading it
+/// first if needed.
+async fn ensure_exact_binary(version: &str) -> Result<PathBuf, PinError> {
     if let Some(path) = cached_binary(version) {
         return Ok(path);
     }
@@ -210,5 +303,27 @@ pub fn smoke_replay(binary: &Path) -> Result<(), PinError> {
             "smoke replay failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picks_the_newest_same_minor_release() {
+        let tags = [
+            "v26.3.1.100-stable",
+            "v26.2.1.400-stable",
+            "v26.2.1.999-lts",
+            "v26.2.1.998-stable",
+            "v25.8.9.1-lts",
+            "not-a-version",
+        ];
+        assert_eq!(
+            best_release_tag("26.2.", tags.iter().copied()),
+            Some("26.2.1.999".to_string())
+        );
+        assert_eq!(best_release_tag("24.1.", tags.iter().copied()), None);
     }
 }

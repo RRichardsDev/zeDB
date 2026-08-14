@@ -14,6 +14,12 @@ GitHub release notes.
   created database (or a brand-new service where every database is
   empty) showed nothing until its first table. The cache now carries
   the database list alongside the tables.
+- Fleet works against ClickHouse Cloud services: a missing tracking
+  database now reads as "nothing applied yet" instead of erroring the
+  matrix (code 81 on a fresh service), and migration checks no longer
+  fail on Cloud-pinned versions with no OSS release asset; the
+  nearest published release of the same major.minor stands in for
+  replay, remembered beside the binary cache.
 - The agent's fleet tools (fleet_status, list_migrations, dry_run,
   drift) now follow the app live: a migration repo attached, switched,
   or grown after the agent thread started is picked up on the next
