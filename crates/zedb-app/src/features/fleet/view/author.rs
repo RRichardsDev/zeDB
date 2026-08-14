@@ -3,6 +3,7 @@ use gpui_component::input::{Input, InputState};
 
 use super::*;
 use crate::author::RollbackChoice;
+use crate::fleet::view::panel::verifying_lock;
 use crate::theme;
 
 impl Workspace {
@@ -242,12 +243,7 @@ impl Workspace {
                         // The stall between download and first use:
                         // macOS assessing the fresh binary.
                         Some(zedb_ch::pin::PinPhase::Verifying) => button
-                            .child(
-                                gpui::svg()
-                                    .path("icons/lock.svg")
-                                    .size(px(13.))
-                                    .text_color(theme::text_dim()),
-                            )
+                            .child(verifying_lock("author-verify-lock", 13.))
                             .child("Verifying\u{2026}")
                             .tooltip(|window, cx| {
                                 gpui_component::tooltip::Tooltip::new(

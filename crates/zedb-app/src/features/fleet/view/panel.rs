@@ -725,6 +725,28 @@ impl Workspace {
     }
 }
 
+/// A lock that blinks shut and open while macOS assesses the fresh
+/// harness binary: path-swapped per animation frame, since SVGs
+/// themselves cannot animate here.
+pub(crate) fn verifying_lock(id: &'static str, size: f32) -> impl IntoElement {
+    use gpui::{Animation, AnimationExt as _};
+    svg()
+        .path("icons/lock.svg")
+        .size(px(size))
+        .text_color(theme::text_dim())
+        .with_animation(
+            id,
+            Animation::new(std::time::Duration::from_millis(1600)).repeat(),
+            |lock, delta| {
+                lock.path(if delta < 0.7 {
+                    "icons/lock.svg"
+                } else {
+                    "icons/lock-open.svg"
+                })
+            },
+        )
+}
+
 impl Workspace {
     /// The Verify-all icon button with its live state: percentage over
     /// a green fill while the harness downloads, a lock while macOS
@@ -784,12 +806,7 @@ impl Workspace {
                     })
             }
             Some(zedb_ch::pin::PinPhase::Verifying) => button
-                .child(
-                    svg()
-                        .path("icons/lock.svg")
-                        .size(px(14.))
-                        .text_color(theme::text_dim()),
-                )
+                .child(verifying_lock("fleet-verify-lock", 14.))
                 .tooltip(|window, cx| {
                     gpui_component::tooltip::Tooltip::new(
                         "macOS is verifying the ClickHouse harness (first run only)",

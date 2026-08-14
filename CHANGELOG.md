@@ -36,16 +36,17 @@ GitHub release notes.
   instead of failing with "not cached; run `zedb pin` first" on a
   machine that never ran the CLI. The Verify-all button shows its
   state throughout: download percentage over a green fill, a lock
-  while macOS verifies the fresh binary, and a spinning hourglass
-  (with N/M done in the tooltip) while databases are diffed.
+  that blinks open and shut while macOS verifies the fresh binary,
+  and a spinning hourglass (with N/M done in the tooltip) while
+  databases are diffed.
 - The authoring overlay's Check button now shows what it is doing
   when the ClickHouse harness has to be fetched first: the label
   shows the download percentage while the button's background fills
   green with the actual progress, and the tooltip carries the byte count. When the
   download is done but macOS is still verifying the fresh binary
   (that long first-run pause), the button says "Verifying" with a
-  lock icon instead of looking stuck, and a spinning hourglass marks
-  the Checking state.
+  lock icon that blinks open and shut instead of looking stuck, and a
+  spinning hourglass marks the Checking state.
 - The agent's fleet tools (fleet_status, list_migrations, dry_run,
   drift) now follow the app live: a migration repo attached, switched,
   or grown after the agent thread started is picked up on the next
