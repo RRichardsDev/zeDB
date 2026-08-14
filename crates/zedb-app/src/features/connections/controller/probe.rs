@@ -128,14 +128,39 @@ impl Workspace {
                 // loader below closes any table details, whose object
                 // belonged to the old cluster.
                 this.fleet_connection_reset();
+                // The migration repo follows the connection: swap to
+                // the repo remembered for this one (or none), so one
+                // cluster's chain never silently attaches to another.
+                let remembered = this.preferences.fleet_repos.get(&name).cloned();
+                let current = this.fleet.repo_path.read(cx).text().trim().to_string();
+                let target = remembered.unwrap_or_default();
+                if current != target {
+                    let text = target.clone();
+                    this.fleet
+                        .repo_path
+                        .update(cx, |input, cx| input.set_text(text, cx));
+                    this.fleet.repo = None;
+                    this.fleet.git = None;
+                    this.checks = None;
+                    this.checks_open = false;
+                    this.checks_clean = false;
+                    this.regen_status = None;
+                }
                 if first_connect {
                     this.show_fleet = false;
                     this.show_ops = false;
                     this.show_query_editor = true;
                 } else if this.show_fleet {
-                    // Staying on the fleet: refetch against the new
-                    // cluster now rather than showing an empty matrix.
-                    this.fleet_refresh(cx);
+                    // Staying on the fleet: open this connection's
+                    // repo (or refetch the kept one) against the new
+                    // cluster rather than showing an empty matrix.
+                    if this.fleet.repo.is_none()
+                        && !this.fleet.repo_path.read(cx).text().trim().is_empty()
+                    {
+                        this.fleet_open_repo(cx);
+                    } else {
+                        this.fleet_refresh(cx);
+                    }
                 }
                 this.start_health_poll(cx);
                 this.notice = Some(format!(

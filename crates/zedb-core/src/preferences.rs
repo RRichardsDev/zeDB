@@ -22,6 +22,10 @@ pub struct Preferences {
     /// Last-opened migration repo, restored on launch (BYO git: this is
     /// just a local checkout path; git stays the user's workflow).
     pub fleet_repo: Option<String>,
+    /// Migration repo per connection name: the repo follows the
+    /// connection, so one cluster's chain never silently attaches to
+    /// another cluster.
+    pub fleet_repos: std::collections::BTreeMap<String, String>,
     /// Value rendered into ${cluster} for fleet operations.
     pub fleet_cluster: Option<String>,
     /// User-added ACP agents for the agent pane, beyond the built-ins.
@@ -148,6 +152,10 @@ mod tests {
             vim_mode: true,
             experimental_streaming_queries: true,
             fleet_repo: Some("/tmp/repo".into()),
+            fleet_repos: std::collections::BTreeMap::from([(
+                "staging".to_string(),
+                "/tmp/repo".to_string(),
+            )]),
             fleet_cluster: None,
             custom_agents: vec![CustomAgent {
                 name: "My Agent".into(),

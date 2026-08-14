@@ -90,7 +90,13 @@ impl Workspace {
                 self.fleet.editing_repo_path = false;
                 self.fleet.rows.clear();
                 self.fleet.fetched_at = None;
-                self.preferences.fleet_repo = Some(source);
+                self.preferences.fleet_repo = Some(source.clone());
+                // The repo follows the connection it was opened for.
+                if let Some(connected) = &self.connection.connected {
+                    self.preferences
+                        .fleet_repos
+                        .insert(connected.name.clone(), source);
+                }
                 if let Err(error) = save_preferences(&self.preferences) {
                     self.notice = Some(format!("Could not save preferences: {error}"));
                 }

@@ -33,6 +33,10 @@ GitHub release notes.
 - The fleet toolbar's "Upgrade all" button only appears while
   something is actually pending; a fully applied fleet shows a green
   "Up to date" tick instead.
+- The migration repo now follows the connection: each connection
+  remembers its own repo, switching connections swaps to it (or to
+  none), and one cluster's chain never silently attaches to another.
+  Opening a repo while connected records the pairing.
 - Switching connections now keeps you on the view you were using,
   with its data following the connection: the ops view restarts its
   polling against the new cluster, and the fleet matrix drops the
