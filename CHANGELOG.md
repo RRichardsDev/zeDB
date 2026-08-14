@@ -36,6 +36,9 @@ GitHub release notes.
 - The fleet toolbar's "Upgrade all" button only appears while
   something is actually pending; a fully applied fleet shows a green
   "Up to date" tick instead.
+- Cloning a repository you just created no longer fails on the
+  host's provisioning lag: not-found clones retry with exponential
+  backoff for up to ten seconds before the error is believed.
 - Repos opened through the picker's git route now clone over HTTPS
   with credentials answered from the Keychain (the elevated token
   from the picker's approval is kept, per host), so cloning and

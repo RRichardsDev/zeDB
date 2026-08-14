@@ -358,6 +358,36 @@ pub fn clone_repo(url: &str, dest: &Path) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
+    // A just-created repository 404s while the host provisions it
+    // (GitLab reliably, GitHub occasionally). Not-found clones retry
+    // optimistically with exponential backoff, up to ~10s in total;
+    // real not-founds surface after the last attempt. Runs on
+    // blocking pools, so the sleeps stall no UI.
+    let mut delay = std::time::Duration::from_millis(500);
+    let mut waited = std::time::Duration::ZERO;
+    let budget = std::time::Duration::from_secs(10);
+    loop {
+        match clone_once(url, dest) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let transient = error.contains("not found")
+                    || error.contains("could not be found")
+                    || error.contains("could not read");
+                if !transient || waited >= budget {
+                    return Err(error);
+                }
+                std::thread::sleep(delay);
+                waited += delay;
+                delay = (delay * 2).min(budget - waited.min(budget));
+                if delay.is_zero() {
+                    delay = std::time::Duration::from_millis(500);
+                }
+            }
+        }
+    }
+}
+
+fn clone_once(url: &str, dest: &Path) -> Result<(), String> {
     let output = Command::new("git")
         .arg("clone")
         .arg(url)
@@ -372,6 +402,11 @@ pub fn clone_repo(url: &str, dest: &Path) -> Result<(), String> {
     if output.status.success() {
         Ok(())
     } else {
+        // A failed attempt may leave a partial directory behind;
+        // clear it so the retry starts clean.
+        if dest.exists() {
+            let _ = std::fs::remove_dir_all(dest);
+        }
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
 }
