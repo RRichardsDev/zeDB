@@ -9,11 +9,13 @@ GitHub release notes.
 
 ## Unreleased
 
-- Fixed switching connections while the ops view was open leaving the
-  previous cluster's ops on screen: connecting now lands in the query
-  view as intended. The fleet view resets too: status rows, drift
-  results, and any half-configured action from the previous cluster
-  are dropped, and the matrix refetches against the new one on open.
+- Switching connections now keeps you on the view you were using,
+  with its data following the connection: the ops view restarts its
+  polling against the new cluster, and the fleet matrix drops the
+  previous cluster's rows, drift, and any half-configured action and
+  refetches in place. Only a first connect lands in the query view,
+  and an open table inspector closes since its object belonged to the
+  previous cluster.
 - Fixed empty databases being invisible in the schema sidebar: the
   schema cache was built purely from `system.tables`, so a freshly
   created database (or a brand-new service where every database is

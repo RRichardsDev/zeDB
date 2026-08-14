@@ -89,6 +89,7 @@ impl Workspace {
                 }
                 this.connection.endpoint_health.insert(name.clone(), health);
                 this.fleet.write_unlocked = false;
+                let first_connect = this.connection.connected.is_none();
                 this.connection.connected = Some(ConnectedCluster {
                     name: name.clone(),
                     active_node: active_node.node_index,
@@ -119,17 +120,23 @@ impl Workspace {
                 this.schema
                     .provider
                     .set_context(this.schema.cache.clone(), connection.database.clone());
-                // Land in the query view; the connection screen's job
-                // is done.
-                this.show_fleet = false;
-                // The ops view outranks the query editor in render
-                // priority; left set, a connection switch would leave
-                // the previous cluster's ops on screen.
-                this.show_ops = false;
-                this.show_query_editor = true;
-                // Same for the fleet: its rows and drift describe the
-                // previous cluster.
+                // Cluster-derived state always resets (the world
+                // changed), but the view sticks: switching connections
+                // from the ops or fleet view stays there, showing the
+                // new cluster. Only a first connect (nothing was
+                // connected) lands in the query view; the schema
+                // loader below closes any table details, whose object
+                // belonged to the old cluster.
                 this.fleet_connection_reset();
+                if first_connect {
+                    this.show_fleet = false;
+                    this.show_ops = false;
+                    this.show_query_editor = true;
+                } else if this.show_fleet {
+                    // Staying on the fleet: refetch against the new
+                    // cluster now rather than showing an empty matrix.
+                    this.fleet_refresh(cx);
+                }
                 this.start_health_poll(cx);
                 this.notice = Some(format!(
                     "Connected to {name} via {} ({reachable}/{total} nodes reachable)",
