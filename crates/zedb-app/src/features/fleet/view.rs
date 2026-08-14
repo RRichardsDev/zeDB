@@ -99,8 +99,8 @@ impl FleetAction {
 /// when no repo path is set. The elevated token lives only here, in
 /// memory, and drops with the picker.
 pub enum RepoPicker {
-    /// Choose a source: local folder or a git host.
-    Menu,
+    /// Choose a source: a typed/browsed local path or a git host.
+    Menu { path: Entity<TextInput> },
     /// Waiting for the user to approve the elevated device code.
     Authorizing { user_code: String },
     /// Talking to the API.

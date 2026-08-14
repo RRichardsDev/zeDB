@@ -4,7 +4,6 @@
 //! directories are initialized only after an explicit confirmation;
 //! the one exception is a repository the user just created to be one.
 
-use gpui::prelude::*;
 use gpui::Context;
 
 use crate::fleet::view::RepoPicker;
@@ -15,7 +14,8 @@ impl Workspace {
     /// with none, offer the picker.
     pub(crate) fn fleet_repo_button(&mut self, cx: &mut Context<Self>) {
         if self.fleet.repo_path.read(cx).text().trim().is_empty() {
-            self.fleet.repo_picker = Some(RepoPicker::Menu);
+            let path = Self::input("", "/path/to/migration-repo", false, cx);
+            self.fleet.repo_picker = Some(RepoPicker::Menu { path });
             self.fleet.repo_picker_generation += 1;
             cx.notify();
         } else {
@@ -29,8 +29,22 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Local: the native directory dialog.
+    /// The menu's folder button: open the typed path, or browse via
+    /// the native directory dialog when nothing is typed.
     pub(crate) fn repo_picker_local(&mut self, cx: &mut Context<Self>) {
+        if let Some(RepoPicker::Menu { path }) = &self.fleet.repo_picker {
+            let typed = path.read(cx).text().trim().to_string();
+            if !typed.is_empty() {
+                self.fleet.repo_picker = None;
+                self.fleet.repo_picker_generation += 1;
+                self.fleet
+                    .repo_path
+                    .update(cx, |input, cx| input.set_text(typed, cx));
+                self.fleet_open_repo(cx);
+                cx.notify();
+                return;
+            }
+        }
         self.fleet.repo_picker = None;
         cx.notify();
         let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {

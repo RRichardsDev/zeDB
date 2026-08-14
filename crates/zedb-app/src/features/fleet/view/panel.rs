@@ -978,16 +978,6 @@ impl Workspace {
     fn repo_picker_panel(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         use crate::fleet::view::RepoPicker;
         let picker = self.fleet.repo_picker.as_ref()?;
-        let row = |id: gpui::SharedString, label: String| {
-            div()
-                .id(id)
-                .px_2()
-                .py_1()
-                .rounded(px(3.))
-                .text_color(theme::text())
-                .child(label)
-                .hover(|item| item.bg(theme::hover()).cursor_pointer())
-        };
         let mut card = div()
             .w(px(420.))
             .max_h(px(420.))
@@ -1027,18 +1017,71 @@ impl Workspace {
                     ),
             );
         match picker {
-            RepoPicker::Menu => {
+            RepoPicker::Menu { path } => {
+                let icon_choice = |id: &'static str| {
+                    div()
+                        .id(id)
+                        .h(px(36.))
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(theme::border())
+                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                };
                 card = card.child(
-                    row("repo-picker-local".into(), "Local folder\u{2026}".into())
-                        .on_click(cx.listener(|this, _, _, cx| this.repo_picker_local(cx))),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .child(div().flex_1().min_w_0().child(path.clone()))
+                        .child(
+                            icon_choice("repo-picker-local")
+                                .child(
+                                    svg()
+                                        .path("icons/folder-open.svg")
+                                        .size(px(16.))
+                                        .text_color(theme::text()),
+                                )
+                                .tooltip(|window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(
+                                        "Open the typed path, or browse when empty",
+                                    )
+                                    .build(window, cx)
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.repo_picker_local(cx))),
+                        ),
                 );
                 if let crate::GithubAuth::SignedIn(profile) = &self.github {
+                    let provider = profile.provider;
                     card = card.child(
-                        row(
-                            "repo-picker-git".into(),
-                            format!("From {} \u{b7} {}", profile.provider.name(), profile.login),
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.repo_picker_git(cx))),
+                        div().flex().items_center().gap_2().px_2().py_1().child(
+                            icon_choice("repo-picker-git")
+                                .child(
+                                    svg()
+                                        .path(provider.icon())
+                                        .size(px(16.))
+                                        .text_color(theme::text()),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme::text_dim())
+                                        .child(format!("\u{b7} {}", profile.login)),
+                                )
+                                .tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(format!(
+                                        "Pick from your {} repositories",
+                                        provider.name()
+                                    ))
+                                    .build(window, cx)
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.repo_picker_git(cx))),
+                        ),
                     );
                 } else {
                     card = card.child(
