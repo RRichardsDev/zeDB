@@ -91,6 +91,40 @@ pub struct OpsQueueIssue {
     pub node: String,
 }
 
+/// One Kafka consumer, from system.kafka_consumers (absent without
+/// Kafka engine tables).
+#[derive(Clone, Debug)]
+pub struct OpsKafkaConsumer {
+    pub database: String,
+    pub table: String,
+    pub stale_secs: u64,
+    pub messages: u64,
+    pub exception: String,
+    pub node: String,
+}
+
+/// A materialized view that failed during insert, aggregated from
+/// system.query_views_log (needs query_views_log enabled).
+#[derive(Clone, Debug)]
+pub struct OpsViewFailure {
+    pub view: String,
+    pub target: String,
+    pub failures: u64,
+    pub exception: String,
+    pub node: String,
+}
+
+/// Pending async-insert batches, from system.asynchronous_inserts.
+#[derive(Clone, Debug)]
+pub struct OpsAsyncInsert {
+    pub database: String,
+    pub table: String,
+    pub bytes: u64,
+    pub entries: u64,
+    pub oldest_secs: u64,
+    pub node: String,
+}
+
 /// One node's Keeper/ZooKeeper session, from
 /// system.zookeeper_connection (absent on keeper-less servers).
 #[derive(Clone, Debug)]
@@ -172,14 +206,16 @@ pub enum OpsTab {
     Queries,
     Background,
     Replication,
+    Ingestion,
     Storage,
 }
 
 impl OpsTab {
-    pub(crate) const ALL: [OpsTab; 4] = [
+    pub(crate) const ALL: [OpsTab; 5] = [
         OpsTab::Queries,
         OpsTab::Background,
         OpsTab::Replication,
+        OpsTab::Ingestion,
         OpsTab::Storage,
     ];
 
@@ -188,6 +224,7 @@ impl OpsTab {
             OpsTab::Queries => "Queries",
             OpsTab::Background => "Background",
             OpsTab::Replication => "Replication",
+            OpsTab::Ingestion => "Ingestion",
             OpsTab::Storage => "Storage",
         }
     }
@@ -213,6 +250,9 @@ pub struct OpsState {
     pub replica_problems: Vec<OpsReplicaProblem>,
     pub queue_issues: Vec<OpsQueueIssue>,
     pub keeper: Vec<OpsKeeper>,
+    pub kafka_consumers: Vec<OpsKafkaConsumer>,
+    pub view_failures: Vec<OpsViewFailure>,
+    pub async_inserts: Vec<OpsAsyncInsert>,
     pub disks: Vec<OpsDisk>,
     pub top_tables: Vec<OpsTopTable>,
     pub slow_fetch_in_flight: bool,

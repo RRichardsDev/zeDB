@@ -46,6 +46,9 @@ impl Workspace {
         self.ops.replica_problems.clear();
         self.ops.queue_issues.clear();
         self.ops.keeper.clear();
+        self.ops.kafka_consumers.clear();
+        self.ops.view_failures.clear();
+        self.ops.async_inserts.clear();
         self.ops.disks.clear();
         self.ops.top_tables.clear();
         self.ops.as_of = None;
@@ -339,6 +342,45 @@ impl Workspace {
              FROM {}",
             from("system.zookeeper_connection")
         );
+        // Ingestion, all best-effort: kafka_consumers needs Kafka
+        // tables, query_views_log needs its log enabled, and
+        // asynchronous_inserts is empty unless async inserts are on.
+        let kafka_query = format!(
+            "SELECT database, table, \
+                dateDiff('second', last_poll_time, now()), \
+                num_messages_read, \
+                if(length(exceptions.text) > 0, exceptions.text[length(exceptions.text)], ''){host_col} \
+             FROM {} ORDER BY database, table",
+            from("system.kafka_consumers")
+        );
+        let view_failures_query = format!(
+            "SELECT view_name, view_target, count() AS failures, \
+                any(exception){host_col} \
+             FROM {} \
+             WHERE exception != '' AND event_date >= today() - 1 \
+                AND event_time > now() - INTERVAL 24 HOUR \
+             GROUP BY view_name, view_target{} \
+             ORDER BY failures DESC LIMIT 20",
+            from("system.query_views_log"),
+            if cluster.is_some() {
+                ", hostName()"
+            } else {
+                ""
+            },
+        );
+        let async_inserts_query = format!(
+            "SELECT database, table, sum(total_bytes), count(), \
+                max(dateDiff('second', first_update, now())){host_col} \
+             FROM {} \
+             GROUP BY database, table{} \
+             ORDER BY sum(total_bytes) DESC LIMIT 20",
+            from("system.asynchronous_inserts"),
+            if cluster.is_some() {
+                ", hostName()"
+            } else {
+                ""
+            },
+        );
         let disks_query = format!(
             "SELECT name, free_space, total_space{host_col} FROM {} ORDER BY {}",
             from("system.disks"),
@@ -367,6 +409,9 @@ impl Workspace {
             let replica_problems = client.query(&replica_problems_query).await;
             let queue_issues = client.query(&queue_issues_query).await;
             let keeper = client.query(&keeper_query).await;
+            let kafka = client.query(&kafka_query).await;
+            let view_failures = client.query(&view_failures_query).await;
+            let async_inserts = client.query(&async_inserts_query).await;
             let disks = client.query(&disks_query).await;
             let top_tables = client.query(&top_tables_query).await;
             (
@@ -374,6 +419,9 @@ impl Workspace {
                 replica_problems,
                 queue_issues,
                 keeper,
+                kafka,
+                view_failures,
+                async_inserts,
                 disks,
                 top_tables,
             )
@@ -382,8 +430,17 @@ impl Workspace {
             let result = handle.await;
             this.update(cx, |this, cx| {
                 this.ops.slow_fetch_in_flight = false;
-                let Ok((replica_total, replica_problems, queue_issues, keeper, disks, top_tables)) =
-                    result
+                let Ok((
+                    replica_total,
+                    replica_problems,
+                    queue_issues,
+                    keeper,
+                    kafka,
+                    view_failures,
+                    async_inserts,
+                    disks,
+                    top_tables,
+                )) = result
                 else {
                     return;
                 };
@@ -433,6 +490,47 @@ impl Workspace {
                             uptime_secs: number(row.get(2)),
                             expired: number(row.get(3)) > 0,
                             node: text(row.get(4)),
+                        })
+                        .collect();
+                }
+                if let Ok(kafka) = kafka {
+                    this.ops.kafka_consumers = kafka
+                        .rows
+                        .iter()
+                        .map(|row| OpsKafkaConsumer {
+                            database: text(row.first()),
+                            table: text(row.get(1)),
+                            stale_secs: number(row.get(2)),
+                            messages: number(row.get(3)),
+                            exception: text(row.get(4)),
+                            node: text(row.get(5)),
+                        })
+                        .collect();
+                }
+                if let Ok(failures) = view_failures {
+                    this.ops.view_failures = failures
+                        .rows
+                        .iter()
+                        .map(|row| OpsViewFailure {
+                            view: text(row.first()),
+                            target: text(row.get(1)),
+                            failures: number(row.get(2)),
+                            exception: text(row.get(3)),
+                            node: text(row.get(4)),
+                        })
+                        .collect();
+                }
+                if let Ok(inserts) = async_inserts {
+                    this.ops.async_inserts = inserts
+                        .rows
+                        .iter()
+                        .map(|row| OpsAsyncInsert {
+                            database: text(row.first()),
+                            table: text(row.get(1)),
+                            bytes: number(row.get(2)),
+                            entries: number(row.get(3)),
+                            oldest_secs: number(row.get(4)),
+                            node: text(row.get(5)),
                         })
                         .collect();
                 }

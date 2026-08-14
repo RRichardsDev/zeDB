@@ -768,6 +768,171 @@ impl Workspace {
                         }),
                     )
                 }),
+            OpsTab::Ingestion => content
+                .child(section_title("KAFKA CONSUMERS"))
+                .children(
+                    self.ops
+                        .kafka_consumers
+                        .iter()
+                        .enumerate()
+                        .map(|(index, consumer)| {
+                            let stale = consumer.stale_secs > 60;
+                            let failing = !consumer.exception.is_empty();
+                            div()
+                                .px_4()
+                                .py_2()
+                                .border_b_1()
+                                .border_color(theme::border())
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .text_sm()
+                                .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_3()
+                                        .items_center()
+                                        .when(cluster_scope, |row| {
+                                            row.child(
+                                                div()
+                                                    .w(px(110.))
+                                                    .flex_none()
+                                                    .overflow_hidden()
+                                                    .whitespace_nowrap()
+                                                    .text_color(theme::text_dim())
+                                                    .child(consumer.node.clone()),
+                                            )
+                                        })
+                                        .child(
+                                            div()
+                                                .w(px(300.))
+                                                .flex_none()
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_color(theme::text())
+                                                .child(format!(
+                                                    "{}.{}",
+                                                    consumer.database, consumer.table
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(170.))
+                                                .flex_none()
+                                                .text_color(if stale {
+                                                    theme::warning()
+                                                } else {
+                                                    theme::text_dim()
+                                                })
+                                                .child(format!(
+                                                    "last poll {} ago",
+                                                    format_elapsed(consumer.stale_secs as f64)
+                                                )),
+                                        )
+                                        .child(div().flex_1().text_color(theme::text_dim()).child(
+                                            format!(
+                                                "{} messages read",
+                                                Self::format_count(consumer.messages)
+                                            ),
+                                        )),
+                                )
+                                .when(failing, |row| {
+                                    row.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme::danger())
+                                            .child(consumer.exception.clone()),
+                                    )
+                                })
+                        }),
+                )
+                .when(self.ops.kafka_consumers.is_empty(), |list| {
+                    list.child(empty_line("No Kafka consumers."))
+                })
+                .child(section_title(
+                    "MATERIALIZED VIEW INSERT FAILURES \u{b7} 24H",
+                ))
+                .children(self.ops.view_failures.iter().map(|failure| {
+                    div()
+                        .px_4()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(theme::border())
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_sm()
+                        .child(div().text_color(theme::text()).child(format!(
+                            "{}{} \u{2192} {} \u{b7} {} failure(s)",
+                            if failure.node.is_empty() {
+                                String::new()
+                            } else {
+                                format!("{} \u{b7} ", failure.node)
+                            },
+                            failure.view,
+                            failure.target,
+                            failure.failures
+                        )))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::danger())
+                                .child(failure.exception.clone()),
+                        )
+                }))
+                .when(self.ops.view_failures.is_empty(), |list| {
+                    list.child(empty_line(
+                        "No materialized view insert failures in the last 24 hours \
+                         (needs query_views_log enabled).",
+                    ))
+                })
+                .child(section_title("ASYNC INSERT QUEUE"))
+                .children(
+                    self.ops
+                        .async_inserts
+                        .iter()
+                        .enumerate()
+                        .map(|(index, pending)| {
+                            div()
+                                .px_4()
+                                .py_2()
+                                .flex()
+                                .gap_3()
+                                .items_center()
+                                .text_sm()
+                                .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
+                                .when(cluster_scope, |row| {
+                                    row.child(
+                                        div()
+                                            .w(px(110.))
+                                            .flex_none()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_color(theme::text_dim())
+                                            .child(pending.node.clone()),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .w(px(300.))
+                                        .flex_none()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_color(theme::text())
+                                        .child(format!("{}.{}", pending.database, pending.table)),
+                                )
+                                .child(div().flex_1().text_color(theme::text_dim()).child(format!(
+                                    "{} pending \u{b7} {} \u{b7} oldest {}",
+                                    pending.entries,
+                                    Self::format_bytes(pending.bytes),
+                                    format_elapsed(pending.oldest_secs as f64)
+                                )))
+                        }),
+                )
+                .when(self.ops.async_inserts.is_empty(), |list| {
+                    list.child(empty_line("No pending async-insert batches."))
+                }),
             OpsTab::Storage => content
                 .child(section_title("DISKS"))
                 .children(self.ops.disks.iter().map(|disk| {

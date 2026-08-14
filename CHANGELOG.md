@@ -33,6 +33,13 @@ GitHub release notes.
   lagging, stuck, or off its Keeper, and the Replication tab gains a
   Keeper Sessions section (per-node session state and uptime from
   `system.zookeeper_connection`).
+- New Ingestion tab in the ops view answers "where did my rows go":
+  Kafka consumers with last-poll age and errors
+  (`system.kafka_consumers`), materialized views that failed during
+  insert in the last 24 hours (`system.query_views_log`), and the
+  pending async-insert queue (`system.asynchronous_inserts`). Each
+  section degrades gracefully when its system table is absent or its
+  log disabled.
 - New "Estimate query cost" command in the palette: a pre-flight
   `EXPLAIN ESTIMATE` for the statement Run would target, shown as a
   strip above the results with estimated rows, parts, and marks, a
