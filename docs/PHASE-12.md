@@ -7,11 +7,20 @@ additions beyond `docs/NORTH-STAR.md`'s original ranked list; each is
 "the next layer" on infrastructure that already exists, not a green
 field.
 
-Status: PLANNED. Ranked below by reward-per-infrastructure, except
-E (ClickHouse Cloud linking), which is a different axis entirely:
-adoption rather than capability. It may well deserve to go first;
-every differentiator is worthless to a user who bounced off setup.
-Migrations (north-star #6) stay held; see the note at the end.
+Status: BUILT (first increments, branch `phase-12`). All five
+sections shipped an increment: D (estimate command + strip), E (Cloud
+linking, service list with state, prefilled add, start-idle, probe
+explanation, sidebar idle marker), A (Workload tab on the table
+inspector), B (ops health strip + Keeper sessions), C (ops Ingestion
+tab). Deliberately not built yet: E's API-minted database credential
+(open question below), A's cross-table advisor surface, C's failures
+drawn onto the Dependencies DAG. Migrations (north-star #6) stay
+held; see the note at the end.
+
+Ranked below by reward-per-infrastructure, except E (ClickHouse Cloud
+linking), which is a different axis entirely: adoption rather than
+capability; every differentiator is worthless to a user who bounced
+off setup.
 
 ## A. Skip-index and projection effectiveness, measured (start here)
 
