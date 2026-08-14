@@ -26,6 +26,11 @@ GitHub release notes.
   provision the database up front, the way a real fleet's bootstrap
   does, so chains that only create tables check clean. Chains whose
   baseline does create the database are unaffected.
+- Drift verification no longer flags ClickHouse Cloud's automatic
+  engine rewrites: `SharedMergeTree` and friends normalize to their
+  plain MergeTree family before comparing, the same way `Replicated*`
+  engines already did, so a chain that says `MergeTree` verifies
+  clean against a Cloud service.
 - Verify (single database and whole fleet) now fetches its ClickHouse
   harness itself, with the same closest-release fallback as Check,
   instead of failing with "not cached; run `zedb pin` first" on a

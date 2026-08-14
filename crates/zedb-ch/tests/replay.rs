@@ -26,6 +26,23 @@ fn decluster_strips_coordination() {
 }
 
 #[test]
+fn decluster_folds_cloud_shared_engines() {
+    // ClickHouse Cloud rewrites MergeTree-family engines to Shared*
+    // with the same two coordination arguments; the plain family is
+    // the canonical form.
+    let sql = "CREATE TABLE t (x UInt8) \
+               ENGINE = SharedSummingMergeTree('/clickhouse/tables/{uuid}/{shard}', '{replica}', (views, bytes)) \
+               ORDER BY x";
+    let declustered = decluster(sql);
+    assert!(declustered.contains("ENGINE = SummingMergeTree((views, bytes))"));
+    let bare = decluster(
+        "CREATE TABLE t (x UInt8) \
+         ENGINE = SharedMergeTree('/clickhouse/tables/{uuid}/{shard}', '{replica}') ORDER BY x",
+    );
+    assert!(bare.contains("ENGINE = MergeTree(") || bare.contains("ENGINE = MergeTree "));
+}
+
+#[test]
 fn access_control_is_recognized_through_comments() {
     assert!(is_access_control(
         "-- grant read\nGRANT SELECT ON db.* TO reader"
