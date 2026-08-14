@@ -1056,6 +1056,15 @@ fn main() {
                 .flatten()
                 .unwrap_or_default()
         };
+        zedb_core::git::git_debug(&format!(
+            "askpass host={host} answered_len={} kind={}",
+            answer.len(),
+            if prompt.starts_with("Username") {
+                "username"
+            } else {
+                "secret"
+            },
+        ));
         println!("{answer}");
         std::process::exit(0);
     }

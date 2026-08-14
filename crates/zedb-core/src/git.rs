@@ -180,9 +180,16 @@ fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git_env(root: &Path, args: &[&str], envs: &[(String, String)]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root);
+    if !envs.is_empty() {
+        // Configured credential helpers (macOS ships osxkeychain)
+        // outrank GIT_ASKPASS and answer with whatever account they
+        // stored last; clear the helper list so the broker is the
+        // only voice for this run.
+        command.args(["-c", "credential.helper="]);
+    }
+    let output = command
         .args(args)
         .envs(
             envs.iter()
@@ -387,18 +394,50 @@ pub fn clone_repo(url: &str, dest: &Path) -> Result<(), String> {
     }
 }
 
+/// Append one debug line for git auth troubleshooting:
+/// $data/zedb/git-debug.log. Cheap, best-effort, no secrets.
+pub fn git_debug(line: &str) {
+    let Some(dir) = dirs::data_local_dir().map(|dir| dir.join("zedb")) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("git-debug.log"))
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{line}");
+    }
+}
+
 fn clone_once(url: &str, dest: &Path) -> Result<(), String> {
-    let output = Command::new("git")
+    let envs = auth_envs(url);
+    git_debug(&format!(
+        "clone_once url={url} env_keys={:?} broker={:?}",
+        envs.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(),
+        AUTH_BROKER.get(),
+    ));
+    let mut command = Command::new("git");
+    if !envs.is_empty() {
+        // See run_git_env: the broker must outrank osxkeychain.
+        command.args(["-c", "credential.helper="]);
+    }
+    let output = command
         .arg("clone")
         .arg(url)
         .arg(dest)
         .envs(
-            auth_envs(url)
-                .iter()
+            envs.iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),
         )
         .output()
         .map_err(|error| format!("could not run git: {error}"))?;
+    git_debug(&format!(
+        "clone_once status={:?} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    ));
     if output.status.success() {
         Ok(())
     } else {
