@@ -6,27 +6,17 @@ is not to imitate Wine's C formatting. It is to require patches that are small,
 auditable, compatible, tested, and straightforward for a maintainer to own for
 years.
 
-## Adoption and current refactor
+## Adoption
 
-These standards describe the target for new work and future pull requests.
-They are not authorization to retrofit the entire existing codebase in the
-current `zedb-app` structural refactor.
+These standards apply to the entire codebase, not only to new work. A
+violation is a defect regardless of when it was written, and existing code is
+expected to be brought into conformance.
 
-For that refactor specifically:
-
-- Preserve behavior and establish clear ownership boundaries first.
-- Do not fix unrelated naming, error handling, formatting, comments, warning
-  suppressions, or historical design choices merely because this document now
-  recommends something better.
-- Touch an existing standards violation only when it prevents a safe extraction
-  or would make the changed boundary misleading or incorrect.
-- Record broader cleanup as follow-up work and submit it separately after the
-  structural refactor.
-- Judge each refactor patch primarily on whether it reduces coupling without
-  changing behavior and remains easy to review.
-
-This keeps the refactor auditable. Standards adoption is a subsequent body of
-work, not hidden scope inside file movement and state decomposition.
+Conformance work follows the same patch discipline as everything else: it
+lands as separate, single-problem, behavior-preserving patches with evidence,
+never as scope hidden inside a feature or a refactor. A patch whose purpose is
+something else fixes a standards violation only where the violation blocks the
+change or would make its boundary misleading.
 
 ## The merge test
 
@@ -96,8 +86,9 @@ If any answer is no, the pull request is not ready.
   state object makes invalid combinations impossible.
 - Functions have one responsibility. Long functions are acceptable only when
   splitting them would obscure a single linear protocol or state transition.
-- Comments explain invariants, compatibility constraints, or non-obvious
-  decisions. They do not narrate syntax.
+- A comment states why a decision was made (an invariant, a compatibility
+  constraint, a non-obvious choice), never what the code is doing, and exists
+  only where the reason would be unclear to the reader.
 - `unsafe` code requires a documented safety invariant and focused tests.
 - New dependencies require a clear benefit, compatible licensing, and an
   explanation of why the standard library or an existing dependency is
@@ -198,10 +189,6 @@ Wine's upstream culture emphasizes small patches, small merge requests,
 submitter responsibility, current component style, compatibility evidence, and
 tests. Those principles are the model for this document, while the specific
 Rust, GPUI, ClickHouse, and repository rules above are zeDB's own.
-
-## Comments
-
-The type of comment should be clear and consistent. Only ever stating why a particular decision was made, not what the code is doing. And only ever why it would be unclear to the reader.
 
 References:
 
