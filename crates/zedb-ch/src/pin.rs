@@ -88,9 +88,22 @@ pub async fn ensure_binary(version: &str) -> Result<PathBuf, PinError> {
     ensure_binary_with_progress(version, None).await
 }
 
-/// How far a binary download has come: (bytes received, total when
-/// the server said). Called from the download task; keep it cheap.
-pub type DownloadProgress = std::sync::Arc<dyn Fn(u64, Option<u64>) + Send + Sync>;
+/// Where getting a binary currently stands. Called from the pin
+/// task; keep the callback cheap.
+#[derive(Clone, Copy, Debug)]
+pub enum PinPhase {
+    Downloading {
+        received: u64,
+        total: Option<u64>,
+    },
+    /// First execution of a fresh binary: macOS assesses it before
+    /// letting it run, which can take a while. There is no API to
+    /// observe that assessment; this phase brackets the exec that
+    /// triggers it, which amounts to the same window.
+    Verifying,
+}
+
+pub type DownloadProgress = std::sync::Arc<dyn Fn(PinPhase) + Send + Sync>;
 
 /// `ensure_binary` with download progress reported to `progress`;
 /// nothing is reported when the binary is already cached.
@@ -200,8 +213,18 @@ async fn ensure_exact_binary(
     version: &str,
     progress: Option<DownloadProgress>,
 ) -> Result<PathBuf, PinError> {
-    if let Some(path) = cached_binary(version) {
-        return Ok(path);
+    let report = |phase: PinPhase| {
+        if let Some(progress) = &progress {
+            progress(phase);
+        }
+    };
+    if binary_path(version).is_file() {
+        // The cache probe executes the binary; a binary that has
+        // never run stalls here while macOS verifies it.
+        report(PinPhase::Verifying);
+        if let Some(path) = cached_binary(version) {
+            return Ok(path);
+        }
     }
 
     let os = std::env::consts::OS;
@@ -254,6 +277,8 @@ async fn ensure_exact_binary(
     }
     std::fs::rename(&staging, &target)?;
 
+    // First run of the fresh download: macOS verifies it here.
+    report(PinPhase::Verifying);
     if !binary_reports_version(&target, version) {
         let actual = Command::new(&target)
             .args(["local", "--version"])
@@ -298,7 +323,10 @@ async fn download(
     {
         bytes.extend_from_slice(&chunk);
         if let Some(progress) = progress {
-            progress(bytes.len() as u64, total);
+            progress(PinPhase::Downloading {
+                received: bytes.len() as u64,
+                total,
+            });
         }
     }
 

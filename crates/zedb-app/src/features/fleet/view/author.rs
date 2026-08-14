@@ -14,7 +14,7 @@ impl Workspace {
         let applied_on = author.applied_on;
         let status_known = author.status_known;
         let checking = author.checking;
-        let download_progress = author.download_progress;
+        let harness_phase = author.harness_phase;
         let saveable = author.saveable(cx) && !readonly;
         let targeted = author.targeted;
         let choice = author.rollback_choice;
@@ -188,10 +188,10 @@ impl Workspace {
                     .border_1()
                     .border_color(theme::border())
                     .text_color(if checking { theme::text_dim() } else { theme::text() })
-                    .map(|button| match download_progress {
+                    .map(|button| match harness_phase {
                         // Fetching the harness: the button's background
                         // fills left to right with the download.
-                        Some((received, total)) => {
+                        Some(zedb_ch::pin::PinPhase::Downloading { received, total }) => {
                             let fraction = total
                                 .filter(|total| *total > 0)
                                 .map(|total| received as f32 / total as f32)
@@ -224,6 +224,17 @@ impl Workspace {
                                     .build(window, cx)
                                 })
                         }
+                        // The stall between download and first use:
+                        // macOS assessing the fresh binary.
+                        Some(zedb_ch::pin::PinPhase::Verifying) => button
+                            .child("Verifying\u{2026}")
+                            .tooltip(|window, cx| {
+                                gpui_component::tooltip::Tooltip::new(
+                                    "macOS is verifying the ClickHouse harness \
+                                     (first run only)",
+                                )
+                                .build(window, cx)
+                            }),
                         None => button.child(if checking { "Checking..." } else { "Check" }),
                     })
                     .hover(|button| button.bg(theme::hover()).cursor_pointer())
