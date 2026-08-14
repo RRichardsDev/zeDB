@@ -158,12 +158,49 @@ impl Workspace {
                 "New migration: author a draft against the pinned server",
                 cx.listener(|this, _, window, cx| this.author_open(window, cx)),
             ))
-            .child(fleet_icon_button(
-                "fleet-regen",
-                "icons/regen.svg",
-                "Regen: replay the chain and preview current-state churn before writing",
-                cx.listener(|this, _, _, cx| this.codegen_start_regen(cx)),
-            ))
+            .child({
+                let regen_status = self.regen_status;
+                div()
+                    .id("fleet-regen")
+                    .group("fleet-regen")
+                    .size(px(28.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(theme::border())
+                    .child(
+                        svg()
+                            .path("icons/regen.svg")
+                            .size(px(14.))
+                            .text_color(match regen_status {
+                                Some(true) => theme::success(),
+                                Some(false) => theme::warning(),
+                                None => theme::text_dim(),
+                            })
+                            .when(regen_status.is_none(), |icon| {
+                                icon.group_hover("fleet-regen", |icon| {
+                                    icon.text_color(theme::text())
+                                })
+                            }),
+                    )
+                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(match regen_status {
+                            Some(true) => "current-state matches the chain \u{b7} click to re-check",
+                            Some(false) => {
+                                "current-state has drifted from the chain; review the churn and write"
+                            }
+                            None => {
+                                "Regen: replay the chain and preview current-state churn before writing"
+                            }
+                        })
+                        .build(window, cx)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.codegen_start_regen(cx)))
+            })
             .child({
                 let checks_clean = self.checks_clean;
                 div()

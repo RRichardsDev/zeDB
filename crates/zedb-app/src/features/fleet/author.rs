@@ -329,8 +329,10 @@ impl Workspace {
     }
 
     pub(crate) fn author_save(&mut self, cx: &mut Context<Self>) {
-        // A saved migration changes the chain the last checks covered.
+        // A saved migration changes the chain the last checks and
+        // regen covered.
         self.checks_clean = false;
+        self.regen_status = None;
         let Some(repo) = self.fleet.repo.clone() else {
             return;
         };

@@ -48,7 +48,10 @@ GitHub release notes.
   checks behave the same way: a full pass (sql, equivalence,
   lifecycle) closes the checks window on its own, flashes a notice,
   and turns the check-chain icon green until the chain, current-state,
-  or repo changes.
+  or repo changes. Regen gets the same treatment with a third state:
+  no churn closes the window and turns the regen icon green, while
+  drift between current-state and the chain leaves the churn preview
+  open and turns the icon yellow until the write (or a re-check).
 - The authoring overlay's Check button now shows what it is doing
   when the ClickHouse harness has to be fetched first: the label
   shows the download percentage while the button's background fills

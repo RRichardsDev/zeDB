@@ -80,8 +80,10 @@ impl Workspace {
         }
         match MigrationRepo::open(&expanded) {
             Ok(repo) => {
-                // A (re)opened repo invalidates the last checks verdict.
+                // A (re)opened repo invalidates the last checks and
+                // regen verdicts.
                 self.checks_clean = false;
+                self.regen_status = None;
                 self.fleet.git = zedb_core::git::read_git_status(&repo.root);
                 self.fleet.repo = Some(Arc::new(repo));
                 self.fleet.repo_error = None;

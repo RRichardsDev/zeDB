@@ -58,6 +58,7 @@ impl Workspace {
             error: None,
             result: None,
         });
+        self.regen_status = None;
         cx.notify();
 
         let handle = rt::tokio().spawn(async move {
@@ -88,7 +89,24 @@ impl Workspace {
                 }
                 regen.running = false;
                 match result.map_err(|error| error.to_string()) {
-                    Ok(Ok(result)) => regen.result = Some(result),
+                    Ok(Ok(result)) => {
+                        // No churn: current-state already matches the
+                        // chain; nothing to read or write, the green
+                        // icon carries the verdict. Churn keeps the
+                        // window open awaiting the explicit write.
+                        let clean = result.1.is_empty();
+                        regen.result = Some(result);
+                        if clean {
+                            this.regen = None;
+                            this.regen_status = Some(true);
+                            this.flash_notice(
+                                "Regen: current-state matches the chain; nothing to write",
+                                cx,
+                            );
+                        } else {
+                            this.regen_status = Some(false);
+                        }
+                    }
                     Ok(Err(error)) | Err(error) => regen.error = Some(error),
                 }
                 cx.notify();
@@ -119,6 +137,8 @@ impl Workspace {
                 ));
                 self.notice_warning = false;
                 self.regen = None;
+                // The written tree is exactly the chain replay.
+                self.regen_status = Some(true);
             }
             Err(error) => {
                 if let Some(regen) = &mut self.regen {

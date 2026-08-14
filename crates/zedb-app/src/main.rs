@@ -323,6 +323,10 @@ struct Workspace {
     /// The last run of the chain checks passed in full and nothing in
     /// the repo changed since; tints the check-chain icon green.
     checks_clean: bool,
+    /// The last regen's verdict: Some(true) current-state matches the
+    /// chain (green icon), Some(false) it has drifted and a write is
+    /// pending (yellow), None unknown.
+    regen_status: Option<bool>,
     commit: Option<commit::CommitState>,
     show_fleet: bool,
     show_ops: bool,
@@ -697,6 +701,7 @@ impl Workspace {
                 regen: None,
                 checks: None,
                 checks_clean: false,
+                regen_status: None,
                 commit: None,
                 health_poll_generation: 0,
                 merges_poll_generation: 0,
@@ -747,6 +752,7 @@ impl Workspace {
                 regen: None,
                 checks: None,
                 checks_clean: false,
+                regen_status: None,
                 commit: None,
                 health_poll_generation: 0,
                 merges_poll_generation: 0,
