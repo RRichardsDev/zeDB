@@ -80,15 +80,15 @@ Phase 8 delivers all three. They are sequenced, not optional: ship Tier
 1, then Tier 2, then Tier 3, each releasable on its way so the phase
 lands in usable increments rather than one big drop.
 
-**Tier 1 — see your compression.** One `system.columns` query; render
+**Tier 1: see your compression.** One `system.columns` query; render
 compressed / uncompressed / ratio / codec in the existing columns tab.
 No cardinality, no suggestions. Already beats generic tools. Small.
 
-**Tier 2 — the advisor.** Add the opt-in cardinality probe (off-thread,
+**Tier 2: the advisor.** Add the opt-in cardinality probe (off-thread,
 cached) and the rules engine with copyable `ALTER` DDL. The "whoa." The
 rules are little code; the effort is honest thresholds.
 
-**Tier 3 — measured, not estimated.** Codec trial via temp table for
+**Tier 3: measured, not estimated.** Codec trial via temp table for
 real size numbers, replacing Tier 2's heuristic estimates with measured
 ones. This is where the complexity is, and it is what makes the advisor
 trustworthy rather than hand-wavy, so the phase is not done until it

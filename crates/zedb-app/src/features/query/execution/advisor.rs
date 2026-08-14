@@ -271,7 +271,7 @@ impl Workspace {
                         div()
                             .text_xs()
                             .text_color(theme::text_dim())
-                            .child("No advice — the primary key is serving this query's filter."),
+                            .child("No advice: the primary key is serving this query's filter."),
                     ),
             );
         }
@@ -376,7 +376,7 @@ impl Workspace {
                                         // bar: a plain ask, the finding + query
                                         // rides as hidden context.
                                         let visible =
-                                            "This query isn't using the primary key — help me make it faster."
+                                            "This query isn't using the primary key; help me make it faster."
                                                 .to_string();
                                         let mut hidden = format!(
                                             "Context (not shown to the user): from the zeDB query advisor. Finding: {}\nSuggested fix: {}",

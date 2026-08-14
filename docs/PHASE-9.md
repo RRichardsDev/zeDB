@@ -24,7 +24,7 @@ Status: PLANNED. Not started. Follows Phase 8 (`docs/PHASE-8.md`).
 - **Conservative.** Only surface a finding we are sure of; a wrong
   "add this index" erodes trust fast.
 
-## Part A — Query advisor (north-star #2)
+## Part A: Query advisor (north-star #2)
 
 Close the EXPLAIN loop: we already visualize the plan (tree + index
 pruning bars); now turn it into a ranked recommendation.
@@ -53,7 +53,7 @@ The suggested DDL is copyable, and (once drift -> migration lands,
 Reuses: the EXPLAIN read path and result rendering; the history / query
 picker already exists.
 
-## Part B — Visible MergeTree machinery (north-star #3)
+## Part B: Visible MergeTree machinery (north-star #3)
 
 The MergeTree lifecycle is opaque in every generic tool. Make it a
 surface, the storage-side twin of the ops view.
@@ -72,7 +72,7 @@ Reuses: the ops view's cluster-fanning read pattern
 (`clusterAllReplicas()`), so these can be cluster-wide too; the storage
 tab's `system.parts`-shaped queries.
 
-## Part C — Materialized-view & projection DAG (north-star #4)
+## Part C: Materialized-view & projection DAG (north-star #4)
 
 MVs and projections are ClickHouse's secret weapon and totally opaque in
 generic tools. Draw the dependency graph so users can see what feeds

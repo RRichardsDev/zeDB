@@ -12,6 +12,7 @@ GitHub release notes.
 - Fixed `PRIMARY KEY` not being split onto its own line in the schema
   panel's engine definition, so a table with an explicit primary key now
   reads as cleanly as one without.
+- Reworded two query-advisor messages so they no longer use an em-dash.
 
 ## v0.1.29 - 2026-08-14
 

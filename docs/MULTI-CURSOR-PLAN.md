@@ -47,11 +47,11 @@ Best references to copy the *design* from (not code):
 Vendored `gpui-component`, all paths relative to
 `vendor/gpui-component/src/input/`:
 
-- `cursor.rs`: `Selection { start: usize, end: usize }` — byte
+- `cursor.rs`: `Selection { start: usize, end: usize }`: byte
   offsets, no per-selection direction. Direction is a single global
   `selection_reversed: bool` on the state.
 - `state.rs`:
-  - `InputState.selected_range: Selection` (~43 refs) — the single
+  - `InputState.selected_range: Selection` (~43 refs), the single
     selection/cursor. `selection_reversed`, `last_selected_range`,
     `selected_word_range` support it.
   - Core edit path: `replace_text_in_range()` (~1963) replaces one
@@ -59,7 +59,7 @@ Vendored `gpui-component`, all paths relative to
     (`EntityInputHandler`) and `insert()` / `replace_text()`. Every
     typed character flows through here.
   - Movement/selection: `move_to()`, `select_to()` (~1629),
-    `move_left/right`, `select_left/right`, word variants — all read
+    `move_left/right`, `select_left/right`, word variants, all read
     and write `selected_range`.
   - Mouse: `on_mouse_down()` (~1217) sets `selected_range`.
 - `element.rs` (~126-171): the paint loop computes one `cursor_pos`
@@ -91,11 +91,11 @@ Port Helix's two ideas, minimally:
 Per-selection direction: cmd-D selections are all forward, so stage 1
 can keep the single `selection_reversed` for the primary and treat
 added selections as forward. Promote to per-selection anchor/head
-only if a later stage needs it (block selection etc. — out of scope).
+only if a later stage needs it (block selection etc., out of scope).
 
 ## Stages (each a real checkpoint; editor stays usable throughout)
 
-**Stage 1 — Selection model, behavior-identical. DONE (9cd27c3).**
+**Stage 1: Selection model, behavior-identical. DONE (9cd27c3).**
 Added `extra_selections: Vec<Selection>` beside `selected_range`, the
 tested `Selection::mapped_through_edit` primitive, and
 `map_extra_selections` wired into `replace_text_in_range`. Extras
@@ -103,7 +103,7 @@ empty everywhere, so behavior is unchanged; verified by workspace
 tests and a manual editing pass. `selection_set` /
 `is_multi_selection` in place for stage 2.
 
-**Stage 2 — Render N highlights. DONE.**
+**Stage 2: Render N highlights. DONE.**
 Added `layout_extra_selections` (reuses `layout_match_range`) and an
 `extra_selection_paths` field on `PrepaintState`, painted with the
 selection color next to the primary. Verified by temporarily seeding
@@ -114,7 +114,7 @@ During cmd-D the extras are non-empty words, so the highlight is what
 you see; the caret/scroll math is avoided here to keep stage 2
 low-risk.
 
-**Stage 3 — Edit across N. DONE.**
+**Stage 3: Edit across N. DONE.**
 `multi_replace_ranges` replaces every selection's range with the new
 text in one logical edit: text mutated right-to-left (offsets stay
 valid), carets computed analytically by the unit-tested
@@ -126,9 +126,9 @@ Verified with a temporary word-occurrence seed: typing replaced all,
 backspace deleted all, offsets correct; scaffolding reverted.
 Not yet done: paste-across-N (insert uses an explicit range, stays
 single) and single-undo grouping (currently one history entry per
-sub-edit) — deferred to polish. IME stays single (guard excludes it).
+sub-edit), deferred to polish. IME stays single (guard excludes it).
 
-**Stage 4 — cmd-D. DONE.**
+**Stage 4: cmd-D. DONE.**
 `SelectNextOccurrence` action + `cmd-d`/`ctrl-d` binding. First press
 selects the word under the primary cursor (`word_range_at`). Each
 subsequent press finds the next occurrence of the primary's text
@@ -139,7 +139,7 @@ extras and the new occurrence becomes primary. Escape and a plain
 stage was testable. Verified by the user down a column of repeated
 identifiers, including wrap-around.
 
-**Stage 5 — Polish. DONE.**
+**Stage 5: Polish. DONE.**
 Type-replaces-all already fell out of stage 3. Added: a caret at the
 head of every extra cursor, computed inside `layout_cursor` with the
 same line-walk, scroll and vertical centering as the primary and
