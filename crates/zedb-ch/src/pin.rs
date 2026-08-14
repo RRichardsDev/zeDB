@@ -213,6 +213,11 @@ async fn ensure_exact_binary(
     version: &str,
     progress: Option<DownloadProgress>,
 ) -> Result<PathBuf, PinError> {
+    // Concurrent callers (the three chain checks, Verify-all) share
+    // one staging path per version; serialize so a download is not
+    // clobbered mid-write. Late arrivals find the cache warm.
+    static DOWNLOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = DOWNLOAD_LOCK.lock().await;
     let report = |phase: PinPhase| {
         if let Some(progress) = &progress {
             progress(phase);

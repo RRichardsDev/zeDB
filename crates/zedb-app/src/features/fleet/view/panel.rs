@@ -202,6 +202,19 @@ impl Workspace {
             })
             .child({
                 let checks_clean = self.checks_clean;
+                let checks_running = self.checks.as_ref().is_some_and(|checks| {
+                    checks
+                        .slots
+                        .iter()
+                        .any(|slot| matches!(slot, crate::codegen::CheckSlot::Running))
+                });
+                let checks_failed = !checks_running
+                    && self.checks.as_ref().is_some_and(|checks| {
+                        checks
+                            .slots
+                            .iter()
+                            .any(|slot| matches!(slot, crate::codegen::CheckSlot::Fail(_)))
+                    });
                 div()
                     .id("fleet-checks")
                     .group("fleet-checks")
@@ -213,25 +226,47 @@ impl Workspace {
                     .rounded(px(3.))
                     .border_1()
                     .border_color(theme::border())
-                    .child(
+                    .child(if checks_running {
+                        use gpui::{percentage, Animation, AnimationExt as _, Transformation};
+                        use gpui_component::Sizable as _;
+                        gpui_component::Icon::empty()
+                            .path("icons/hourglass.svg")
+                            .with_size(gpui_component::Size::Small)
+                            .text_color(theme::text_dim())
+                            .with_animation(
+                                "fleet-checks-spin",
+                                Animation::new(std::time::Duration::from_secs(1)).repeat(),
+                                |icon, delta| {
+                                    icon.transform(Transformation::rotate(percentage(delta)))
+                                },
+                            )
+                            .into_any_element()
+                    } else {
                         svg()
                             .path("icons/check-chain.svg")
                             .size(px(14.))
                             .text_color(if checks_clean {
                                 theme::success()
+                            } else if checks_failed {
+                                theme::danger()
                             } else {
                                 theme::text_dim()
                             })
-                            .when(!checks_clean, |icon| {
+                            .when(!checks_clean && !checks_failed, |icon| {
                                 icon.group_hover("fleet-checks", |icon| {
                                     icon.text_color(theme::text())
                                 })
-                            }),
-                    )
+                            })
+                            .into_any_element()
+                    })
                     .hover(|button| button.bg(theme::hover()).cursor_pointer())
                     .tooltip(move |window, cx| {
-                        gpui_component::tooltip::Tooltip::new(if checks_clean {
+                        gpui_component::tooltip::Tooltip::new(if checks_running {
+                            "Chain checks running \u{2026} click for details"
+                        } else if checks_clean {
                             "Chain checks passed (sql, equivalence, lifecycle) \u{b7} click to re-run"
+                        } else if checks_failed {
+                            "Chain checks FAILED \u{b7} click for details"
                         } else {
                             "Check chain: sql, equivalence, and lifecycle against the pinned server"
                         })

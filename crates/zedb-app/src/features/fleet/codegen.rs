@@ -149,7 +149,37 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The icon click: surface the modal, starting a run unless one
+    /// is already going (a silent auto-run just gets its UI shown).
     pub(crate) fn codegen_start_checks(&mut self, cx: &mut Context<Self>) {
+        self.checks_open = true;
+        let running = self.checks.as_ref().is_some_and(|checks| {
+            checks
+                .slots
+                .iter()
+                .any(|slot| matches!(slot, CheckSlot::Running))
+        });
+        if !running {
+            self.codegen_run_checks(cx);
+        }
+        cx.notify();
+    }
+
+    /// Start the checks without touching modal visibility; Verify-all
+    /// auto-runs them this way, and the icon carries the verdict.
+    pub(crate) fn codegen_run_checks_silent(&mut self, cx: &mut Context<Self>) {
+        let running = self.checks.as_ref().is_some_and(|checks| {
+            checks
+                .slots
+                .iter()
+                .any(|slot| matches!(slot, CheckSlot::Running))
+        });
+        if !running {
+            self.codegen_run_checks(cx);
+        }
+    }
+
+    fn codegen_run_checks(&mut self, cx: &mut Context<Self>) {
         let Some(repo) = self.fleet.repo.clone() else {
             return;
         };
@@ -237,6 +267,7 @@ impl Workspace {
                         .all(|slot| matches!(slot, CheckSlot::Pass(_)));
                     if all_pass {
                         this.checks = None;
+                        this.checks_open = false;
                         this.checks_clean = true;
                         this.flash_notice("Chain checks passed: sql, equivalence, lifecycle", cx);
                     }
@@ -249,7 +280,8 @@ impl Workspace {
     }
 
     pub(crate) fn codegen_panel(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        if self.regen.is_none() && self.checks.is_none() {
+        let checks_visible = self.checks_open && self.checks.is_some();
+        if self.regen.is_none() && !checks_visible {
             return None;
         }
 
@@ -306,7 +338,7 @@ impl Workspace {
                     body = body.child(list);
                 }
             }
-        } else if let Some(checks) = &self.checks {
+        } else if let Some(checks) = self.checks.as_ref().filter(|_| self.checks_open) {
             title = "Chain checks";
             for (name, slot) in CHECK_NAMES.iter().zip(&checks.slots) {
                 let row = div().flex().flex_col().gap_1();
@@ -384,7 +416,9 @@ impl Workspace {
                     .hover(|button| button.bg(theme::hover()).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.regen = None;
-                        this.checks = None;
+                        // Close hides the checks; a still-running run
+                        // keeps going and the icon keeps its verdict.
+                        this.checks_open = false;
                         cx.notify();
                     })),
             );

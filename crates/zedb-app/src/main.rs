@@ -320,6 +320,9 @@ struct Workspace {
     author: Option<author::AuthorState>,
     regen: Option<codegen::RegenState>,
     checks: Option<codegen::ChecksState>,
+    /// Whether the chain-checks modal is on screen; silent runs (the
+    /// auto-run beside Verify-all) keep it hidden until asked for.
+    checks_open: bool,
     /// The last run of the chain checks passed in full and nothing in
     /// the repo changed since; tints the check-chain icon green.
     checks_clean: bool,
@@ -700,6 +703,7 @@ impl Workspace {
                 author: None,
                 regen: None,
                 checks: None,
+                checks_open: false,
                 checks_clean: false,
                 regen_status: None,
                 commit: None,
@@ -751,6 +755,7 @@ impl Workspace {
                 author: None,
                 regen: None,
                 checks: None,
+                checks_open: false,
                 checks_clean: false,
                 regen_status: None,
                 commit: None,

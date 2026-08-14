@@ -34,6 +34,10 @@ impl Workspace {
         self.fleet.verify_total = databases.len();
         self.fleet.drift_error = None;
         let config = connected.client_config.clone();
+        // Verify covers live drift; the chain checks cover the repo
+        // itself. One gesture runs both, the checks silently: their
+        // icon carries the verdict and clicking it opens the details.
+        self.codegen_run_checks_silent(cx);
         cx.notify();
 
         // Harness progress (download, then macOS verification) drains

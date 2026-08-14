@@ -9,6 +9,13 @@ GitHub release notes.
 
 ## Unreleased
 
+- Verify-all now also runs the chain checks in the background, with
+  no window: the check-chain icon spins while they run, turns green
+  on a pass or red on a failure, and clicking it opens the details.
+  Clicking the icon during a silent run shows the live progress
+  instead of restarting; Close hides the window without stopping a
+  run. Concurrent harness downloads (checks plus verify at once) are
+  serialized so they cannot corrupt the cache.
 - One cluster selector instead of two: the fleet's inline "cluster:"
   chip is gone, and fleet operations take their ON CLUSTER choice
   from the top toolbar's node selector (the same place schema apply
