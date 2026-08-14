@@ -8,7 +8,7 @@ use gpui::{div, prelude::*, px, Context, Window};
 use gpui_component::scroll::ScrollableElement as _;
 use zedb_ch::explain::{ExplainIndex, ExplainNode};
 
-use crate::{rt, theme, Workspace};
+use crate::{rt, theme, QueryEstimate, Workspace};
 
 impl Workspace {
     /// Explain the statement Run would run: same targeting rules.
@@ -52,6 +52,73 @@ impl Workspace {
                         }
                     }
                     Ok(Err(error)) => this.flash_warning(format!("EXPLAIN failed: {error}"), cx),
+                    Err(_) => {}
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Pre-flight cost estimate for the statement Run would run:
+    /// `EXPLAIN ESTIMATE` totals plus the plan's primary-key granule
+    /// pruning, shown in a strip above the results. Informs, never
+    /// blocks: Run stays untouched.
+    pub(crate) fn estimate_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.connection.connected.is_none() {
+            self.flash_warning("Connect to a cluster before estimating a query", cx);
+            return;
+        }
+        let sql = self.run_target_sql(window, cx);
+        if sql.trim().is_empty() {
+            self.flash_warning("Nothing to estimate", cx);
+            return;
+        }
+        let Some(connected) = self.connection.connected.as_ref() else {
+            return;
+        };
+        let config = connected.client_config.clone();
+        let Some(tab) = self.query.tabs.get(self.query.active_tab) else {
+            return;
+        };
+        let tab_id = tab.id;
+        let estimate_sql = zedb_ch::explain::estimate_statement(&sql);
+        let plan_sql = zedb_ch::explain::explain_statement(&sql);
+        let task = rt::tokio().spawn(async move {
+            let client = zedb_ch::ChClient::new(config);
+            let result = client.query(&estimate_sql).await?;
+            let tables = zedb_ch::explain::parse_estimate_rows(&result.columns, &result.rows)?;
+            // The plan is best-effort garnish: pruning stays unknown if
+            // it fails, the estimate still shows.
+            let pruning = match client.query(&plan_sql).await {
+                Ok(plan_result) => plan_result
+                    .rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .map(|value| value.to_string())
+                    .and_then(|raw| zedb_ch::explain::parse_explain_json(&raw).ok())
+                    .and_then(|plan| plan_granule_pruning(&plan)),
+                Err(_) => None,
+            };
+            Ok::<_, zedb_ch::ChError>((tables, pruning))
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| {
+                match outcome {
+                    Ok(Ok((tables, pruning))) => {
+                        if let Some(tab) = this.query.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                            tab.estimate = Some(QueryEstimate {
+                                parts: tables.iter().map(|table| table.parts).sum(),
+                                rows: tables.iter().map(|table| table.rows).sum(),
+                                marks: tables.iter().map(|table| table.marks).sum(),
+                                tables,
+                                pruning,
+                            });
+                        }
+                    }
+                    Ok(Err(error)) => this.flash_warning(format!("Estimate failed: {error}"), cx),
                     Err(_) => {}
                 }
                 cx.notify();
@@ -153,6 +220,136 @@ impl Workspace {
                             .children(rows),
                     )
                     .overflow_x_scrollbar(),
+            )
+    }
+}
+
+/// Sum the primary-key granule pruning over every read in the plan:
+/// (selected, initial). None when no read carries index stats, so the
+/// estimate strip stays honest instead of showing a full bar.
+fn plan_granule_pruning(plan: &ExplainNode) -> Option<(u64, u64)> {
+    fn walk(node: &ExplainNode, selected: &mut u64, initial: &mut u64) {
+        for index in &node.indexes {
+            if index.index_type == "PrimaryKey" && index.initial_granules > 0 {
+                *selected += index.selected_granules;
+                *initial += index.initial_granules;
+            }
+        }
+        for child in &node.children {
+            walk(child, selected, initial);
+        }
+    }
+    let (mut selected, mut initial) = (0, 0);
+    walk(plan, &mut selected, &mut initial);
+    (initial > 0).then_some((selected, initial))
+}
+
+impl Workspace {
+    /// The pre-flight estimate strip above the results: totals, the
+    /// pruning bar, and a plain-language warning when the scan is
+    /// large or the primary key barely prunes.
+    pub(crate) fn estimate_strip(
+        &self,
+        tab_id: usize,
+        estimate: QueryEstimate,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let heavy = estimate.heavy();
+        let unpruned = estimate.unpruned();
+        let summary = format!(
+            "Estimate \u{b7} ~{} rows \u{b7} {} parts \u{b7} {} marks",
+            Self::format_count(estimate.rows),
+            Self::format_count(estimate.parts),
+            Self::format_count(estimate.marks),
+        );
+        let tables = match estimate.tables.len() {
+            0 | 1 => None,
+            count => Some(format!("\u{b7} {count} tables")),
+        };
+        let warning = match (heavy, unpruned) {
+            (true, true) => {
+                Some("\u{b7} large scan \u{b7} the WHERE is not covered by the primary key")
+            }
+            (true, false) => Some("\u{b7} large scan"),
+            (false, true) => Some("\u{b7} the WHERE is not covered by the primary key"),
+            (false, false) => None,
+        };
+        div()
+            .flex_none()
+            .h(px(30.))
+            .px_3()
+            .flex()
+            .items_center()
+            .gap_2()
+            .bg(theme::bg_sidebar())
+            .when(heavy, |strip| {
+                strip.border_1().border_color(theme::warning())
+            })
+            .child(div().text_xs().text_color(theme::text()).child(summary))
+            .when_some(tables, |strip, tables| {
+                strip.child(div().text_xs().text_color(theme::text_dim()).child(tables))
+            })
+            .when_some(estimate.pruning, |strip, (selected, initial)| {
+                // The plan's primary-key pruning as a miniature of the
+                // EXPLAIN panel's utilization bars.
+                let fraction = if initial > 0 {
+                    selected as f64 / initial as f64
+                } else {
+                    1.0
+                };
+                let bar_color = if fraction <= 0.2 {
+                    theme::success()
+                } else if fraction <= 0.7 {
+                    theme::warning()
+                } else {
+                    theme::danger()
+                };
+                let bar_width = 60.0_f32;
+                strip
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(bar_width))
+                            .h(px(5.))
+                            .rounded(px(2.))
+                            .bg(theme::row_stripe())
+                            .child(
+                                div()
+                                    .w(px(bar_width * (fraction as f32).clamp(0.02, 1.0)))
+                                    .h(px(5.))
+                                    .rounded(px(2.))
+                                    .bg(bar_color),
+                            ),
+                    )
+                    .child(div().text_xs().text_color(theme::text_dim()).child(format!(
+                        "{}/{} granules",
+                        Self::format_count(selected),
+                        Self::format_count(initial),
+                    )))
+            })
+            .when_some(warning, |strip, warning| {
+                strip.child(div().text_xs().text_color(theme::warning()).child(warning))
+            })
+            .child(div().flex_1())
+            .child(
+                div()
+                    .id("estimate-close")
+                    .px_1()
+                    .rounded(px(3.))
+                    .text_color(theme::text_dim())
+                    .child("\u{00d7}")
+                    .hover(|close| {
+                        close
+                            .bg(theme::hover())
+                            .text_color(theme::text())
+                            .cursor_pointer()
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(tab) = this.query.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                            tab.estimate = None;
+                        }
+                        cx.notify();
+                    })),
             )
     }
 }

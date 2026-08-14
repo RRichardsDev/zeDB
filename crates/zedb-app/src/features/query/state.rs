@@ -103,6 +103,7 @@ pub(crate) struct QueryTab {
     pub(crate) vim_recording: Option<char>,
     pub(crate) schema_analysis_generation: u64,
     pub(crate) explain: Option<zedb_ch::explain::ExplainNode>,
+    pub(crate) estimate: Option<QueryEstimate>,
     pub(crate) advisor: Option<Vec<query_advisor::QueryFinding>>,
     pub(crate) advise_pending: bool,
     pub(crate) advisor_generation: u64,
@@ -111,6 +112,37 @@ pub(crate) struct QueryTab {
     pub(crate) displayed_statement_offset: Option<usize>,
     pub(crate) running_query_id: Option<String>,
     pub(crate) tail: Option<TailState>,
+}
+
+/// A pre-flight cost estimate: `EXPLAIN ESTIMATE` totals plus the
+/// primary-key granule pruning the plan reports for the same
+/// statement.
+#[derive(Clone)]
+pub(crate) struct QueryEstimate {
+    pub(crate) tables: Vec<zedb_ch::explain::EstimateRow>,
+    pub(crate) parts: u64,
+    pub(crate) rows: u64,
+    pub(crate) marks: u64,
+    /// (selected, initial) granules summed over the plan's reads;
+    /// None when the plan carries no index stats.
+    pub(crate) pruning: Option<(u64, u64)>,
+}
+
+impl QueryEstimate {
+    /// Rows past this read as "you are about to scan a lot".
+    pub(crate) const WARN_ROWS: u64 = 100_000_000;
+
+    pub(crate) fn heavy(&self) -> bool {
+        self.rows >= Self::WARN_ROWS
+    }
+
+    /// The primary key barely prunes: most granules survive.
+    pub(crate) fn unpruned(&self) -> bool {
+        match self.pruning {
+            Some((selected, initial)) if initial > 0 => selected as f64 / initial as f64 > 0.7,
+            _ => false,
+        }
+    }
 }
 
 pub(crate) struct TailState {

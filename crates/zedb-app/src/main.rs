@@ -93,9 +93,9 @@ use features::connections::{
 };
 use features::query::{
     max_rows_from_limit, nearest_occurrence, resolve_query_variables, split_statements,
-    statement_at_cursor, tab_display_name, MaxRows, QueryOutcome, QueryResizeTarget, QueryState,
-    QueryTab, RunEvent, TailBatch, TailPush, TailState, TailStream, TailStreamBatch, TailStripInfo,
-    TailWatch,
+    statement_at_cursor, tab_display_name, MaxRows, QueryEstimate, QueryOutcome, QueryResizeTarget,
+    QueryState, QueryTab, RunEvent, TailBatch, TailPush, TailState, TailStream, TailStreamBatch,
+    TailStripInfo, TailWatch,
 };
 use features::schema::{
     database_nodes_from_cache, schema_object_from_cache, DatabaseNode, ObjectInspectorTab,

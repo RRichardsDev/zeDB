@@ -112,6 +112,7 @@ impl Workspace {
             vim_recording: None,
             schema_analysis_generation: 0,
             explain: None,
+            estimate: None,
             advisor: None,
             advise_pending: false,
             advisor_generation: 0,

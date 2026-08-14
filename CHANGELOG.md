@@ -9,6 +9,12 @@ GitHub release notes.
 
 ## Unreleased
 
+- New "Estimate query cost" command in the palette: a pre-flight
+  `EXPLAIN ESTIMATE` for the statement Run would target, shown as a
+  strip above the results with estimated rows, parts, and marks, a
+  miniature primary-key pruning bar, and a plain-language warning when
+  the scan is large or the WHERE is not covered by the primary key.
+  It never blocks running the query.
 - Fixed `PRIMARY KEY` not being split onto its own line in the schema
   panel's engine definition, so a table with an explicit primary key now
   reads as cleanly as one without.
