@@ -11,6 +11,7 @@ impl Workspace {
             .enumerate()
             .map(|(index, connection)| {
                 let selected = self.connection.selected == Some(index);
+                let cloud_state = self.cloud_state_label(connection);
                 let connected = self
                     .connection
                     .connected
@@ -73,7 +74,18 @@ impl Workspace {
                                                 count.invisible()
                                             })
                                             .child(format!("({})", connection.nodes.len())),
-                                    ),
+                                    )
+                                    .when_some(cloud_state, |name, state| {
+                                        // The linked Cloud service is not
+                                        // running: say so where the eye
+                                        // already is.
+                                        name.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme::text_dim())
+                                                .child(state),
+                                        )
+                                    }),
                             )
                             .child(
                                 // At rest the row wears only two small
@@ -173,14 +185,55 @@ impl Workspace {
                             .child("CONNECTIONS")
                             .child(
                                 div()
-                                    .id("add-connection")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded(px(3.))
-                                    .text_color(theme::text())
-                                    .child("+")
-                                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
-                                    .on_click(cx.listener(|this, _, _, cx| this.start_add(cx))),
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .id("link-cloud")
+                                            .px_2()
+                                            .py_1()
+                                            .rounded(px(3.))
+                                            .text_xs()
+                                            .child("Cloud")
+                                            .when(self.connection.cloud.open, |button| {
+                                                button.bg(theme::hover())
+                                            })
+                                            .hover(|button| {
+                                                button
+                                                    .bg(theme::hover())
+                                                    .text_color(theme::text())
+                                                    .cursor_pointer()
+                                            })
+                                            .tooltip(|window, cx| {
+                                                gpui_component::tooltip::Tooltip::new(
+                                                    "Link ClickHouse Cloud services",
+                                                )
+                                                .build(window, cx)
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                if this.connection.cloud.open {
+                                                    this.cloud_close(cx)
+                                                } else {
+                                                    this.cloud_open(cx)
+                                                }
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("add-connection")
+                                            .px_2()
+                                            .py_1()
+                                            .rounded(px(3.))
+                                            .text_color(theme::text())
+                                            .child("+")
+                                            .hover(|button| {
+                                                button.bg(theme::hover()).cursor_pointer()
+                                            })
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.start_add(cx)),
+                                            ),
+                                    ),
                             ),
                     )
                     .child(
@@ -198,6 +251,18 @@ impl Workspace {
                                         .pt_3()
                                         .text_color(theme::text_dim())
                                         .child("No saved connections"),
+                                )
+                                .child(
+                                    div()
+                                        .id("link-cloud-empty")
+                                        .pt_1()
+                                        .text_xs()
+                                        .text_color(theme::accent())
+                                        .child("Link ClickHouse Cloud")
+                                        .hover(|button| button.cursor_pointer())
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.cloud_open(cx)),
+                                        ),
                                 )
                             })
                             .children(rows),

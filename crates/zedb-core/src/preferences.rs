@@ -43,6 +43,17 @@ pub struct Preferences {
     pub settings_sync_repo: Option<String>,
     /// Named query snippets; these sync (query HISTORY stays local).
     pub saved_queries: Vec<SavedQuery>,
+    /// ClickHouse Cloud organizations linked for quick setup. Only the
+    /// id and display name persist (and sync); the API key stays in
+    /// each machine's Keychain.
+    pub cloud_orgs: Vec<CloudOrgRef>,
+}
+
+/// A linked ClickHouse Cloud organization: no secret material.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudOrgRef {
+    pub id: String,
+    pub name: String,
 }
 
 /// A named query snippet in the history drawer's Saved tab.
@@ -154,6 +165,10 @@ mod tests {
                 sql: "SELECT 1".into(),
                 favorite: true,
                 saved_at: 1_700_000_000,
+            }],
+            cloud_orgs: vec![CloudOrgRef {
+                id: "org-1".into(),
+                name: "Acme".into(),
             }],
         };
         save_preferences(&preferences).unwrap();

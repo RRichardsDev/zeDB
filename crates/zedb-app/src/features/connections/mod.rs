@@ -1,3 +1,4 @@
+mod cloud;
 mod controller;
 #[path = "controller/health.rs"]
 mod controller_health;

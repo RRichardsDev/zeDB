@@ -29,6 +29,7 @@ impl Workspace {
             tier: EnvTier::Dev,
             read_only: true,
             driver_settings: Self::seeded_driver_settings(&[], cx),
+            cloud: None,
         });
         self.notice = None;
         cx.notify();
@@ -63,6 +64,7 @@ impl Workspace {
             tier: connection.tier,
             read_only: connection.read_only,
             driver_settings: Self::seeded_driver_settings(&connection.driver.settings, cx),
+            cloud: connection.cloud,
         });
         self.notice = None;
         cx.notify();
@@ -369,6 +371,7 @@ impl Workspace {
                 tier: form.tier,
                 read_only: form.read_only,
                 driver,
+                cloud: form.cloud.clone(),
             },
             password: form.password.read(cx).text(),
             editing: form.editing,

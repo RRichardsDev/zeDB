@@ -362,6 +362,7 @@ mod tests {
             tier: EnvTier::Staging,
             read_only: true,
             driver: Default::default(),
+            cloud: None,
         }];
 
         // Machine A: vim on, one connection; enable seeds the stamp.

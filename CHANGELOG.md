@@ -9,6 +9,17 @@ GitHub release notes.
 
 ## Unreleased
 
+- ClickHouse Cloud quick setup: link an organization by pasting a
+  Cloud API key ("Cloud" in the connections sidebar, or "Link
+  ClickHouse Cloud" in the palette). zeDB lists the org's services
+  with live state (running, idle, waking), and "Add connection" opens
+  the ordinary connection form prefilled with the service's HTTPS
+  endpoint, so only the password is left to type. Idle services can
+  be started from the panel; a failed connect on a Cloud-linked
+  connection names the real cause ("idle in ClickHouse Cloud")
+  instead of a bare timeout, and the sidebar marks idle services. The
+  API key lives in the macOS Keychain; only the org id and name are
+  saved (and sync).
 - New "Estimate query cost" command in the palette: a pre-flight
   `EXPLAIN ESTIMATE` for the statement Run would target, shown as a
   strip above the results with estimated rows, parts, and marks, a

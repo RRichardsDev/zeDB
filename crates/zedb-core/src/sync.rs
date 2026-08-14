@@ -291,6 +291,7 @@ mod tests {
             tier: EnvTier::Staging,
             read_only: true,
             driver: Default::default(),
+            cloud: None,
         }]
     }
 

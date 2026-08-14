@@ -71,6 +71,9 @@ impl Workspace {
                         format!("No node accepted the connection details for {name}"),
                         cx,
                     );
+                    // A Cloud-linked connection can name the real cause:
+                    // the service may simply be asleep.
+                    this.cloud_explain_unreachable(&connection, cx);
                     return;
                 };
 

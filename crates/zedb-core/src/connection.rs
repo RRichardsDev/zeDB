@@ -128,6 +128,18 @@ pub struct ConnectionConfig {
     /// Read-only is the default posture; writing requires opting out.
     #[serde(default = "default_true")]
     pub read_only: bool,
+    /// Set when the connection was created from a linked ClickHouse
+    /// Cloud service, so the app can show service state and explain
+    /// idle-service timeouts instead of a bare connection error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud: Option<CloudProvenance>,
+}
+
+/// Which ClickHouse Cloud service a connection came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudProvenance {
+    pub org_id: String,
+    pub service_id: String,
 }
 
 #[cfg(test)]

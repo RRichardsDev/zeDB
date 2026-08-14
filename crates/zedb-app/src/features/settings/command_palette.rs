@@ -49,6 +49,7 @@ pub enum PaletteCommand {
     ExplainQuery,
     EstimateQuery,
     ExportResults,
+    LinkCloud,
 }
 
 const ALL_COMMANDS: &[PaletteCommand] = &[
@@ -69,6 +70,7 @@ const ALL_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand::ExplainQuery,
     PaletteCommand::EstimateQuery,
     PaletteCommand::ExportResults,
+    PaletteCommand::LinkCloud,
 ];
 
 impl PaletteCommand {
@@ -90,6 +92,7 @@ impl PaletteCommand {
             Self::ToggleQueryHistory => "Query history and saved queries",
             Self::ExplainQuery => "Explain query (plan and index pruning)",
             Self::EstimateQuery => "Estimate query cost (parts, rows, marks)",
+            Self::LinkCloud => "Link ClickHouse Cloud",
             Self::ExportResults => "Export current query results",
         }
     }
@@ -127,6 +130,7 @@ impl PaletteCommand {
             Self::ExplainQuery => workspace.explain_query(window, cx),
             Self::EstimateQuery => workspace.estimate_query(window, cx),
             Self::ExportResults => workspace.export_open(cx),
+            Self::LinkCloud => workspace.cloud_open(cx),
         }
     }
 }

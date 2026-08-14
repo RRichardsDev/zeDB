@@ -2,6 +2,8 @@
 mod agent_pane;
 #[path = "features/fleet/author.rs"]
 mod author;
+#[path = "platform/clickhouse_cloud.rs"]
+mod clickhouse_cloud;
 #[path = "features/fleet/codegen.rs"]
 mod codegen;
 #[path = "features/settings/command_palette.rs"]

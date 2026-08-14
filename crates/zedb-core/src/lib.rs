@@ -15,10 +15,13 @@ mod store;
 pub mod sync;
 mod value;
 
-pub use connection::{ConnectionConfig, ConnectionNode, DriverConfig, DriverSetting, EnvTier};
+pub use connection::{
+    CloudProvenance, ConnectionConfig, ConnectionNode, DriverConfig, DriverSetting, EnvTier,
+};
 pub use history::{load_history, push_entry, save_history, HistoryEntry, HISTORY_CAP};
 pub use preferences::{
-    load_preferences, save_preferences, settings_file_path, CustomAgent, Preferences, SavedQuery,
+    load_preferences, save_preferences, settings_file_path, CloudOrgRef, CustomAgent, Preferences,
+    SavedQuery,
 };
 pub use saved_tabs::{load_saved_tabs, new_local_id, save_saved_tabs, SavedTab, SAVED_TAB_CAP};
 pub use session::{save_session, take_session, SavedQueryTab, SavedSession};

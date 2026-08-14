@@ -15,6 +15,7 @@ pub(crate) struct ConnectionState {
     pub(crate) password_cache: HashMap<String, Option<String>>,
     pub(crate) form: Option<ConnectionForm>,
     pub(crate) pending_delete: Option<String>,
+    pub(crate) cloud: super::cloud::CloudLinkState,
 }
 
 impl ConnectionState {
@@ -28,6 +29,7 @@ impl ConnectionState {
             password_cache: HashMap::new(),
             form: None,
             pending_delete: None,
+            cloud: super::cloud::CloudLinkState::new(),
         }
     }
 }
@@ -43,6 +45,9 @@ pub(crate) struct ConnectionForm {
     pub(crate) tier: EnvTier,
     pub(crate) read_only: bool,
     pub(crate) driver_settings: Vec<DriverSettingForm>,
+    /// Carried through the form so saving keeps (or sets) the link to
+    /// the ClickHouse Cloud service the connection came from.
+    pub(crate) cloud: Option<zedb_core::CloudProvenance>,
 }
 
 pub(crate) struct DriverSettingForm {
