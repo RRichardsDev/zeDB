@@ -83,6 +83,19 @@ asks where something is; never as a reflex on seeing a failure.
   standing between the agent and a write. Safety lives in what the
   tools can reach.
 
+## Git credentials (the broker)
+
+Repos opened through the picker's git route use HTTPS remotes; when
+zeDB itself runs git against github.com/gitlab.com over HTTPS, it
+sets `GIT_ASKPASS` to the zeDB binary in a hidden answer mode that
+reads a stored elevated token from the Keychain. This is a deliberate
+widening of the older "elevated tokens are never stored" stance:
+the token is Keychain-held per host, revocable at the provider, and
+never touches argv, env values, or `.git/config`. SSH URLs the user
+types stay on their own git and keys. Planned evolution
+(docs/IRL-ISSUES.md): multi-account sign-in with the account bound
+per cluster connection.
+
 ## Adding a tool: the checklist
 
 1. Is it read-only against servers, or does it only fill UI the user

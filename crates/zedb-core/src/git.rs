@@ -126,11 +126,68 @@ pub fn changed_paths(root: &Path) -> Option<Vec<String>> {
     Some(paths)
 }
 
+/// The executable git invokes as GIT_ASKPASS for HTTPS remotes on
+/// known hosts: the app binary in a hidden answer mode that reads the
+/// token from the Keychain. Unset (the CLI, tests), git behaves
+/// exactly as before: the user's own auth.
+static AUTH_BROKER: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+
+pub fn set_auth_broker(exe: Option<std::path::PathBuf>) {
+    let _ = AUTH_BROKER.set(exe);
+}
+
+/// Env overrides that route an HTTPS github.com/gitlab.com remote's
+/// credentials through the broker; empty for everything else (SSH
+/// stays the user's own git).
+fn auth_envs(url: &str) -> Vec<(String, String)> {
+    let Some(Some(broker)) = AUTH_BROKER.get() else {
+        return Vec::new();
+    };
+    if !url.starts_with("https://") {
+        return Vec::new();
+    }
+    let host = url
+        .trim_start_matches("https://")
+        .split(['/', '@'])
+        .next()
+        .unwrap_or_default();
+    if host != "github.com" && host != "gitlab.com" {
+        return Vec::new();
+    }
+    vec![
+        ("GIT_ASKPASS".into(), broker.display().to_string()),
+        ("ZEDB_GIT_ASKPASS".into(), "1".into()),
+        ("ZEDB_GIT_HOST".into(), host.to_string()),
+        ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+    ]
+}
+
+/// The auth envs for a checkout, from its origin URL.
+fn auth_envs_for_root(root: &Path) -> Vec<(String, String)> {
+    let url = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["config", "--get", "remote.origin.url"])
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_default();
+    auth_envs(&url)
+}
+
 fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
+    run_git_env(root, args, &[])
+}
+
+fn run_git_env(root: &Path, args: &[&str], envs: &[(String, String)]) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
         .args(args)
+        .envs(
+            envs.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
         .output()
         .map_err(|error| format!("could not run git: {error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -166,7 +223,7 @@ pub fn commit_paths(root: &Path, pathspecs: &[String], message: &str) -> Result<
 /// Push the current branch with the user's own git auth. Failures (no
 /// upstream, auth, non-fast-forward) return git's message verbatim.
 pub fn push(root: &Path) -> Result<String, String> {
-    run_git(root, &["push"])
+    run_git_env(root, &["push"], &auth_envs_for_root(root))
 }
 
 /// Whether `url` is a reachable git remote for this user's own git
@@ -188,7 +245,11 @@ pub fn push_setting_upstream(root: &Path) -> Result<String, String> {
     if has_upstream(root) {
         push(root)
     } else {
-        run_git(root, &["push", "-u", "origin", "HEAD"])
+        run_git_env(
+            root,
+            &["push", "-u", "origin", "HEAD"],
+            &auth_envs_for_root(root),
+        )
     }
 }
 
@@ -203,7 +264,7 @@ pub fn has_upstream(root: &Path) -> bool {
 /// resolves conflicts. Diverged history comes back as git's own
 /// message and the checkout is left exactly as it was.
 pub fn pull(root: &Path) -> Result<String, String> {
-    run_git(root, &["pull", "--ff-only"])
+    run_git_env(root, &["pull", "--ff-only"], &auth_envs_for_root(root))
 }
 
 /// Does this look like a git remote URL rather than a local path?
@@ -301,6 +362,11 @@ pub fn clone_repo(url: &str, dest: &Path) -> Result<(), String> {
         .arg("clone")
         .arg(url)
         .arg(dest)
+        .envs(
+            auth_envs(url)
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
         .output()
         .map_err(|error| format!("could not run git: {error}"))?;
     if output.status.success() {
@@ -344,6 +410,23 @@ fn parse_porcelain_v2(text: &str) -> GitStatus {
         branch,
         dirty,
         ahead_behind,
+    }
+}
+
+#[cfg(test)]
+mod tests_auth {
+    use super::*;
+
+    #[test]
+    fn broker_envs_only_for_https_known_hosts() {
+        set_auth_broker(Some(std::path::PathBuf::from("/usr/local/bin/zedb")));
+        assert_eq!(auth_envs("git@github.com:me/repo.git"), Vec::new());
+        assert_eq!(auth_envs("https://example.com/me/repo.git"), Vec::new());
+        let envs = auth_envs("https://gitlab.com/me/repo.git");
+        assert!(envs
+            .iter()
+            .any(|(key, value)| key == "ZEDB_GIT_HOST" && value == "gitlab.com"));
+        assert!(envs.iter().any(|(key, _)| key == "GIT_ASKPASS"));
     }
 }
 

@@ -1136,7 +1136,11 @@ impl Workspace {
                     .flex_col()
                     .gap_0p5();
                 for (index, repo) in repos.iter().enumerate() {
-                    let ssh_url = repo.ssh_url.clone();
+                    let ssh_url = if repo.http_url.is_empty() {
+                        repo.ssh_url.clone()
+                    } else {
+                        repo.http_url.clone()
+                    };
                     list = list.child(
                         div()
                             .id(("repo-picker-repo", index))

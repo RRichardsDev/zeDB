@@ -127,7 +127,13 @@ impl Workspace {
                 .spawn(async move { github::poll_for_token(provider, &poll_device).await })
                 .await
             {
-                Ok(Ok(token)) => token,
+                Ok(Ok(token)) => {
+                    // Keep the elevated token: zeDB's own git runs on
+                    // this host authenticate with it from now on, so
+                    // account choice does not hang on SSH keys.
+                    let _ = zedb_core::secrets::set_plain(&provider.broker_keychain_key(), &token);
+                    token
+                }
                 Ok(Err(error)) => {
                     this.update(cx, |this, cx| {
                         if this.fleet.repo_picker_generation == generation {
@@ -233,9 +239,16 @@ impl Workspace {
                     Ok(Ok(repo)) => {
                         this.fleet.repo_picker = None;
                         this.fleet.auto_init_once = true;
-                        this.fleet
-                            .repo_path
-                            .update(cx, |input, cx| input.set_text(repo.ssh_url, cx));
+                        this.fleet.repo_path.update(cx, |input, cx| {
+                            input.set_text(
+                                if repo.http_url.is_empty() {
+                                    repo.ssh_url
+                                } else {
+                                    repo.http_url
+                                },
+                                cx,
+                            )
+                        });
                         this.fleet_open_repo(cx);
                     }
                     Ok(Err(error)) | Err(error) => {

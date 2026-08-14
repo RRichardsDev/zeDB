@@ -1037,6 +1037,29 @@ fn run_mcp_serve(config_path: &str) -> ! {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // Hidden GIT_ASKPASS mode: git (spawned by zeDB with the broker
+    // envs) asks for a username or password; the answer comes from
+    // the Keychain, never argv or the environment.
+    if std::env::var_os("ZEDB_GIT_ASKPASS").is_some() {
+        let prompt = args.get(1).cloned().unwrap_or_default();
+        let host = std::env::var("ZEDB_GIT_HOST").unwrap_or_default();
+        let answer = if prompt.starts_with("Username") {
+            if host.contains("gitlab") {
+                "oauth2"
+            } else {
+                "x-access-token"
+            }
+            .to_string()
+        } else {
+            zedb_core::secrets::get_plain(&format!("zedb-git-elevated-{host}"))
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        };
+        println!("{answer}");
+        std::process::exit(0);
+    }
+    zedb_core::git::set_auth_broker(std::env::current_exe().ok());
     if args.get(1).map(String::as_str) == Some("zedb-mcp-serve") {
         let config_path = args.get(2).cloned().unwrap_or_default();
         run_mcp_serve(&config_path);
