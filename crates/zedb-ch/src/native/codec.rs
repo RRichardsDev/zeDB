@@ -232,13 +232,3 @@ fn enum_name(type_: Option<&klickhouse::Type>, v: i16) -> Option<Value> {
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Connection pool
-//
-// `ChClient` is constructed fresh per operation all over the app, so the
-// long-lived native connection lives in a process-wide pool keyed by the
-// connection's identity. `pooled` never blocks a query on a TCP+TLS
-// handshake: the first call kicks off a background connect and the caller
-// rides HTTP until the connection is ready.
-// ---------------------------------------------------------------------------

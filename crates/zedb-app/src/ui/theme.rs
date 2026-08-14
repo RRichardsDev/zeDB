@@ -71,7 +71,8 @@ struct Accents {
     table_tint: u32,
 }
 
-/// Today's dark values, unchanged.
+/// The dark values the app shipped with, preserved exactly so adding
+/// light mode could not shift the dark chrome.
 const DARK: Accents = Accents {
     bg_status: 0x191c20,
     bg_sunken: 0x191c21,
@@ -92,7 +93,8 @@ const DARK: Accents = Accents {
     table_tint: 0xb8603d,
 };
 
-/// First-draft light values; expect soak-mode tuning.
+/// Light counterparts, hand-picked rather than derived: mechanically
+/// inverting the dark shades loses contrast on the tint colors.
 const LIGHT: Accents = Accents {
     bg_status: 0xe8eaed,
     bg_sunken: 0xe4e6ea,

@@ -1,5 +1,5 @@
 //! `zedb verify`: diff each database's live schema against the expected
-//! state for its applied chain position (docs/PHASE-1.md M7).
+//! state for its applied chain position.
 //!
 //! The expectation is derived by replaying exactly the migrations the
 //! tracking table says are applied (fleet and targeted) through the
@@ -7,8 +7,7 @@
 //! normalized the same way before comparing: declustered, definers
 //! stripped, whitespace collapsed, and the database name substituted back
 //! to `${db}`, so per-database values and grant-model details are not
-//! what the diff is about. This is the read half of the Phase 2 fleet
-//! view.
+//! what the diff is about.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

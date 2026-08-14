@@ -94,7 +94,7 @@ pub struct TableStorage {
 }
 
 /// One partition's active-part rollup, for the schema inspector's Parts
-/// tab (Phase 9, Part B).
+/// tab.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartitionStats {
     /// The partition expression value (`tuple()` for unpartitioned tables).
@@ -110,7 +110,7 @@ pub struct PartitionStats {
 }
 
 /// One in-progress merge (or mutation-merge) for a table, from
-/// `system.merges` (Phase 9, Part B).
+/// `system.merges`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MergeInfo {
     pub partition_id: String,
@@ -139,7 +139,7 @@ pub struct MvDependency {
     pub target: Option<String>,
 }
 
-/// A projection attached to a table (Phase 9, Part C).
+/// A projection attached to a table.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectionInfo {
     pub name: String,
@@ -152,8 +152,8 @@ pub struct ProjectionInfo {
     pub parts: u64,
 }
 
-/// The materialized-view dependency neighborhood of one object (Phase 9,
-/// Part C): what feeds it, what it feeds.
+/// The materialized-view dependency neighborhood of one object: what
+/// feeds it, what it feeds.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct ObjectDependencies {
     pub is_materialized_view: bool,

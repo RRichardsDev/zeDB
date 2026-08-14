@@ -24,10 +24,11 @@ fn any_cached_binary() -> Option<PathBuf> {
     None
 }
 
-/// The M8 acceptance gate: the real ancestor repo imports without hand
-/// editing, regen is stable, and sql + equivalence checks pass on the
-/// imported repo. Skips silently when the ancestor checkout or a cached
-/// binary is missing so CI stays green.
+/// Proves the real ancestor repo imports without hand editing, that
+/// regen is stable over it, and that sql + equivalence checks pass on the
+/// imported repo. Requires both a local analytics-clickhouse-ddl checkout
+/// and a cached ClickHouse binary (`zedb pin`); skips silently otherwise,
+/// leaving import against real-world SQL unverified.
 #[test]
 fn ancestor_repo_imports_and_passes_all_checks() {
     let Some(ancestor) = ancestor() else {
@@ -70,7 +71,10 @@ fn ancestor_repo_imports_and_passes_all_checks() {
 }
 
 /// Ancestor tracking rows carry over: argMax-latest state survives the
-/// copy, so status agrees with what the ancestor tooling recorded.
+/// copy, so status agrees with what the ancestor tooling recorded, and a
+/// second import refuses rather than double-counting. Requires a cached
+/// ClickHouse binary (`zedb pin`); skips silently without one, leaving
+/// tracking import unverified.
 #[tokio::test]
 async fn tracking_rows_import_and_preserve_state() {
     let Some(binary) = any_cached_binary() else {
@@ -159,7 +163,10 @@ async fn tracking_rows_import_and_preserve_state() {
 
 /// The lifecycle check passes on the real imported repo: clustered
 /// ephemeral server, restricted migrator with admin routing, rollback
-/// walk, and a clean final schema diff.
+/// walk, and a clean final schema diff. Requires both a local
+/// analytics-clickhouse-ddl checkout and a cached ClickHouse binary
+/// (`zedb pin`); skips silently otherwise, leaving the clustered
+/// lifecycle path unverified.
 #[tokio::test]
 async fn ancestor_repo_passes_the_lifecycle_check() {
     let Some(ancestor) = ancestor() else {

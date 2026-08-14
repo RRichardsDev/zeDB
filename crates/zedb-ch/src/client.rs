@@ -137,9 +137,9 @@ impl ChClient {
         params
     }
 
-    /// Run a query with server-side guardrails on top of read-only:
-    /// the agent-facing path (docs/PHASE-3.1.md M3). Time, row, and
-    /// byte caps are enforced by ClickHouse, not by inspecting SQL.
+    /// Run a query with server-side guardrails on top of read-only: the
+    /// agent-facing path. Time, row, and byte caps are enforced by
+    /// ClickHouse, not by inspecting SQL.
     pub async fn query_guarded(
         &self,
         sql: &str,
@@ -167,9 +167,9 @@ impl ChClient {
 
     /// Run a query and materialize the full typed result.
     ///
-    /// Reads prefer the pooled native (TCP) connection when one is up
-    /// (Phase 10); the first query kicks off a background connect and
-    /// rides HTTP. A native transport failure falls back to HTTP for this
+    /// Reads prefer the pooled native (TCP) connection when one is up;
+    /// the first query kicks off a background connect and rides
+    /// HTTP. A native transport failure falls back to HTTP for this
     /// query and evicts the broken connection; a server error does not
     /// (the query really ran). Mutating statements never route natively.
     pub async fn query(&self, sql: &str) -> Result<QueryResult> {

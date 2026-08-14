@@ -130,7 +130,7 @@ impl Workspace {
     }
 
     /// The Projections tab: the alternate sorted / pre-aggregated copies of
-    /// this table's data that ClickHouse keeps in sync (Phase 9, Part C).
+    /// this table's data that ClickHouse keeps in sync.
     pub(crate) fn projections_panel(&self, selected: &SelectedSchemaObject) -> gpui::Div {
         let mut body = div()
             .id("object-projections")
@@ -139,7 +139,6 @@ impl Workspace {
             .overflow_y_scroll()
             .px_4()
             .py_2()
-            // A one-line explanation of what a projection is.
             .child(
                 div()
                     .pt_1()

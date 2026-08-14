@@ -1,4 +1,4 @@
-//! Settings sync over a plain git repo (docs/PHASE-3.4.md M1).
+//! Settings sync over a plain git repo.
 //!
 //! A sync tick runs on launch, window refocus, closing Preferences, and
 //! after connection edits: pull, compare the local settings against the

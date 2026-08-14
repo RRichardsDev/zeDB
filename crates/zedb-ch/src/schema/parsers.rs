@@ -63,7 +63,7 @@ pub(crate) fn escape_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
-/// The `TO db.target` of a materialized-view create query (Phase 9, Part C).
+/// The `TO db.target` of a materialized-view create query.
 pub(crate) fn parse_mv_to(create_query: &str) -> Option<String> {
     let re = Regex::new(r"(?i)\bTO\s+([A-Za-z0-9_.`]+)").ok()?;
     re.captures(create_query)

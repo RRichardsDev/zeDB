@@ -1,7 +1,7 @@
-/// Fenced code blocks in a markdown reply, for insert-into-editor;
-/// untagged and sql/clickhouse-tagged fences count.
 use super::*;
 
+/// Fenced code blocks in a markdown reply, for insert-into-editor;
+/// untagged and sql/clickhouse-tagged fences count.
 pub(super) fn fenced_sql_blocks(text: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut in_fence = false;

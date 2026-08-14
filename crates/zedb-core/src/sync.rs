@@ -1,4 +1,4 @@
-//! Settings sync over a plain git repo (Phase 3.4 M1).
+//! Settings sync over a plain git repo.
 //!
 //! The payload is one readable JSON file in a repo the user owns; git is
 //! the transport and the history. Identity (GitHub sign-in) is not

@@ -1,6 +1,6 @@
-//! The zedb MCP server (docs/PHASE-3.1.md M3): read-only fleet and
-//! ClickHouse tools for agents, over the Model Context Protocol's
-//! stdio transport (JSON-RPC 2.0, one object per line).
+//! The zedb MCP server: read-only fleet and ClickHouse tools for
+//! agents, over the Model Context Protocol's stdio transport
+//! (JSON-RPC 2.0, one object per line).
 //!
 //! Deliberately read-only end to end: the connection is forced
 //! read-only (server-side readonly, not SQL inspection) and every

@@ -148,6 +148,11 @@ impl Drop for EphemeralServer {
     }
 }
 
+/// Proves the HTTP path decodes the full type surface into `Value`,
+/// that schema discovery reports engine, kind and column types, that
+/// server errors surface with code and message, that empty results still
+/// carry column metadata, and that a read-only client is refused writes
+/// by the server while bad credentials fail the connection test.
 #[tokio::test]
 async fn query_roundtrip_type_zoo() {
     let Some(binary) = find_clickhouse() else {
@@ -328,6 +333,8 @@ async fn query_roundtrip_type_zoo() {
     );
 }
 
+/// Proves the row cap stops a larger result at the limit, delivers it in
+/// batches, and reports the stop as capped in the summary.
 #[tokio::test]
 async fn streaming_query_honors_cap() {
     let Some(binary) = find_clickhouse() else {

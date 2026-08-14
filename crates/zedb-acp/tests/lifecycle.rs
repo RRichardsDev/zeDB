@@ -1,5 +1,5 @@
-//! M0's done-condition: the full lifecycle against the scripted fake
-//! agent, including the ugly exits.
+//! The full connection lifecycle against the scripted fake agent,
+//! including the ugly exits.
 
 use zedb_acp::{AgentConnection, AgentEvent, PermissionOutcome};
 

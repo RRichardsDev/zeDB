@@ -1,8 +1,8 @@
-//! EXPLAIN visualized (docs/PHASE-7.1-IDEAS.md): the plan tree for
-//! the statement under the cursor, drawn in the results pane, with
-//! per-read-node index pruning (parts/granules selected vs initial)
-//! as colored utilization bars. Works on every server version with
-//! `EXPLAIN json = 1` (verified back to 25.8).
+//! EXPLAIN visualized: the plan tree for the statement under the
+//! cursor, drawn in the results pane, with per-read-node index pruning
+//! (parts/granules selected vs initial) as colored utilization bars.
+//! Works on every server version with `EXPLAIN json = 1` (verified
+//! back to 25.8).
 
 use gpui::{div, prelude::*, px, Context, Window};
 use gpui_component::scroll::ScrollableElement as _;

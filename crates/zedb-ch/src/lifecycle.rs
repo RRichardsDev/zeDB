@@ -1,6 +1,5 @@
 //! The lifecycle check: everything the fleet has taught us, as a
-//! repeatable gate (docs/PHASE-1.md M4, ported from the ancestor's
-//! `checks/lifecycle.py`).
+//! repeatable gate. Ported from the ancestor's `checks/lifecycle.py`.
 //!
 //! 1. Start a throwaway single-node *clustered* server: `ON CLUSTER` DDL
 //!    goes through the real distributed queue and Replicated engines
@@ -115,7 +114,7 @@ pub async fn check_lifecycle(
         steps.push(text);
     };
 
-    // [1] Provision from the baseline, exactly as written (ON CLUSTER,
+    // Provision from the baseline, exactly as written (ON CLUSTER,
     // Replicated engines), as admin: provisioning is bootstrap's job.
     let chain: Vec<_> = repo
         .migrations
@@ -175,7 +174,7 @@ pub async fn check_lifecycle(
         message: error,
     };
 
-    // [2] Stamp the baseline. When the chain contains statements the
+    // Stamp the baseline. When the chain contains statements the
     // migration user is genuinely refused, first prove the run *fails*
     // without admin credentials: that keeps admin routing load-bearing.
     runner
@@ -229,7 +228,7 @@ pub async fn check_lifecycle(
         ),
     );
 
-    // [3] Smoke-test targeted customisations: apply, then remove.
+    // Smoke-test targeted customisations: apply, then remove.
     let targeted: Vec<u32> = repo
         .migrations
         .iter()
@@ -257,7 +256,7 @@ pub async fn check_lifecycle(
         );
     }
 
-    // [4] Walk every rollback from the top down (irreversible included:
+    // Walk every rollback from the top down (irreversible included:
     // the ephemeral server has nothing to lose), then upgrade back.
     let rollbackable: Vec<u32> = chain
         .iter()
@@ -283,7 +282,7 @@ pub async fn check_lifecycle(
         ),
     );
 
-    // [5] Diff the live schema against replayed current-state.
+    // Diff the live schema against replayed current-state.
     let shared_predicates: String = repo
         .config
         .replay

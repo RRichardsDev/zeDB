@@ -58,9 +58,9 @@ impl Workspace {
             .iter()
             .enumerate()
             .map(|(index, column)| {
-                // Per-column storage (Phase 8, Tier 1). 0 compressed
-                // bytes means the object holds no data (a view, or an
-                // empty table); show a dash rather than "0 B / NaNx".
+                // 0 compressed bytes means the object holds no data (a
+                // view, or an empty table); show a dash rather than
+                // "0 B / NaNx".
                 let has_data = column.compressed_bytes > 0;
                 let compressed = if has_data {
                     Self::format_bytes(column.compressed_bytes)
@@ -85,8 +85,8 @@ impl Workspace {
                 } else {
                     column.codec.clone()
                 };
-                // Storage advice (Phase 8, Tier 2), computed once the
-                // cardinality probe has run. None before then.
+                // Storage advice is computed once the cardinality probe
+                // has run. None before then.
                 let distinct_count = cardinalities
                     .as_ref()
                     .and_then(|values| values.get(index))
@@ -182,9 +182,9 @@ impl Workspace {
                             // the plain "—" placeholder passes through dim.
                             .child(type_highlight::styled(&codec)),
                     )
-                    // SUGGESTION (Phase 8, Tier 2): the advisor's verdict.
-                    // Actionable ones are clickable and copy their ALTER;
-                    // the distinct count and reason ride along in a tooltip.
+                    // The advisor's verdict. Actionable ones are clickable
+                    // and copy their ALTER; the distinct count and reason
+                    // ride along in a tooltip.
                     .when_some(advice, |row, advice| {
                         // The analysis lane: a green tick (hover = why it is
                         // fine) when there is nothing to do, or an action
@@ -238,7 +238,7 @@ impl Workspace {
                                 editor_sql,
                                 ..
                             } => {
-                                // The measured savings from the Tier 3 trial,
+                                // The measured savings from the trial run,
                                 // once it lands (writable connections only).
                                 let saving = measured.get(&index).copied();
                                 let saving_label = saving
@@ -489,8 +489,8 @@ impl Workspace {
                 .min_h_0()
                 .flex()
                 .flex_col()
-                // Opt-in cardinality prompt (Phase 8, Tier 2). Shows until
-                // the probe has run; the result is cached for the session,
+                // Opt-in cardinality prompt. Shows until the probe
+                // has run; the result is cached for the session,
                 // so a re-opened table skips the prompt and auto-loads.
                 .when(
                     selected.cardinalities.is_none() && !selected.columns.is_empty(),
@@ -656,7 +656,7 @@ impl Workspace {
                 )
                 // Per-column bytes only exist for Wide parts; when the
                 // table is entirely Compact, explain the empty columns
-                // rather than leaving a wall of dashes (Phase 8).
+                // rather than leaving a wall of dashes.
                 .when_some(
                     selected
                         .storage
@@ -887,9 +887,9 @@ impl Workspace {
                                 })
                             })
                             .when_some(selected.storage.as_ref(), |row, storage| {
-                                // Table-wide compression, always available
-                                // (Phase 8). Per-column sizes need Wide parts;
-                                // this ratio does not.
+                                // Table-wide compression is always
+                                // available. Per-column sizes need Wide
+                                // parts; this ratio does not.
                                 let ratio = storage.uncompressed_bytes as f64
                                     / storage.compressed_bytes.max(1) as f64;
                                 let raw = Self::format_bytes(storage.uncompressed_bytes);

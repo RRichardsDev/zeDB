@@ -930,3 +930,63 @@ which there is none beyond regexes and a query-id counter.
 CI runs the crate's tests serially until this is understood. That is a
 mitigation, not a fix: the interference is real and would also bite anyone
 running the suite locally in parallel.
+
+## Comment conformance sweep (2026-08-14)
+
+Brought every comment in `crates/` to the CODING_STANDARDS rule that a
+comment states why a decision was made, never what the code is doing. 67
+files changed, verified comment-only: no line in the diff is anything but
+a comment or blank.
+
+The comment stock was already in good shape. Narration was rare (about a
+dozen sites); the real defect population was milestone scaffolding, 40-odd
+`Phase N` / `Tier N` / `Part C` / `M4` / `done-condition` labels left in
+module headers and test docs. They are gone. The substance around each
+label was kept verbatim; only the label was dropped, because the reason
+survives a phase boundary and the label does not. Distinguishing those
+from genuine compatibility facts mattered: `preferences.rs`'s "the file
+was preferences.json before v0.1.6" is a migration constraint, not
+scaffolding, and stayed.
+
+The sweep's real value was the stale comments it surfaced, all of which
+were comments that had silently stopped being true:
+
+- `native/codec.rs` carried a divider-framed "Connection pool" section
+  documenting code that moved to `pool.rs` in the decomposition. The one
+  live fact moved onto the `POOL` static; the rest was deleted.
+- `lifecycle.rs` inline step markers `[1]`..`[5]` were offset by two from
+  the module doc's six numbered steps, so the cross-reference misled.
+- `query/tail.rs` said the poll loop lives in `main.rs`; it moved to
+  `tail_controller/polling.rs`.
+- Three doc comments described a different function than the one they sat
+  on (`probe.rs::focus_recheck`, `agent/controller.rs::agent_start_last_thread`),
+  and one `///` sat above a `use` so it documented the import.
+- `schema/loading.rs::load_partitions` documented a `force` parameter it
+  does not take. `agent/mod.rs` said discovery was future work; it ships.
+- `checks.rs` promised the lifecycle check would "arrive with the live
+  runner", which it already had.
+
+Integration-test docs now say what each test proves rather than which
+milestone it closed, and the env-gated ones name what goes unverified when
+they skip, which the standards require and several did not do.
+
+### Deferred, found but deliberately not fixed
+
+Comment-only sweep, so these are untouched and want their own patches:
+
+- `zedb-app/src/main.rs:117` `format_engine_definition` splits DDL on a
+  clause list containing `" theme::primary() KEY "`. That is a
+  find-and-replace accident that ate `" PRIMARY KEY "`, so PRIMARY KEY is
+  never split onto its own line. The test below it does not cover PRIMARY
+  KEY, which is why it passes. This is the one real bug found.
+- Four string literals carry runs of stray spaces from a bad rewrap:
+  `runner/actions.rs:248`, `schema/catalog.rs:46`, `client/topology.rs:11`,
+  `lifecycle.rs:199`. Harmless to ClickHouse, but the last one renders a
+  visible gap in check output.
+- `execution/advisor.rs:274,379` have em-dashes in user-facing copy.
+- `operations/actions.rs:58` calls `dedup()` on an unsorted Vec, so a
+  cluster listed non-consecutively appears twice in the scope dropdown.
+- `connections/controller/persistence.rs:88` sets `write_unlocked = false`
+  twice in a row.
+- `ui/theme.rs:113` light `table_tint` is purple, near `filter_tint`,
+  while dark is orange-red. Possibly deliberate, looks like a paste.

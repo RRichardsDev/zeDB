@@ -44,10 +44,11 @@ fn dbs(names: &[&str]) -> Targets {
     Targets::Databases(names.iter().map(ToString::to_string).collect())
 }
 
-/// The full M5 done-condition against a real ephemeral server: upgrade,
-/// status, peel-from-top and class enforcement, the --to walk, stamp,
-/// targeted apply with allow-list, and read-only refusal. Skips silently
-/// when no binary is cached so cold CI stays green.
+/// Proves the whole runner surface against a real ephemeral server:
+/// upgrade, status, peel-from-top and class enforcement, the --to walk,
+/// stamp, targeted apply with allow-list, and read-only refusal.
+/// Requires a cached ClickHouse binary (`zedb pin`); skips silently
+/// without one, leaving every one of those behaviours unverified.
 #[tokio::test]
 async fn runner_walks_the_chain_on_a_real_server() {
     let Some(binary) = any_cached_binary() else {
@@ -167,9 +168,10 @@ async fn runner_walks_the_chain_on_a_real_server() {
     assert_eq!(meta.rows[0][0].to_string(), "1");
 }
 
-/// M6 done-condition: --all discovers from the registry query, skips
-/// exclusion groups out loud, and --group / --db still target them
-/// deliberately.
+/// Proves that --all discovers from the registry query, skips exclusion
+/// groups out loud, and that --group / --db still target them
+/// deliberately. Requires a cached ClickHouse binary (`zedb pin`); skips
+/// silently without one, leaving fleet targeting unverified.
 #[tokio::test]
 async fn fleet_targeting_discovers_and_skips_exclusions() {
     let Some(binary) = any_cached_binary() else {
@@ -230,9 +232,11 @@ async fn fleet_targeting_discovers_and_skips_exclusions() {
     assert!(error.contains("frozen"), "{error}");
 }
 
-/// M7 done-condition: a freshly upgraded database verifies clean, manual
-/// drift (added column, changed view) is detected and named, and a
-/// database behind head verifies clean at its own position.
+/// Proves that a freshly upgraded database verifies clean, that manual
+/// drift (added column, foreign table) is detected and named, and that a
+/// database behind head verifies clean at its own chain position.
+/// Requires a cached ClickHouse binary (`zedb pin`); skips silently
+/// without one, leaving drift detection unverified.
 #[tokio::test]
 async fn verify_detects_drift_at_chain_position() {
     let Some(binary) = any_cached_binary() else {

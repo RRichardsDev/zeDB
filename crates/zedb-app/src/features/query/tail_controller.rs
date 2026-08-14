@@ -2,7 +2,7 @@ use crate::*;
 
 use gpui::prelude::*;
 impl Workspace {
-    /// Begin a live tail of a table (Phase 10): open a fresh tab, resolve
+    /// Begin a live tail of a table: open a fresh tab, resolve
     /// the monotonic key (the table's leading ORDER BY column), and start
     /// polling `WHERE key > :last` off the main thread.
     pub(crate) fn start_tail(

@@ -1,4 +1,4 @@
-//! In-app migration authoring (docs/PHASE-3.md M1).
+//! In-app migration authoring.
 //!
 //! A draft lives entirely in memory: the SQL is checked against the
 //! repo's pinned ClickHouse binary while it is still editor text, and

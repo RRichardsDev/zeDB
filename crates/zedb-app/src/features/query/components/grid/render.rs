@@ -988,7 +988,6 @@ impl Render for GridSpike {
                             .insert(Self::width_key(&this.columns), this.col_widths.clone());
                         cx.notify();
                     }
-                    // End any in-progress drag selection.
                     this.selecting = false;
                 }),
             )

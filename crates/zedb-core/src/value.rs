@@ -121,7 +121,7 @@ pub struct ColumnMeta {
     pub type_name: String,
 }
 
-/// A fully materialized query result. Streaming arrives in M7.
+/// A fully materialized query result: every row is held in memory.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueryResult {
     pub columns: Vec<ColumnMeta>,

@@ -1,5 +1,5 @@
-//! Agent discovery (docs/PHASE-3.1.md M2): what is actually installed
-//! on this machine, and in what state.
+//! Agent discovery: what is actually installed on this machine, and in
+//! what state.
 //!
 //! GUI apps launch with a skinny PATH (no shell profile), so lookup
 //! searches the real PATH plus the standard install locations: homebrew,

@@ -1,5 +1,5 @@
-//! The fleet view (docs/PHASE-2.md M0-M1): open a migration repo and
-//! render the databases x migrations matrix for the active connection.
+//! The fleet view: open a migration repo and render the databases x
+//! migrations matrix for the active connection.
 //!
 //! BYO git: "opening a repo" means pointing at a local checkout
 //! directory; committing and pushing stay in the user's git workflow.

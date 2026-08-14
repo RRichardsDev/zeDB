@@ -1,9 +1,9 @@
-//! Query history + saved queries (docs/PHASE-7.1-IDEAS.md, first
-//! bite): every statement zeDB runs is recorded locally per
-//! connection; named snippets live in settings.json and sync. The
-//! drawer docks to the right of the query editor, split into History
-//! and Saved tabs. Bookmarking saves immediately under a name derived
-//! from the query; renaming happens inline on the Saved tab.
+//! Query history, saved queries, and saved tabs: every statement zeDB
+//! runs is recorded locally per connection; named snippets live in
+//! settings.json and sync. The drawer docks to the right of the query
+//! editor, split into History, Saved, and Tabs. Bookmarking saves
+//! immediately under a name derived from the query; renaming happens
+//! inline on the Saved and Tabs tabs.
 
 use zedb_core::HistoryEntry;
 

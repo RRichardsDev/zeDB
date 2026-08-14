@@ -16,6 +16,9 @@ enum PoolEntry {
 /// host with no native port doesn't pay a probe per query.
 const RETRY_AFTER: Duration = Duration::from_secs(300);
 
+/// `ChClient` is constructed fresh per operation all over the app, so the
+/// long-lived native connection has to outlive any one client: it lives
+/// here, process-wide, keyed by the connection's identity.
 static POOL: OnceLock<Mutex<HashMap<String, PoolEntry>>> = OnceLock::new();
 
 fn pool() -> &'static Mutex<HashMap<String, PoolEntry>> {

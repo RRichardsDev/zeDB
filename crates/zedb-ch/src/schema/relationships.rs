@@ -1,10 +1,10 @@
 use super::*;
 
 impl ChClient {
-    /// The materialized-view dependency neighborhood of an object (Phase 9,
-    /// Part C): its own source/target if it is an MV, the MVs it feeds
-    /// (from `dependencies_table`), and the MVs that target it. Two reads:
-    /// the object row, and every MV's create query (MVs are few).
+    /// The materialized-view dependency neighborhood of an object: its
+    /// own source/target if it is an MV, the MVs it feeds (from
+    /// `dependencies_table`), and the MVs that target it. Two reads: the
+    /// object row, and every MV's create query (MVs are few).
     pub async fn object_dependencies(
         &self,
         database: &str,
@@ -113,7 +113,7 @@ impl ChClient {
         Ok(deps)
     }
 
-    /// Projections attached to a table with their size (Phase 9, Part C).
+    /// Projections attached to a table with their size.
     /// `system.projections` is a newer table; callers tolerate its absence.
     pub async fn table_projections(
         &self,

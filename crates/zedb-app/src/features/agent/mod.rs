@@ -1,11 +1,11 @@
-//! The agent pane (docs/PHASE-3.1.md M1): AI threads with installed
-//! coding agents over ACP. zeDB renders the conversation and answers
-//! permission requests; the agent brings its own auth and tools.
+//! The agent pane: AI threads with the user's installed coding agents
+//! over ACP. zeDB renders the conversation and answers permission
+//! requests; the agent brings its own auth and tools.
 //!
-//! M1 scope: one thread at a time, a built-in agent list (discovery is
-//! M2), streamed markdown via gpui-component's TextView, compact tool
-//! lines, inline permission cards, cancel. Sessions start in the open
-//! migration repo's checkout when there is one.
+//! One thread at a time, streamed markdown via gpui-component's
+//! TextView, compact tool lines, inline permission cards, cancel.
+//! Sessions start in the open migration repo's checkout when there is
+//! one.
 
 use std::sync::Arc;
 

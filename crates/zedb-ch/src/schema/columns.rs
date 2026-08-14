@@ -51,9 +51,9 @@ impl ChClient {
     }
 
     /// Measure the actual size difference between a column's current
-    /// definition and a proposed one (Phase 8, Tier 3). Builds a throwaway
-    /// table with two columns, `base` and `cand`, holding the same sample
-    /// of the column's data under each definition, reads back their
+    /// definition and a proposed one. Builds a throwaway table with two
+    /// columns, `base` and `cand`, holding the same sample of the
+    /// column's data under each definition, reads back their
     /// compressed sizes, and drops the table. Returns how many times
     /// smaller `cand` is than `base` (e.g. 4.8 for "4.8x smaller"), or None
     /// if it cannot be measured. WRITES to the server, so callers must

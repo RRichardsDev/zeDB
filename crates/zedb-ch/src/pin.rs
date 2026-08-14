@@ -1,4 +1,4 @@
-//! Pinned `clickhouse` binary management (docs/PHASE-1.md M2).
+//! Pinned `clickhouse` binary management.
 //!
 //! Replay and checks must run the exact version the target servers run,
 //! so binaries are cached per version and downloaded on demand from the

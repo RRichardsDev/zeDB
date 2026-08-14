@@ -785,6 +785,9 @@ impl Workspace {
     /// Vim state for the bottom bar: mode, command line, and recording
     /// register of the active query tab, when vim mode is on and the
     /// query editor is the active view.
+    // The tuple is read once, immediately destructured by the only
+    // caller (the status bar). A named struct for four borrowed
+    // fields would cost more than it explains.
     #[allow(clippy::type_complexity)]
     pub(crate) fn footer_vim_state(
         &self,

@@ -4,7 +4,7 @@ use gpui::prelude::*;
 
 impl Workspace {
     /// True when the named connection allows writes (needed for the
-    /// Tier 3 measurement, which builds a throwaway table).
+    /// measured-savings trial, which builds a throwaway table).
     pub(crate) fn connection_is_writable(&self, name: &str) -> bool {
         self.connection
             .connections
@@ -15,9 +15,9 @@ impl Workspace {
     }
 
     /// Measure the actual size savings of each actionable suggestion for
-    /// the current selection (Phase 8, Tier 3). Runs one throwaway-table
-    /// trial per suggested column, off the main thread, and stores the
-    /// result. Only on writable connections; a no-op otherwise.
+    /// the current selection. Runs one throwaway-table trial per
+    /// suggested column, off the main thread, and stores the result.
+    /// Only on writable connections; a no-op otherwise.
     pub(crate) fn measure_suggestions(&mut self, cx: &mut Context<Self>) {
         let (connection_name, config, database, table) = {
             let Some(selected) = &self.schema.selected_object else {

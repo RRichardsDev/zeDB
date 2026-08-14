@@ -1,6 +1,6 @@
-//! Live execution against real servers (docs/PHASE-1.md M5): tracking
-//! bootstrap, status, upgrade, rollback with class enforcement, stamp,
-//! and targeted apply. Ported from the ancestor's runner.py.
+//! Live execution against real servers: tracking bootstrap, status,
+//! upgrade, rollback with class enforcement, stamp, and targeted apply.
+//! Ported from the ancestor's runner.py.
 //!
 //! Safety is architecture: mutating entry points refuse read-only
 //! connections, every run records to the tracking table and a local audit

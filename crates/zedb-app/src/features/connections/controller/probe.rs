@@ -135,9 +135,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Health poll: every five minutes run SELECT 1 through the active
-    /// node; on failure flip to disconnected and mark the node unhealthy,
-    /// so the next query attempt gets the usual connect-first warning.
     /// One quiet health probe plus update check, run on window refocus.
     pub(crate) fn focus_recheck(&mut self, cx: &mut Context<Self>) {
         self.theme_recheck(cx);

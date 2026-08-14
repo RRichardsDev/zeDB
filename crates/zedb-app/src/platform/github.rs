@@ -1,4 +1,4 @@
-//! Forge identity via the OAuth device flow (docs/PHASE-3.4.md M0).
+//! Forge identity via the OAuth device flow.
 //!
 //! GitHub and GitLab share the RFC 8628 device flow: no client secret
 //! ships in the binary, the token lives in the macOS Keychain, and the

@@ -1,6 +1,6 @@
 //! Virtualized results grid: only visible cells are rendered, so
-//! multi-million-row results scroll smoothly with flat memory. Started as
-//! the M2 spike; findings are in docs/devlog.md.
+//! multi-million-row results scroll smoothly with flat memory. The
+//! measurements behind that design are in docs/devlog.md.
 
 use crate::theme;
 use gpui::Entity;

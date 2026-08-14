@@ -1,4 +1,4 @@
-//! Rule-based storage advisor (Phase 8, Tier 2). Pure logic, no AI:
+//! Rule-based storage advisor. Pure logic, no AI:
 //! given a column's type, current codec, size, and probed cardinality,
 //! return a conservative, explainable verdict, and when it is actionable
 //! the `ALTER` that applies it. Only high-confidence rules fire; when in
@@ -29,7 +29,8 @@ pub enum Advice {
     /// plus an `OPTIMIZE ... FINAL`, since a codec only affects new and
     /// merged parts otherwise). `editor_sql` is the same, formatted with
     /// comments for the query editor. `base_def`/`cand_def` are the
-    /// current and proposed column definitions used by the Tier 3 trial.
+    /// current and proposed column definitions used by the measured-
+    /// savings trial.
     Suggest {
         label: String,
         reason: String,

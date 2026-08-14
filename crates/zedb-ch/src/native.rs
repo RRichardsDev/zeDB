@@ -1,4 +1,4 @@
-//! Native (TCP) protocol transport, Phase 10.
+//! Native (TCP) protocol transport.
 //!
 //! A persistent connection over ClickHouse's native protocol (9440 TLS
 //! preferred, then 9000 plaintext) via `klickhouse`, decoded into the same

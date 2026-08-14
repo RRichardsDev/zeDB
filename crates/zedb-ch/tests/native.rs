@@ -258,9 +258,11 @@ async fn native_readonly_session_rejects_writes() {
     assert_eq!(result.rows[0][0], Value::UInt(1));
 }
 
-/// Opt-in integration coverage for ClickHouse 26.6 `STREAM CURSOR` against
-/// the local compose stack. Run with `ZEDB_STREAM_TEST_URL` so ordinary test
-/// runs do not require a particular server version.
+/// Proves a `STREAM CURSOR` query resumes from a saved cursor and that
+/// dropping the connection cancels the server-side query. Requires
+/// `ZEDB_STREAM_TEST_URL` pointing at a ClickHouse 26.6+ endpoint (opt-in
+/// so ordinary runs do not require a particular server version); without
+/// it, cursor resume and disconnect cancellation go unverified.
 #[tokio::test]
 async fn native_stream_cursor_resumes_and_disconnect_cancels() {
     let Ok(url) = std::env::var("ZEDB_STREAM_TEST_URL") else {

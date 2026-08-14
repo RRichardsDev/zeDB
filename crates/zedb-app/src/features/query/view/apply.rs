@@ -20,7 +20,7 @@ impl Workspace {
             )
     }
 
-    /// The large-table apply confirmation (Phase 8, Tier 3). Deferred so
+    /// The large-table apply confirmation. Deferred so
     /// it paints above everything, with an occluding backdrop that dims
     /// the window and dismisses on an outside click.
     pub(crate) fn apply_confirm_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {

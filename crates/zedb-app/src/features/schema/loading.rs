@@ -180,8 +180,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Opt-in cardinality probe (Phase 8, Tier 2): scan the selected
-    /// table once for each column's approximate distinct count, off the
+    /// Opt-in cardinality probe: scan the selected table once for
+    /// each column's approximate distinct count, off the
     /// main thread, and store it on the selection. Feeds the codec
     /// advisor. Guarded so a stale result (selection changed while the
     /// scan ran) is dropped.
@@ -264,8 +264,8 @@ impl Workspace {
                         .cardinality_cache
                         .insert((connection_name, database_name, object_name), cardinalities);
                     // Cardinality is known; measure the actual savings of
-                    // the actionable suggestions (Tier 3), writable
-                    // connections only.
+                    // the actionable suggestions, writable connections
+                    // only.
                     this.measure_suggestions(cx);
                 }
                 cx.notify();
@@ -275,9 +275,9 @@ impl Workspace {
         .detach();
     }
 
-    /// Load active parts grouped by partition for the selected object
-    /// (Phase 9, Part B), off-thread. No-op if already loaded or loading;
-    /// pass `force` to reload. Guards against a stale connection/object.
+    /// Load active parts grouped by partition for the selected object,
+    /// off-thread. No-op if already loaded or loading. Guards against a
+    /// stale connection/object.
     pub(crate) fn load_partitions(&mut self, cx: &mut Context<Self>) {
         let (connection_name, config, database_name, object_name) = {
             let Some(selected) = &self.schema.selected_object else {

@@ -1,8 +1,8 @@
-//! Export current query results (docs/PHASE-7.1-IDEAS.md): palette
-//! only. Step one picks the scope (the tab's max-rows cap, or all
-//! rows), step two the format, with the location defaulting quietly
-//! to ~/Downloads. The download streams the server's own output
-//! format straight to disk, bypassing decode and the grid.
+//! Export current query results: palette only. Step one picks the
+//! scope (the tab's max-rows cap, or all rows), step two the format,
+//! with the location defaulting quietly to ~/Downloads. The download
+//! streams the server's own output format straight to disk, bypassing
+//! decode and the grid.
 
 use gpui::Context;
 

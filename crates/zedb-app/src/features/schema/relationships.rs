@@ -3,8 +3,8 @@ use crate::*;
 use gpui::prelude::*;
 
 impl Workspace {
-    /// Load the materialized-view lineage for the selected object
-    /// (Phase 9, Part C), off-thread. No-op if already loaded or loading.
+    /// Load the materialized-view lineage for the selected object,
+    /// off-thread. No-op if already loaded or loading.
     pub(crate) fn load_dependencies(&mut self, cx: &mut Context<Self>) {
         let (connection_name, config, database_name, object_name) = {
             let Some(selected) = &self.schema.selected_object else {
@@ -70,8 +70,8 @@ impl Workspace {
         .detach();
     }
 
-    /// Load the projections attached to the selected object (Phase 9,
-    /// Part C), off-thread. No-op if already loaded or loading.
+    /// Load the projections attached to the selected object, off-thread.
+    /// No-op if already loaded or loading.
     pub(crate) fn load_projections(&mut self, cx: &mut Context<Self>) {
         let (connection_name, config, database_name, object_name) = {
             let Some(selected) = &self.schema.selected_object else {

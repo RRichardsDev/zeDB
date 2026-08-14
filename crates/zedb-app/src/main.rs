@@ -267,8 +267,8 @@ struct CloseQueryTabsToRight {
     tab_id: usize,
 }
 
-/// Start a live tail of a table (Phase 10), from the schema sidebar's
-/// table context menu. `cap` is the retained-row limit the user opted into
+/// Start a live tail of a table, from the schema sidebar's table
+/// context menu. `cap` is the retained-row limit the user opted into
 /// (`None` = unlimited); the initial load is always small regardless.
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json, no_register)]
@@ -278,7 +278,7 @@ struct TailTable {
     cap: Option<usize>,
 }
 
-/// Optional GitHub identity (docs/PHASE-3.4.md M0).
+/// Optional GitHub identity; sign-in is never required to use the app.
 enum GithubAuth {
     SignedOut,
     /// Waiting for the user to approve the device code in the browser.

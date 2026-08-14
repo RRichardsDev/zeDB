@@ -39,10 +39,11 @@ fn copy_fixture(destination: &Path) {
     copy_tree(&fixture(), destination);
 }
 
-/// The full M3 done-condition, against the real pinned binary: regen is
-/// byte-stable, the canonical phase handles ALTER, data-only migrations
-/// cause zero churn, and --check catches hand edits. Skips silently when
-/// no binary is cached so cold CI stays green.
+/// Proves, against the real pinned binary, that regen is byte-stable,
+/// that the canonical phase handles ALTER, that data-only migrations
+/// cause zero churn, and that --check catches hand edits. Requires a
+/// cached ClickHouse binary (`zedb pin`); skips silently without one,
+/// leaving all of that unverified.
 #[test]
 fn regen_is_stable_canonical_and_checkable() {
     let probe = MigrationRepo::open_root(&fixture()).unwrap();

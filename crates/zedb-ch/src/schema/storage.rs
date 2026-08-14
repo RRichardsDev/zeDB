@@ -36,8 +36,8 @@ impl ChClient {
         }))
     }
 
-    /// Active parts grouped by partition (Phase 9, Part B), so the schema
-    /// inspector can show the MergeTree lifecycle: how many parts each
+    /// Active parts grouped by partition, so the schema inspector can
+    /// show the MergeTree lifecycle: how many parts each
     /// partition has (a "too many parts" signal), its rows and compressed
     /// size. Reads the connected node's `system.parts`.
     pub async fn table_partitions(
@@ -73,10 +73,10 @@ impl ChClient {
             .collect()
     }
 
-    /// Merges (and mutation-merges) running right now for this table
-    /// (Phase 9, Part B). Polled while the Parts tab is open so progress
-    /// updates live. `elapsed` and `progress` are cast to integers in SQL
-    /// to reuse the integer row accessors.
+    /// Merges (and mutation-merges) running right now for this table.
+    /// Polled while the Parts tab is open so progress updates live.
+    /// `elapsed` and `progress` are cast to integers in SQL to reuse the
+    /// integer row accessors.
     pub async fn active_merges(&self, database: &str, object: &str) -> Result<Vec<MergeInfo>> {
         let database = escape_string(database);
         let object = escape_string(object);

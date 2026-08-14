@@ -37,7 +37,7 @@ impl Workspace {
             ));
         }
 
-        // Dry-run (M3): every pending migration rendered with this
+        // Dry-run: every pending migration rendered with this
         // database's parameters; unresolved placeholders stay visible.
         let mut pending_sql: Vec<(u32, String)> = Vec::new();
         if let Some(repo) = &repo {

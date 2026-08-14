@@ -1,4 +1,4 @@
-//! In-app codegen and chain checks (docs/PHASE-3.md M2).
+//! In-app codegen and chain checks.
 //!
 //! Regen replays the chain through the pinned binary in the background
 //! and shows the churn (which current-state files would change, appear,

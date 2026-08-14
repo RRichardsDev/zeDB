@@ -1,4 +1,4 @@
-//! Repo checks: `sql` and `equivalence` (docs/PHASE-1.md M4).
+//! Repo checks: `sql` and `equivalence`.
 //!
 //! `sql` renders every SQL file with dummy parameters and pipes it through
 //! `clickhouse format`, the real server grammar: anything it rejects would
@@ -8,8 +8,6 @@
 //! derived": both are replayed into one `clickhouse local` process and
 //! every object's canonical definition is diffed. Any mismatch means regen
 //! has a bug or current-state/ was edited by hand.
-//!
-//! The lifecycle check arrives with the live runner (M5), which it drives.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

@@ -843,8 +843,8 @@ impl Workspace {
 
     /// The connection's write posture, worn next to the tier: quiet
     /// when read-only (the safe default), loud when writes are open.
-    /// Small posture badge for the dense connections list (its only
-    /// current wearer; pass small=false for a full-size one).
+    /// This is the half-scale form for the dense connections list; use
+    /// `write_badge_sized(read_only, false)` for a full-size one.
     pub(crate) fn write_badge_small(read_only: bool) -> impl IntoElement {
         Self::write_badge_sized(read_only, true)
     }

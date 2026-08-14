@@ -78,11 +78,11 @@ impl Workspace {
         )
     }
 
-    /// Phase 5 M4: a read-only shards-and-replicas view, built entirely
-    /// from the memberships each node reported about itself at connect
-    /// time. Nothing here is configurable; zeDB displays what the
-    /// servers said. Absent topology (never connected, LBs, Cloud)
-    /// renders nothing.
+    /// A read-only shards-and-replicas view, built entirely from the
+    /// memberships each node reported about itself at connect time.
+    /// Nothing here is configurable; zeDB displays what the servers
+    /// said. Absent topology (never connected, LBs, Cloud) renders
+    /// nothing.
     pub(crate) fn topology_section(
         &self,
         connection: &ConnectionConfig,

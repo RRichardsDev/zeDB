@@ -64,8 +64,6 @@ impl Workspace {
         self.agent.agents = agents;
     }
 
-    /// Spawn an agent and open a thread with it. The spawn is cheap and
-    /// synchronous; initialize and session setup stream in behind it.
     /// cmd-n in the open agent pane: a new thread with the last-used
     /// agent, falling back to the picker when there is no history.
     pub(crate) fn agent_start_last_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -92,6 +90,8 @@ impl Workspace {
         }
     }
 
+    /// Spawn an agent and open a thread with it. The spawn is cheap and
+    /// synchronous; initialize and session setup stream in behind it.
     pub(crate) fn agent_start_thread(
         &mut self,
         agent_index: usize,

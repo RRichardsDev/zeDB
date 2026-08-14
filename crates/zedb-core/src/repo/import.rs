@@ -1,7 +1,7 @@
-//! One-time conversion of an analytics-clickhouse-ddl repo into format 1
-//! (docs/PHASE-1.md M8). The migration chain shape is unchanged between
-//! generations, so migrations copy verbatim; the conversion supplies what
-//! the ancestor kept in code: zedb.toml with declared scopes, parameters
+//! One-time conversion of an analytics-clickhouse-ddl repo into format 1.
+//! The migration chain shape is unchanged between generations, so
+//! migrations copy verbatim; the conversion supplies what the ancestor
+//! kept in code: zedb.toml with declared scopes, parameters
 //! (with the ancestor's dummy and sentinel values), shared bootstrap
 //! databases, and the pinned engine version parsed from pin.py.
 

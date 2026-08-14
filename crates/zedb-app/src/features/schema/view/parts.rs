@@ -249,7 +249,6 @@ impl Workspace {
             .min_h_0()
             .flex()
             .flex_col()
-            // Summary + refresh.
             .child(
                 div()
                     .flex_none()

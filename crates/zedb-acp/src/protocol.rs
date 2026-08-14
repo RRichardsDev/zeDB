@@ -1,4 +1,4 @@
-//! Agent Client Protocol wire types (docs/PHASE-3.1.md M0).
+//! Agent Client Protocol wire types.
 //!
 //! Typed where load-bearing, `serde_json::Value` where the protocol is
 //! young and adapters vary: an unknown field or update kind must never
@@ -23,8 +23,8 @@ pub struct ClientCapabilities {
     pub fs: FsCapabilities,
 }
 
-/// File-system capabilities offered to the agent. zeDB offers none in
-/// M0: agents use their own file tools; the pane is a conversation.
+/// File-system capabilities offered to the agent. zeDB offers none:
+/// agents use their own file tools; the pane is a conversation.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsCapabilities {

@@ -1,11 +1,11 @@
-//! Live tail (Phase 10): the pure query-building and key-tracking core.
+//! Live tail: the pure query-building and key-tracking core.
 //!
 //! A tail is a periodic `SELECT ... WHERE key > :last ORDER BY key LIMIT n`
-//! over the HTTP interface (mechanism decided in `docs/PHASE-10.md`): each
-//! poll prunes by the monotonic key instead of rescanning, so cost stays
-//! flat however long the tail runs. This module is the deterministic part,
-//! the SQL strings and the last-seen-key literal, unit-tested; the poll
-//! loop and rendering live in `main.rs`. ClickHouse 26.6 instant tails use a
+//! over the HTTP interface: each poll prunes by the monotonic key instead
+//! of rescanning, so cost stays flat however long the tail runs. This
+//! module is the deterministic part, the SQL strings and the last-seen-key
+//! literal, unit-tested; the poll loop and rendering live in
+//! `tail_controller`. ClickHouse 26.6 instant tails use a
 //! direct `STREAM CURSOR` query for simple single-table bodies; richer edited
 //! queries keep using the polling path.
 

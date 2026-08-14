@@ -1,4 +1,4 @@
-//! In-app commit and push (docs/PHASE-3.md M3).
+//! In-app commit and push.
 //!
 //! The commit stages exactly the repo's own files (migrations,
 //! current-state, config) and commits them with an editable templated

@@ -1,4 +1,4 @@
-//! zedb-acp: an Agent Client Protocol client (docs/PHASE-3.1.md M0).
+//! zedb-acp: an Agent Client Protocol client.
 //!
 //! Spawns an installed agent CLI (Claude Code, Codex, anything
 //! ACP-speaking) and converses with it over JSON-RPC 2.0, one JSON

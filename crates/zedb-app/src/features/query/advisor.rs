@@ -1,7 +1,7 @@
-//! Query advisor (Phase 9, Part A) — deterministic, explainable
-//! recommendations from a query's execution, not a model.
+//! Query advisor: deterministic, explainable recommendations from a
+//! query's execution, not a model.
 //!
-//! Increment 1 ships one finding: the primary key isn't filtering the
+//! The core finding is that the primary key isn't filtering the
 //! query (scanned a lot to return a little, and `EXPLAIN indexes` shows
 //! the primary key barely pruned). Every input is ClickHouse-sourced (the
 //! run's `read_rows` / `result_rows` plus the `EXPLAIN json = 1,

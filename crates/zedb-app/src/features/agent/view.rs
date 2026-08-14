@@ -39,7 +39,6 @@ impl Workspace {
                     ),
             ));
 
-        // Header: agent name, new thread, close.
         let title = self
             .agent
             .thread
@@ -191,7 +190,6 @@ impl Workspace {
                 ),
         );
 
-        // The Add More Agents form.
         if let Some(form) = &self.agent.add_form {
             let mut card = div()
                 .flex_none()
@@ -243,7 +241,6 @@ impl Workspace {
                         .child(error.clone()),
                 );
             }
-            // Existing custom agents, removable.
             for (index, custom) in self.preferences.custom_agents.iter().enumerate() {
                 card = card.child(
                     div()
@@ -302,7 +299,6 @@ impl Workspace {
             panel = panel.child(card);
         }
 
-        // Transcript.
         let mut transcript = div()
             .id("agent-transcript")
             .flex_1()
@@ -474,7 +470,6 @@ impl Workspace {
             );
         }
 
-        // Composer.
         if let Some(thread) = self.agent.thread.as_ref() {
             let running = thread.running;
             let ready = thread.session_id.is_some();

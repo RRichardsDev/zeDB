@@ -1,4 +1,4 @@
-//! zedb: thin CLI over zedb-core (docs/SPEC.md, docs/PHASE-1.md).
+//! zedb: thin CLI over zedb-core (docs/SPEC.md).
 
 use std::process::ExitCode;
 

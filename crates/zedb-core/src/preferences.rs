@@ -36,8 +36,8 @@ pub struct Preferences {
     pub last_agent: Option<String>,
     /// "dark" (default), "light", or "system".
     pub theme: Option<String>,
-    /// Settings-sync remote URL (Phase 3.4 M1). Machine-local: it is
-    /// stripped from the sync payload itself.
+    /// Settings-sync remote URL. Machine-local: it is stripped from the
+    /// sync payload itself.
     pub settings_sync_url: Option<String>,
     /// Local checkout path of the settings-sync repo. Machine-local.
     pub settings_sync_repo: Option<String>,

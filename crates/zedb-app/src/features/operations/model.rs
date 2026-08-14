@@ -1,7 +1,7 @@
-//! The ops view (docs/PHASE-6.md M1): what is this cluster doing
-//! right now. Small capped SELECTs against system tables, polled only
-//! while the view is visible; read-only by construction except KILL
-//! QUERY, which follows the connection's write posture.
+//! The ops view: what is this cluster doing right now. Small capped
+//! SELECTs against system tables, polled only while the view is
+//! visible; read-only by construction except KILL QUERY, which
+//! follows the connection's write posture.
 
 use gpui::Action;
 use zedb_core::Value;
@@ -9,8 +9,8 @@ use zedb_core::Value;
 pub(crate) const POLL_SECS: u64 = 2;
 
 /// Which node(s) the panels ask about. Cluster scope fans every
-/// query out via clusterAllReplicas()/cluster() (docs/PHASE-6.md M4)
-/// and exists only for topologies the nodes reported at connect time.
+/// query out via clusterAllReplicas()/cluster() and exists only for
+/// topologies the nodes reported at connect time.
 #[derive(Clone, PartialEq, Eq, Default)]
 pub enum OpsScope {
     #[default]

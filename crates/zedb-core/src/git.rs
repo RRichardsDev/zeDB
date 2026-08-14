@@ -1,4 +1,4 @@
-//! Read-only git awareness for migration repos (docs/PHASE-3.md M0).
+//! Read-only git awareness for migration repos.
 //!
 //! Shells out to the user's `git`, so configuration, auth, and worktree
 //! semantics are exactly theirs. Everything here observes; nothing here

@@ -349,7 +349,9 @@ impl<'a> Parser<'a> {
             }
             return self.parse();
         }
-        // Save state by parsing the first identifier, then deciding.
+        // Both forms start with an identifier, so the only way to tell
+        // them apart is to read it and look at what follows; checkpoint
+        // first so it can be re-read as a type.
         let checkpoint = self.chars.clone();
         let first = self.ident();
         self.skip_ws();
