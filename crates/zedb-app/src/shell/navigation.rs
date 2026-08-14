@@ -74,18 +74,7 @@ impl Workspace {
                                                 count.invisible()
                                             })
                                             .child(format!("({})", connection.nodes.len())),
-                                    )
-                                    .when_some(cloud_state, |name, state| {
-                                        // The linked Cloud service is not
-                                        // running: say so where the eye
-                                        // already is.
-                                        name.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme::text_dim())
-                                                .child(state),
-                                        )
-                                    }),
+                                    ),
                             )
                             .child(
                                 // At rest the row wears only two small
@@ -143,6 +132,11 @@ impl Workspace {
                                     ),
                             ),
                     )
+                    .when_some(cloud_state, |row, state| {
+                        // The linked Cloud service is not running: its own
+                        // line under the name, clear of the badge column.
+                        row.child(div().text_xs().text_color(theme::text_dim()).child(state))
+                    })
                     .child(
                         // The full "N nodes" line is collapsed at rest (the
                         // inline "(N)" stands in) and expands on hover.

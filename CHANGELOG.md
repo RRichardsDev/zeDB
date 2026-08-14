@@ -19,7 +19,10 @@ GitHub release notes.
   connection names the real cause ("idle in ClickHouse Cloud")
   instead of a bare timeout, and the sidebar marks idle services. The
   API key lives in the macOS Keychain; only the org id and name are
-  saved (and sync).
+  saved (and sync). The sidebar's idle/waking marker sits on its own
+  line under the connection name (keeping the badge column clear) and
+  clears itself: while a service is waking, zeDB re-polls the control
+  plane until it settles.
 - New Workload tab on the table inspector: index and projection
   effectiveness measured from the table's real traffic. zeDB
   aggregates the last 7 days of `system.query_log` into query shapes,

@@ -195,7 +195,35 @@ impl Workspace {
                     .collect();
                 this.connection.cloud.services = services;
                 this.connection.cloud.error = (!errors.is_empty()).then(|| errors.join(" \u{b7} "));
+                // A waking service settles on its own schedule: keep
+                // polling until nothing is mid-transition, so the
+                // sidebar's "waking" clears itself.
+                if this
+                    .connection
+                    .cloud
+                    .services
+                    .iter()
+                    .any(|(_, service)| service.is_waking())
+                {
+                    this.cloud_schedule_refresh(cx);
+                }
                 cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// One delayed refresh, cancelled by any newer refresh (the
+    /// generation moves on every fetch).
+    fn cloud_schedule_refresh(&mut self, cx: &mut Context<Self>) {
+        let generation = self.connection.cloud.generation;
+        cx.spawn(async move |this, cx| {
+            gpui::Timer::after(std::time::Duration::from_secs(15)).await;
+            this.update(cx, |this, cx| {
+                if this.connection.cloud.generation == generation {
+                    this.cloud_refresh(cx);
+                }
             })
             .ok();
         })
@@ -351,6 +379,8 @@ impl Workspace {
                         format!("{name} is waking in ClickHouse Cloud; try again shortly"),
                         cx,
                     );
+                    // Clear the sidebar's "waking" once it lands.
+                    this.cloud_schedule_refresh(cx);
                 }
                 cx.notify();
             })
