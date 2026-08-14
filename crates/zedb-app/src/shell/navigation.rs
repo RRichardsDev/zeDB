@@ -60,14 +60,25 @@ impl Workspace {
                             .child(
                                 // Name plus an inline muted node count "(N)"
                                 // at rest; hovering hides it and reveals the
-                                // full "N nodes" line below.
+                                // full "N nodes" line below. The name gives
+                                // way (truncates) before the badge column
+                                // does: marks must survive any sidebar width.
                                 div()
+                                    .flex_1()
+                                    .min_w_0()
                                     .flex()
                                     .items_center()
                                     .gap_1p5()
-                                    .child(connection.name.clone())
                                     .child(
                                         div()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .child(connection.name.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_none()
                                             .text_xs()
                                             .text_color(theme::text_dim())
                                             .group_hover("connection-row", |count| {
@@ -85,6 +96,7 @@ impl Workspace {
                                 // (invisible) so they reserve the width and
                                 // the layout does not shift on hover.
                                 div()
+                                    .flex_none()
                                     .relative()
                                     .flex()
                                     .items_center()

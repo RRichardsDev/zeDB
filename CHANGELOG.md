@@ -9,6 +9,10 @@ GitHub release notes.
 
 ## Unreleased
 
+- Fixed the connections sidebar pushing tier and read-only badges off
+  the edge at narrow widths: long connection names now truncate and
+  the badge column holds its ground.
+
 - ClickHouse Cloud quick setup: link an organization by pasting a
   Cloud API key ("Cloud" in the connections sidebar, or "Link
   ClickHouse Cloud" in the palette). zeDB lists the org's services
