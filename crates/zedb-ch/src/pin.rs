@@ -109,13 +109,9 @@ pub async fn ensure_binary(version: &str) -> Result<PathBuf, PinError> {
     Ok(path)
 }
 
-/// The newest published release sharing `version`'s major.minor, from
-/// the GitHub releases listing; None when none is published.
+/// The closest published release to `version`, from the GitHub
+/// releases listing; None when nothing is published at all.
 async fn nearest_published_release(version: &str) -> Result<Option<String>, PinError> {
-    let mut parts = version.split('.');
-    let (Some(major), Some(minor)) = (parts.next(), parts.next()) else {
-        return Ok(None);
-    };
     let client = reqwest::Client::builder()
         .user_agent(concat!("zeDB/", env!("CARGO_PKG_VERSION")))
         .build()
@@ -137,13 +133,26 @@ async fn nearest_published_release(version: &str) -> Result<Option<String>, PinE
         .into_iter()
         .flatten()
         .filter_map(|release| release.get("tag_name").and_then(|tag| tag.as_str()));
-    Ok(best_release_tag(&format!("{major}.{minor}."), tags))
+    Ok(closest_release_tag(version, tags))
 }
 
-/// Pick the highest version among tags like `v26.2.1.9999-stable`
-/// whose version starts with `prefix`.
-fn best_release_tag<'a>(prefix: &str, tags: impl Iterator<Item = &'a str>) -> Option<String> {
-    let mut best: Option<(Vec<u64>, String)> = None;
+fn version_key(version: &str) -> Vec<u64> {
+    version
+        .split('.')
+        .map(|part| part.parse().unwrap_or(0))
+        .collect()
+}
+
+/// The closest published version to `version` among tags like
+/// `v26.2.1.9999-stable`: newest of the same major.minor first, else
+/// the nearest newer release (a newer binary still speaks the older
+/// dialect; an older one may not), else the newest older one.
+fn closest_release_tag<'a>(version: &str, tags: impl Iterator<Item = &'a str>) -> Option<String> {
+    let target = version_key(version);
+    let same_minor: Vec<u64> = target.iter().copied().take(2).collect();
+    let mut best_same: Option<(Vec<u64>, String)> = None;
+    let mut best_newer: Option<(Vec<u64>, String)> = None;
+    let mut best_older: Option<(Vec<u64>, String)> = None;
     for tag in tags {
         let Some(candidate) = tag
             .strip_prefix('v')
@@ -152,22 +161,24 @@ fn best_release_tag<'a>(prefix: &str, tags: impl Iterator<Item = &'a str>) -> Op
         else {
             continue;
         };
-        if !candidate.starts_with(prefix) {
-            continue;
-        }
-        let key: Vec<u64> = candidate
-            .split('.')
-            .map(|part| part.parse().unwrap_or(0))
-            .collect();
-        if best
-            .as_ref()
-            .map(|(existing, _)| key > *existing)
-            .unwrap_or(true)
-        {
-            best = Some((key, candidate.to_string()));
+        let key = version_key(candidate);
+        let entry = (key.clone(), candidate.to_string());
+        if key.len() >= 2 && key[..2] == same_minor[..] {
+            if best_same.as_ref().map(|(k, _)| key > *k).unwrap_or(true) {
+                best_same = Some(entry);
+            }
+        } else if key > target {
+            if best_newer.as_ref().map(|(k, _)| key < *k).unwrap_or(true) {
+                best_newer = Some(entry);
+            }
+        } else if best_older.as_ref().map(|(k, _)| key > *k).unwrap_or(true) {
+            best_older = Some(entry);
         }
     }
-    best.map(|(_, candidate)| candidate)
+    best_same
+        .or(best_newer)
+        .or(best_older)
+        .map(|(_, candidate)| candidate)
 }
 
 /// Return the cached binary for exactly `version`, downloading it
@@ -311,7 +322,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn picks_the_newest_same_minor_release() {
+    fn picks_the_closest_published_release() {
         let tags = [
             "v26.3.1.100-stable",
             "v26.2.1.400-stable",
@@ -320,10 +331,21 @@ mod tests {
             "v25.8.9.1-lts",
             "not-a-version",
         ];
+        // Same major.minor available: its newest wins.
         assert_eq!(
-            best_release_tag("26.2.", tags.iter().copied()),
+            closest_release_tag("26.2.1.558", tags.iter().copied()),
             Some("26.2.1.999".to_string())
         );
-        assert_eq!(best_release_tag("24.1.", tags.iter().copied()), None);
+        // No 26.1 published: the nearest newer release stands in.
+        assert_eq!(
+            closest_release_tag("26.1.1.1", tags.iter().copied()),
+            Some("26.2.1.400".to_string())
+        );
+        // Nothing newer than 27.x: the newest older one, last resort.
+        assert_eq!(
+            closest_release_tag("27.1.1.1", tags.iter().copied()),
+            Some("26.3.1.100".to_string())
+        );
+        assert_eq!(closest_release_tag("26.4.1.1", [].iter().copied()), None);
     }
 }

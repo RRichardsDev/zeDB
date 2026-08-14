@@ -18,8 +18,9 @@ GitHub release notes.
   database now reads as "nothing applied yet" instead of erroring the
   matrix (code 81 on a fresh service), and migration checks no longer
   fail on Cloud-pinned versions with no OSS release asset; the
-  nearest published release of the same major.minor stands in for
-  replay, remembered beside the binary cache.
+  closest published release stands in for replay (same major.minor
+  first, else the nearest newer, else the newest older), remembered
+  beside the binary cache.
 - The agent's fleet tools (fleet_status, list_migrations, dry_run,
   drift) now follow the app live: a migration repo attached, switched,
   or grown after the agent thread started is picked up on the next
