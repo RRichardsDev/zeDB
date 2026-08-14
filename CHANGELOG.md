@@ -9,6 +9,9 @@ GitHub release notes.
 
 ## Unreleased
 
+- The fleet toolbar's "Upgrade all" button only appears while
+  something is actually pending; a fully applied fleet shows a green
+  "Up to date" tick instead.
 - Switching connections now keeps you on the view you were using,
   with its data following the connection: the ops view restarts its
   polling against the new cluster, and the fleet matrix drops the

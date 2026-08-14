@@ -354,22 +354,49 @@ impl Workspace {
                         cx.notify();
                     })),
             )
-            .when(unlocked, |controls| {
-                controls.child(
-                    div()
-                        .id("fleet-upgrade-all")
-                        .px_3()
-                        .py_1()
-                        .rounded(px(3.))
-                        .border_1()
-                        .border_color(theme::warning())
-                        .text_color(theme::warning())
-                        .child("Upgrade all")
-                        .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.fleet_request_action(FleetAction::UpgradeAll, cx)
-                        })),
-                )
+            .map(|controls| {
+                // "Upgrade all" only while there is anything to
+                // upgrade; a fully applied fleet says so instead.
+                let status_known = !self.fleet.rows.is_empty();
+                let any_pending = self
+                    .fleet
+                    .rows
+                    .iter()
+                    .any(|row| row.excluded.is_none() && !row.pending.is_empty());
+                if status_known && !any_pending {
+                    controls.child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(theme::border())
+                            .text_color(theme::success())
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child("\u{2713}")
+                            .child("Up to date"),
+                    )
+                } else if unlocked && any_pending {
+                    controls.child(
+                        div()
+                            .id("fleet-upgrade-all")
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(theme::warning())
+                            .text_color(theme::warning())
+                            .child("Upgrade all")
+                            .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.fleet_request_action(FleetAction::UpgradeAll, cx)
+                            })),
+                    )
+                } else {
+                    controls
+                }
             });
 
         let mut header = div()
