@@ -31,8 +31,9 @@ GitHub release notes.
   reads "Downloading", the button's background fills with the actual
   download progress, and the tooltip carries the byte count. When the
   download is done but macOS is still verifying the fresh binary
-  (that long first-run pause), the button says "Verifying" instead of
-  looking stuck.
+  (that long first-run pause), the button says "Verifying" with a
+  lock icon instead of looking stuck, and a spinning hourglass marks
+  the Checking state.
 - The agent's fleet tools (fleet_status, list_migrations, dry_run,
   drift) now follow the app live: a migration repo attached, switched,
   or grown after the agent thread started is picked up on the next

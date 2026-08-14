@@ -227,6 +227,15 @@ impl Workspace {
                         // The stall between download and first use:
                         // macOS assessing the fresh binary.
                         Some(zedb_ch::pin::PinPhase::Verifying) => button
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(
+                                gpui::svg()
+                                    .path("icons/lock.svg")
+                                    .size(px(13.))
+                                    .text_color(theme::text_dim()),
+                            )
                             .child("Verifying\u{2026}")
                             .tooltip(|window, cx| {
                                 gpui_component::tooltip::Tooltip::new(
@@ -235,7 +244,27 @@ impl Workspace {
                                 )
                                 .build(window, cx)
                             }),
-                        None => button.child(if checking { "Checking..." } else { "Check" }),
+                        None if checking => {
+                            use gpui::{percentage, Animation, AnimationExt as _, Transformation};
+                            use gpui_component::Sizable as _;
+                            button.flex().items_center().gap_1p5().child(
+                                gpui_component::Icon::empty()
+                                    .path("icons/hourglass.svg")
+                                    .with_size(gpui_component::Size::Small)
+                                    .text_color(theme::text_dim())
+                                    .with_animation(
+                                        "author-check-spin",
+                                        Animation::new(std::time::Duration::from_secs(1)).repeat(),
+                                        |icon, delta| {
+                                            icon.transform(Transformation::rotate(percentage(
+                                                delta,
+                                            )))
+                                        },
+                                    ),
+                            )
+                            .child("Checking...")
+                        }
+                        None => button.child("Check"),
                     })
                     .hover(|button| button.bg(theme::hover()).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| this.author_check(cx))),
