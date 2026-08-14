@@ -150,17 +150,18 @@ impl Workspace {
                     this.show_fleet = false;
                     this.show_ops = false;
                     this.show_query_editor = true;
-                } else if this.show_fleet {
-                    // Staying on the fleet: open this connection's
-                    // repo (or refetch the kept one) against the new
-                    // cluster rather than showing an empty matrix.
-                    if this.fleet.repo.is_none()
-                        && !this.fleet.repo_path.read(cx).text().trim().is_empty()
-                    {
-                        this.fleet_open_repo(cx);
-                    } else {
-                        this.fleet_refresh(cx);
-                    }
+                }
+                // Preload the fleet regardless of the visible view:
+                // the refresh cascades into Verify-all and the silent
+                // chain checks off the main thread, so opening the
+                // tab later finds verdicts already there, or their
+                // honest loading states when opened instantly.
+                if this.fleet.repo.is_none()
+                    && !this.fleet.repo_path.read(cx).text().trim().is_empty()
+                {
+                    this.fleet_open_repo(cx);
+                } else if this.fleet.repo.is_some() {
+                    this.fleet_refresh(cx);
                 }
                 this.start_health_poll(cx);
                 this.notice = Some(format!(

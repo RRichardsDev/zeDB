@@ -55,6 +55,10 @@ GitHub release notes.
   initializing (except a repo you just created to be one), and a
   non-empty non-repo directory explains itself: pick a migration repo
   checkout or an empty folder.
+- Connecting to a cluster preloads the fleet in the background: the
+  connection's repo opens, status refreshes, and Verify-all plus the
+  silent chain checks run off the main thread, so the fleet tab
+  already has its verdicts (or honest loading states) when opened.
 - The migration repo now follows the connection: each connection
   remembers its own repo, switching connections swaps to it (or to
   none), and one cluster's chain never silently attaches to another.
