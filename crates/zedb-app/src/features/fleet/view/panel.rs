@@ -267,37 +267,6 @@ impl Workspace {
                     ))
                 },
             )
-            .when(unlocked, |controls| {
-                controls.child(
-                    div()
-                        .id("fleet-cluster")
-                        .px_3()
-                        .py_1()
-                        .rounded(px(3.))
-                        .border_1()
-                        .border_color(theme::border())
-                        .text_color(theme::text_dim())
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(format!(
-                            "cluster: {}",
-                            self.fleet.selected_cluster.as_deref().unwrap_or("none")
-                        ))
-                        .child(
-                            svg()
-                                .path("icons/chevron-down.svg")
-                                .size(px(12.))
-                                .text_color(theme::text_dim()),
-                        )
-                        .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.fleet.cluster_open = !this.fleet.cluster_open;
-                            this.fleet.filter_open = false;
-                            cx.notify();
-                        })),
-                )
-            })
             .child(
                 div()
                     .id("fleet-write-unlock")
@@ -354,6 +323,37 @@ impl Workspace {
                         cx.notify();
                     })),
             )
+            .when(unlocked, |controls| {
+                controls.child(
+                    div()
+                        .id("fleet-cluster")
+                        .px_3()
+                        .py_1()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(theme::border())
+                        .text_color(theme::text_dim())
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(format!(
+                            "cluster: {}",
+                            self.fleet.selected_cluster.as_deref().unwrap_or("none")
+                        ))
+                        .child(
+                            svg()
+                                .path("icons/chevron-down.svg")
+                                .size(px(12.))
+                                .text_color(theme::text_dim()),
+                        )
+                        .hover(|button| button.bg(theme::bg_sidebar()).cursor_pointer())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.fleet.cluster_open = !this.fleet.cluster_open;
+                            this.fleet.filter_open = false;
+                            cx.notify();
+                        })),
+                )
+            })
             .map(|controls| {
                 // "Upgrade all" only while there is anything to
                 // upgrade; a fully applied fleet says so instead.
