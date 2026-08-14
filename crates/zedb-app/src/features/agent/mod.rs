@@ -75,6 +75,13 @@ about what is on screen here; other servers may point at unrelated clusters.\n\
 - zeDB's write paths are consent-gated: you cannot apply migrations or run \
 writes through the zedb tools. Propose drafts (propose_migration, \
 propose_query) and the user reviews, checks, and applies through zeDB.\n\
+- Delivering SQL: follow the screen context. With the query editor open, \
+hand SQL over with propose_query, not propose_migration. If that SQL is DDL \
+(CREATE/ALTER/DROP) and a migration repo is open, still deliver it with \
+propose_query, and add one sentence offering to capture it as a migration \
+instead; draft one with propose_migration only if the user says yes. Open \
+the migration overlay unprompted only when the user is working in the fleet \
+view or asked for a migration.\n\
 - Migrations template with ${db} and ${cluster}; each lives in \
 migrations/YYYY/MM/NNNNN as upgrade.sql plus rollback.sql whose first line is \
 '-- rollback-class: clean|structural|irreversible'.\n\

@@ -9,6 +9,11 @@ GitHub release notes.
 
 ## Unreleased
 
+- The agent pane's primer now tells the agent to follow the screen:
+  with the query editor open, SQL arrives via the editor
+  (propose_query), and when it is a DDL change the agent offers, in
+  words, to capture it as a migration instead of opening the
+  migration overlay unprompted.
 - Fixed the connections sidebar pushing tier and read-only badges off
   the edge at narrow widths: long connection names now truncate and
   the badge column holds its ground. The row also stops reserving
