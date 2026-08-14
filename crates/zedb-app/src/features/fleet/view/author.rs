@@ -184,6 +184,14 @@ impl Workspace {
                     .id("author-check")
                     .px_3()
                     .py_1()
+                    // One width fits every state (Check, 43%, Verifying,
+                    // Checking), so the footer never jitters as the
+                    // button moves through them.
+                    .w(px(118.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap_1p5()
                     .rounded(px(3.))
                     .border_1()
                     .border_color(theme::border())
@@ -234,9 +242,6 @@ impl Workspace {
                         // The stall between download and first use:
                         // macOS assessing the fresh binary.
                         Some(zedb_ch::pin::PinPhase::Verifying) => button
-                            .flex()
-                            .items_center()
-                            .gap_1p5()
                             .child(
                                 gpui::svg()
                                     .path("icons/lock.svg")
@@ -254,7 +259,7 @@ impl Workspace {
                         None if checking => {
                             use gpui::{percentage, Animation, AnimationExt as _, Transformation};
                             use gpui_component::Sizable as _;
-                            button.flex().items_center().gap_1p5().child(
+                            button.child(
                                 gpui_component::Icon::empty()
                                     .path("icons/hourglass.svg")
                                     .with_size(gpui_component::Size::Small)
