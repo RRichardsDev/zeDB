@@ -733,7 +733,7 @@ pub(crate) fn verifying_lock(id: &'static str, size: f32) -> impl IntoElement {
     svg()
         .path("icons/lock.svg")
         .size(px(size))
-        .text_color(theme::text_dim())
+        .text_color(theme::warning())
         .with_animation(
             id,
             Animation::new(std::time::Duration::from_millis(1600)).repeat(),
