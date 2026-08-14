@@ -39,9 +39,21 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         // An effectively empty directory (fresh clone, nothing beyond
-        // git bookkeeping and a README) becomes a format-1 repo on the
-        // spot; anything with real content is left alone and errors as
-        // before.
+        // git bookkeeping and a README) only becomes a format-1 repo
+        // with the user's say-so: the confirm dialog, or the one-shot
+        // auto_init flag set when they explicitly created the repo to
+        // be one. Anything with real content is left strictly alone.
+        if let Ok(true) = zedb_core::repo::is_effectively_empty(&expanded) {
+            if !self.fleet.auto_init_once {
+                self.fleet.repo_picker = Some(super::view::RepoPicker::ConfirmInit {
+                    path: expanded,
+                    source,
+                });
+                cx.notify();
+                return;
+            }
+        }
+        self.fleet.auto_init_once = false;
         if let Ok(true) = zedb_core::repo::init_repo_if_empty(&expanded) {
             self.notice = Some(
                 "Initialized an empty checkout as a format-1 migration repo; \
@@ -106,7 +118,16 @@ impl Workspace {
                 self.fleet.repo = None;
                 self.fleet.git = None;
                 self.fleet.rows.clear();
-                self.fleet.repo_error = Some(error.to_string());
+                self.fleet.repo_error = Some(
+                    if matches!(error, zedb_core::repo::RepoError::NotARepo(_)) {
+                        format!(
+                            "{} is not a migration repo (no zedb.toml). Pick a checkout                              of one, or an empty folder to start one.",
+                            expanded.display()
+                        )
+                    } else {
+                        error.to_string()
+                    },
+                );
             }
         }
         cx.notify();

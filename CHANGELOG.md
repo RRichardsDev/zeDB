@@ -36,6 +36,15 @@ GitHub release notes.
 - The fleet toolbar's "Upgrade all" button only appears while
   something is actually pending; a fully applied fleet shows a green
   "Up to date" tick instead.
+- Opening a migration repo grew a real picker: with no path set, the
+  folder button offers "Local folder" (the native directory dialog)
+  or, when signed in to GitHub/GitLab, your repositories (elevated
+  access approved via the usual device code, held only for the
+  picker) plus creating a new private repo. An empty directory now
+  asks "create a new migration repo here?" instead of silently
+  initializing (except a repo you just created to be one), and a
+  non-empty non-repo directory explains itself: pick a migration repo
+  checkout or an empty folder.
 - The migration repo now follows the connection: each connection
   remembers its own repo, switching connections swaps to it (or to
   none), and one cluster's chain never silently attaches to another.

@@ -65,7 +65,7 @@ impl Workspace {
                             )
                             .build(window, cx)
                         })
-                        .on_click(cx.listener(|this, _, _, cx| this.fleet_open_repo(cx))),
+                        .on_click(cx.listener(|this, _, _, cx| this.fleet_repo_button(cx))),
                 )
                 .child(
                     div()
@@ -802,6 +802,7 @@ impl Workspace {
                 }
                 root.child(card)
             })
+            .when_some(self.repo_picker_panel(cx), |root, panel| root.child(panel))
             .when_some(modal, |root, modal| root.child(modal))
             .when_some(self.author_panel(cx), |root, panel| root.child(panel))
             .when_some(self.codegen_panel(cx), |root, panel| root.child(panel))
@@ -968,5 +969,219 @@ impl Workspace {
                     .build(window, cx)
                 }),
         }
+    }
+}
+
+impl Workspace {
+    /// The repo picker overlay: source menu, device-code wait, repo
+    /// list with create, or the empty-directory confirmation.
+    fn repo_picker_panel(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        use crate::fleet::view::RepoPicker;
+        let picker = self.fleet.repo_picker.as_ref()?;
+        let row = |id: gpui::SharedString, label: String| {
+            div()
+                .id(id)
+                .px_2()
+                .py_1()
+                .rounded(px(3.))
+                .text_color(theme::text())
+                .child(label)
+                .hover(|item| item.bg(theme::hover()).cursor_pointer())
+        };
+        let mut card = div()
+            .w(px(420.))
+            .max_h(px(420.))
+            .rounded(px(4.))
+            .border_1()
+            .border_color(theme::border())
+            .bg(theme::bg_sidebar())
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text_dim())
+                            .child("OPEN A MIGRATION REPO"),
+                    )
+                    .child(
+                        div()
+                            .id("repo-picker-close")
+                            .px_1()
+                            .rounded(px(3.))
+                            .text_color(theme::text_dim())
+                            .child("\u{00d7}")
+                            .hover(|close| {
+                                close
+                                    .bg(theme::hover())
+                                    .text_color(theme::text())
+                                    .cursor_pointer()
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.repo_picker_close(cx))),
+                    ),
+            );
+        match picker {
+            RepoPicker::Menu => {
+                card = card.child(
+                    row("repo-picker-local".into(), "Local folder\u{2026}".into())
+                        .on_click(cx.listener(|this, _, _, cx| this.repo_picker_local(cx))),
+                );
+                if let crate::GithubAuth::SignedIn(profile) = &self.github {
+                    card = card.child(
+                        row(
+                            "repo-picker-git".into(),
+                            format!("From {} \u{b7} {}", profile.provider.name(), profile.login),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.repo_picker_git(cx))),
+                    );
+                } else {
+                    card = card.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(theme::text_dim())
+                            .child(
+                            "Sign in to a git host in Preferences to pick from your repositories",
+                        ),
+                    );
+                }
+            }
+            RepoPicker::Authorizing { user_code } => {
+                card = card.child(div().px_2().py_1().text_color(theme::text()).child(format!(
+                    "Approve the elevated access in your browser \u{b7} code {user_code} (copied)"
+                )));
+            }
+            RepoPicker::Loading(message) => {
+                card = card.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_color(theme::text_dim())
+                        .child(message.clone()),
+                );
+            }
+            RepoPicker::Repos {
+                repos, create_name, ..
+            } => {
+                let mut list = div()
+                    .id("repo-picker-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5();
+                for (index, repo) in repos.iter().enumerate() {
+                    let ssh_url = repo.ssh_url.clone();
+                    list = list.child(
+                        div()
+                            .id(("repo-picker-repo", index))
+                            .px_2()
+                            .py_1()
+                            .rounded(px(3.))
+                            .text_color(theme::text())
+                            .child(repo.full_name.clone())
+                            .hover(|item| item.bg(theme::hover()).cursor_pointer())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.repo_picker_choose(ssh_url.clone(), cx)
+                            })),
+                    );
+                }
+                if repos.is_empty() {
+                    list = list.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_color(theme::text_dim())
+                            .child("No repositories"),
+                    );
+                }
+                card = card.child(list).child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .pt_1()
+                        .border_t_1()
+                        .border_color(theme::border())
+                        .child(div().flex_1().child(create_name.clone()))
+                        .child(
+                            div()
+                                .id("repo-picker-create")
+                                .px_3()
+                                .py_1()
+                                .rounded(px(3.))
+                                .border_1()
+                                .border_color(theme::success())
+                                .text_color(theme::success())
+                                .child("Create private repo")
+                                .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.repo_picker_create(cx)),
+                                ),
+                        ),
+                );
+            }
+            RepoPicker::ConfirmInit { path, .. } => {
+                card = card
+                    .child(div().px_2().py_1().text_color(theme::text()).child(format!(
+                        "{} is an empty directory. Create a new migration repo here?",
+                        path.display()
+                    )))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("repo-picker-init")
+                                    .px_3()
+                                    .py_1()
+                                    .rounded(px(3.))
+                                    .border_1()
+                                    .border_color(theme::success())
+                                    .text_color(theme::success())
+                                    .child("Create migration repo")
+                                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.repo_picker_confirm_init(cx)
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("repo-picker-cancel")
+                                    .px_3()
+                                    .py_1()
+                                    .rounded(px(3.))
+                                    .text_color(theme::text_dim())
+                                    .child("Cancel")
+                                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.repo_picker_close(cx)),
+                                    ),
+                            ),
+                    );
+            }
+        }
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::rgba(0x00000088))
+                .occlude()
+                .child(card)
+                .into_any_element(),
+        )
     }
 }

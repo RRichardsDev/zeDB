@@ -220,6 +220,42 @@ pub async fn get_repo(
 }
 
 /// Create a private repo on the user's account.
+/// The user's repositories, newest activity first (elevated scope:
+/// private repos are invisible to the read-only sign-in token).
+pub async fn list_repos(provider: Provider, token: &str) -> Result<Vec<RepoInfo>, String> {
+    let url = match provider {
+        Provider::GitHub => {
+            "https://api.github.com/user/repos?per_page=60&sort=updated&affiliation=owner"
+        }
+        Provider::GitLab => {
+            "https://gitlab.com/api/v4/projects?membership=true&order_by=last_activity_at&per_page=60"
+        }
+    };
+    let response = client()?
+        .get(url)
+        .header("Accept", "application/json")
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| format!("could not reach {}: {error}", provider.name()))?
+        .error_for_status()
+        .map_err(|error| format!("{} refused the listing: {error}", provider.name()))?;
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("unexpected repo listing: {error}"))?;
+    let repos = match provider {
+        Provider::GitHub => serde_json::from_str::<Vec<RepoInfo>>(&body)
+            .map_err(|error| format!("unexpected repo listing: {error}"))?,
+        Provider::GitLab => serde_json::from_str::<Vec<GitLabProject>>(&body)
+            .map_err(|error| format!("unexpected repo listing: {error}"))?
+            .into_iter()
+            .map(RepoInfo::from)
+            .collect(),
+    };
+    Ok(repos)
+}
+
 pub async fn create_private_repo(
     provider: Provider,
     token: &str,

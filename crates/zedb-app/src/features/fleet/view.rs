@@ -95,6 +95,30 @@ impl FleetAction {
     }
 }
 
+/// The repo picker's state machine, opened from the folder button
+/// when no repo path is set. The elevated token lives only here, in
+/// memory, and drops with the picker.
+pub enum RepoPicker {
+    /// Choose a source: local folder or a git host.
+    Menu,
+    /// Waiting for the user to approve the elevated device code.
+    Authorizing { user_code: String },
+    /// Talking to the API.
+    Loading(String),
+    /// Pick one of the user's repos, or create a new one.
+    Repos {
+        provider: crate::github::Provider,
+        token: String,
+        repos: Vec<crate::github::RepoInfo>,
+        create_name: Entity<TextInput>,
+    },
+    /// The chosen directory is empty: offer to initialize it.
+    ConfirmInit {
+        path: std::path::PathBuf,
+        source: String,
+    },
+}
+
 pub struct FleetState {
     pub repo_path: Entity<TextInput>,
     pub repo: Option<Arc<MigrationRepo>>,
@@ -110,6 +134,11 @@ pub struct FleetState {
     pub drift: HashMap<String, DriftInfo>,
     pub drift_loading: HashSet<String>,
     pub drift_error: Option<String>,
+    pub repo_picker: Option<RepoPicker>,
+    pub repo_picker_generation: u64,
+    /// Initialize an empty checkout without the confirm dialog once:
+    /// set when the user explicitly created a new repo to be one.
+    pub auto_init_once: bool,
     /// While a verify pass fetches its ClickHouse harness: download
     /// progress, then macOS verifying the fresh binary.
     pub harness_phase: Option<zedb_ch::pin::PinPhase>,
@@ -170,6 +199,9 @@ impl FleetState {
             drift: HashMap::new(),
             drift_loading: HashSet::new(),
             drift_error: None,
+            repo_picker: None,
+            repo_picker_generation: 0,
+            auto_init_once: false,
             harness_phase: None,
             verify_total: 0,
             write_unlocked: false,
