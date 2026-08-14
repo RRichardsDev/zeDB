@@ -159,6 +159,19 @@ impl Workspace {
             ))
             .child({
                 let regen_status = self.regen_status;
+                // A failed chain check is the regen's cue: stale
+                // current-state is its most common cause.
+                let checks_failed = self.checks.as_ref().is_some_and(|checks| {
+                    checks
+                        .slots
+                        .iter()
+                        .any(|slot| matches!(slot, crate::codegen::CheckSlot::Fail(_)))
+                }) && !self.checks.as_ref().is_some_and(|checks| {
+                    checks
+                        .slots
+                        .iter()
+                        .any(|slot| matches!(slot, crate::codegen::CheckSlot::Running))
+                });
                 div()
                     .id("fleet-regen")
                     .group("fleet-regen")
@@ -177,9 +190,10 @@ impl Workspace {
                             .text_color(match regen_status {
                                 Some(true) => theme::success(),
                                 Some(false) => theme::warning(),
+                                None if checks_failed => theme::warning(),
                                 None => theme::text_dim(),
                             })
-                            .when(regen_status.is_none(), |icon| {
+                            .when(regen_status.is_none() && !checks_failed, |icon| {
                                 icon.group_hover("fleet-regen", |icon| {
                                     icon.text_color(theme::text())
                                 })
@@ -192,6 +206,7 @@ impl Workspace {
                             Some(false) => {
                                 "current-state has drifted from the chain; review the churn and write"
                             }
+                            None if checks_failed => "Chain check failed. Please regen.",
                             None => {
                                 "Regen: replay the chain and preview current-state churn before writing"
                             }

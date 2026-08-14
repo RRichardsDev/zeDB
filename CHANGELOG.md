@@ -16,6 +16,9 @@ GitHub release notes.
   instead of restarting; Close hides the window without stopping a
   run. Concurrent harness downloads (checks plus verify at once) are
   serialized so they cannot corrupt the cache.
+- A failed chain check turns the regen icon yellow with "Chain check
+  failed. Please regen.", pointing at the most common cause (stale
+  current-state) and its fix in one glance.
 - One cluster selector instead of two: the fleet's inline "cluster:"
   chip is gone, and fleet operations take their ON CLUSTER choice
   from the top toolbar's node selector (the same place schema apply
