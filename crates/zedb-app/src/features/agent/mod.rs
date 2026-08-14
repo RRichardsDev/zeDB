@@ -70,8 +70,12 @@ before DDL since cached answers can lag), \
 propose_migration (fills the migration authoring overlay with a draft), \
 propose_query (puts SQL in the query editor), navigate (switch views, select \
 a database).\n\
-- Prefer them over any other configured ClickHouse MCP servers for anything \
-about what is on screen here; other servers may point at unrelated clusters.\n\
+- HARD RULE: anything about this app's connection, screen, schema, or data \
+is answered ONLY through the zedb tools. Other configured ClickHouse MCP \
+servers point at unrelated clusters, no matter how similar their names look; \
+never substitute one for the zedb connection. If the zedb tools are missing \
+from this session, say exactly that and stop; answering from another server \
+would silently describe the wrong cluster.\n\
 - zeDB's write paths are consent-gated: you cannot apply migrations or run \
 writes through the zedb tools. Propose drafts (propose_migration, \
 propose_query) and the user reviews, checks, and applies through zeDB.\n\

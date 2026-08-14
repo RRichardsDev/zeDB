@@ -21,7 +21,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
 pub use protocol::{
-    AgentEvent, ContentBlock, InitializeResult, McpServerConfig, NewSessionResult,
+    AgentEvent, ContentBlock, EnvVariable, InitializeResult, McpServerConfig, NewSessionResult,
     PermissionOption, PermissionOutcome, PromptResult, PROTOCOL_VERSION,
 };
 

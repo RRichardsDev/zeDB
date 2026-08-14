@@ -9,6 +9,16 @@ GitHub release notes.
 
 ## Unreleased
 
+- Fixed the agent pane's zedb tools (mcp__zedb__*) silently missing
+  from sessions: the MCP server's delete-on-read credentials file
+  died when the agent runtime respawned the server. Config now
+  travels in the server's environment (same-user visibility, nothing
+  persisted on disk) and survives respawns.
+- The agent primer now carries a hard rule: anything about this app's
+  connection is answered only through the zedb tools; if they are
+  missing the agent must say so and stop, never substitute another
+  configured ClickHouse MCP server that points at a different
+  cluster.
 - The agent pane's primer now tells the agent to follow the screen:
   with the query editor open, SQL arrives via the editor
   (propose_query), and when it is a DDL change the agent offers, in

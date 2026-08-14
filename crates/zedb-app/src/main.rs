@@ -940,14 +940,32 @@ fn quit_ze_db(_: &QuitZeDb, cx: &mut App) {
 }
 
 /// Hidden server mode: the agent pane spawns this same executable as
-/// its MCP server (the bundle ships no separate CLI). The config file
-/// carries the connection credentials at 0600 and is deleted on read.
+/// its MCP server (the bundle ships no separate CLI). Config arrives
+/// in the environment (ZEDB_MCP_*), which survives the agent runtime
+/// respawning the server; a config-file argument remains supported
+/// for older registrations (0600, deleted on read).
 fn run_mcp_serve(config_path: &str) -> ! {
     let outcome = (|| -> Result<(), String> {
-        let raw = std::fs::read_to_string(config_path).map_err(|error| error.to_string())?;
-        let _ = std::fs::remove_file(config_path);
-        let config: serde_json::Value =
-            serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+        let config: serde_json::Value = if config_path.is_empty() {
+            let mut map = serde_json::Map::new();
+            for (key, name) in [
+                ("repo", "ZEDB_MCP_REPO"),
+                ("url", "ZEDB_MCP_URL"),
+                ("user", "ZEDB_MCP_USER"),
+                ("password", "ZEDB_MCP_PASSWORD"),
+                ("app_socket", "ZEDB_MCP_APP_SOCKET"),
+                ("schema_cache", "ZEDB_MCP_SCHEMA_CACHE"),
+            ] {
+                if let Ok(value) = std::env::var(name) {
+                    map.insert(key.into(), value.into());
+                }
+            }
+            serde_json::Value::Object(map)
+        } else {
+            let raw = std::fs::read_to_string(config_path).map_err(|error| error.to_string())?;
+            let _ = std::fs::remove_file(config_path);
+            serde_json::from_str(&raw).map_err(|error| error.to_string())?
+        };
         let repo = config
             .get("repo")
             .and_then(|value| value.as_str())
