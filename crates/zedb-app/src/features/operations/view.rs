@@ -73,6 +73,85 @@ impl Workspace {
                 )
             });
 
+        // Cluster health at a glance, on every tab: green until a
+        // replica is readonly, lagging, stuck, or off its Keeper.
+        let health_strip = (self.ops.replica_total > 0).then(|| {
+            let readonly = self
+                .ops
+                .replica_problems
+                .iter()
+                .filter(|problem| problem.is_readonly)
+                .count();
+            let expired = self
+                .ops
+                .replica_problems
+                .iter()
+                .filter(|problem| problem.session_expired)
+                .count();
+            let max_delay = self
+                .ops
+                .replica_problems
+                .iter()
+                .map(|problem| problem.delay_secs)
+                .max()
+                .unwrap_or(0);
+            let stuck = self
+                .ops
+                .queue_issues
+                .iter()
+                .filter(|issue| !issue.exception.is_empty())
+                .count();
+            let keeper_expired = self
+                .ops
+                .keeper
+                .iter()
+                .filter(|keeper| keeper.expired)
+                .count();
+            let critical = readonly > 0 || expired > 0 || keeper_expired > 0;
+            let degraded = stuck > 0 || max_delay > 10;
+            let (color, summary) = if critical {
+                let mut parts = Vec::new();
+                if readonly > 0 {
+                    parts.push(format!("{readonly} readonly replica(s)"));
+                }
+                if expired > 0 {
+                    parts.push(format!("{expired} expired session(s)"));
+                }
+                if keeper_expired > 0 {
+                    parts.push(format!("{keeper_expired} Keeper session(s) expired"));
+                }
+                (theme::danger(), parts.join(" \u{b7} "))
+            } else if degraded {
+                let mut parts = Vec::new();
+                if max_delay > 10 {
+                    parts.push(format!("max replica delay {max_delay}s"));
+                }
+                if stuck > 0 {
+                    parts.push(format!("{stuck} stuck queue entr(ies)"));
+                }
+                (theme::warning(), parts.join(" \u{b7} "))
+            } else {
+                (
+                    theme::success(),
+                    format!(
+                        "replication healthy \u{b7} {} table(s){}",
+                        self.ops.replica_total,
+                        if self.ops.keeper.is_empty() {
+                            ""
+                        } else {
+                            " \u{b7} Keeper connected"
+                        }
+                    ),
+                )
+            };
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().size(px(7.)).rounded_full().bg(color))
+                .child(div().text_sm().text_color(theme::text_dim()).child(summary))
+        });
+
         let header = div()
             .flex_none()
             .px_4()
@@ -83,6 +162,7 @@ impl Workspace {
             .flex_col()
             .gap_1()
             .child(header_row)
+            .when_some(health_strip, |header, strip| header.child(strip))
             .when_some(self.ops.error.clone(), |header, error| {
                 // Fan-out to a replica whose cluster config carries no
                 // credentials fails remote auth; explain that instead
@@ -642,7 +722,52 @@ impl Workspace {
                                         .child(issue.exception.clone()),
                                 )
                         }),
-                ),
+                )
+                .when(!self.ops.keeper.is_empty(), |list| {
+                    list.child(section_title("KEEPER SESSIONS")).children(
+                        self.ops.keeper.iter().enumerate().map(|(index, keeper)| {
+                            div()
+                                .px_4()
+                                .py_2()
+                                .flex()
+                                .gap_3()
+                                .items_center()
+                                .text_sm()
+                                .when(index % 2 == 1, |row| row.bg(theme::row_stripe()))
+                                .when(cluster_scope, |row| {
+                                    row.child(
+                                        div()
+                                            .w(px(110.))
+                                            .flex_none()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_color(theme::text_dim())
+                                            .child(keeper.node.clone()),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .w(px(300.))
+                                        .flex_none()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_color(theme::text())
+                                        .child(format!("{} \u{b7} {}", keeper.name, keeper.host)),
+                                )
+                                .child(if keeper.expired {
+                                    div()
+                                        .flex_1()
+                                        .text_color(theme::danger())
+                                        .child("SESSION EXPIRED")
+                                } else {
+                                    div().flex_1().text_color(theme::text_dim()).child(format!(
+                                        "connected \u{b7} up {}",
+                                        format_elapsed(keeper.uptime_secs as f64)
+                                    ))
+                                })
+                        }),
+                    )
+                }),
             OpsTab::Storage => content
                 .child(section_title("DISKS"))
                 .children(self.ops.disks.iter().map(|disk| {

@@ -91,6 +91,17 @@ pub struct OpsQueueIssue {
     pub node: String,
 }
 
+/// One node's Keeper/ZooKeeper session, from
+/// system.zookeeper_connection (absent on keeper-less servers).
+#[derive(Clone, Debug)]
+pub struct OpsKeeper {
+    pub name: String,
+    pub host: String,
+    pub uptime_secs: u64,
+    pub expired: bool,
+    pub node: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct OpsDisk {
     pub name: String,
@@ -201,6 +212,7 @@ pub struct OpsState {
     pub replica_total: u64,
     pub replica_problems: Vec<OpsReplicaProblem>,
     pub queue_issues: Vec<OpsQueueIssue>,
+    pub keeper: Vec<OpsKeeper>,
     pub disks: Vec<OpsDisk>,
     pub top_tables: Vec<OpsTopTable>,
     pub slow_fetch_in_flight: bool,

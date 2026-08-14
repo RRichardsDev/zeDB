@@ -45,6 +45,7 @@ impl Workspace {
         self.ops.replica_total = 0;
         self.ops.replica_problems.clear();
         self.ops.queue_issues.clear();
+        self.ops.keeper.clear();
         self.ops.disks.clear();
         self.ops.top_tables.clear();
         self.ops.as_of = None;
@@ -331,6 +332,13 @@ impl Workspace {
                 ""
             },
         );
+        // Best-effort: the table needs a Keeper-backed server; absence
+        // just leaves the section empty.
+        let keeper_query = format!(
+            "SELECT name, host, session_uptime_elapsed_seconds, is_expired{host_col} \
+             FROM {}",
+            from("system.zookeeper_connection")
+        );
         let disks_query = format!(
             "SELECT name, free_space, total_space{host_col} FROM {} ORDER BY {}",
             from("system.disks"),
@@ -358,12 +366,14 @@ impl Workspace {
             let replica_total = client.query(&replica_total_query).await;
             let replica_problems = client.query(&replica_problems_query).await;
             let queue_issues = client.query(&queue_issues_query).await;
+            let keeper = client.query(&keeper_query).await;
             let disks = client.query(&disks_query).await;
             let top_tables = client.query(&top_tables_query).await;
             (
                 replica_total,
                 replica_problems,
                 queue_issues,
+                keeper,
                 disks,
                 top_tables,
             )
@@ -372,7 +382,8 @@ impl Workspace {
             let result = handle.await;
             this.update(cx, |this, cx| {
                 this.ops.slow_fetch_in_flight = false;
-                let Ok((replica_total, replica_problems, queue_issues, disks, top_tables)) = result
+                let Ok((replica_total, replica_problems, queue_issues, keeper, disks, top_tables)) =
+                    result
                 else {
                     return;
                 };
@@ -409,6 +420,19 @@ impl Workspace {
                             oldest_secs: number(row.get(3)),
                             exception: text(row.get(4)),
                             node: text(row.get(5)),
+                        })
+                        .collect();
+                }
+                if let Ok(keeper) = keeper {
+                    this.ops.keeper = keeper
+                        .rows
+                        .iter()
+                        .map(|row| OpsKeeper {
+                            name: text(row.first()),
+                            host: text(row.get(1)),
+                            uptime_secs: number(row.get(2)),
+                            expired: number(row.get(3)) > 0,
+                            node: text(row.get(4)),
                         })
                         .collect();
                 }

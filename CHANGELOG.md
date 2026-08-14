@@ -28,6 +28,11 @@ GitHub release notes.
   went unused (with `DROP INDEX` DDL to copy), projections that
   served no queries, and a primary key that barely prunes the
   workload. Nothing is applied automatically.
+- The ops view now shows cluster replication health at a glance: a
+  strip under the header stays green until a replica is readonly,
+  lagging, stuck, or off its Keeper, and the Replication tab gains a
+  Keeper Sessions section (per-node session state and uptime from
+  `system.zookeeper_connection`).
 - New "Estimate query cost" command in the palette: a pre-flight
   `EXPLAIN ESTIMATE` for the statement Run would target, shown as a
   strip above the results with estimated rows, parts, and marks, a
