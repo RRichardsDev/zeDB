@@ -320,6 +320,9 @@ struct Workspace {
     author: Option<author::AuthorState>,
     regen: Option<codegen::RegenState>,
     checks: Option<codegen::ChecksState>,
+    /// The last run of the chain checks passed in full and nothing in
+    /// the repo changed since; tints the check-chain icon green.
+    checks_clean: bool,
     commit: Option<commit::CommitState>,
     show_fleet: bool,
     show_ops: bool,
@@ -693,6 +696,7 @@ impl Workspace {
                 author: None,
                 regen: None,
                 checks: None,
+                checks_clean: false,
                 commit: None,
                 health_poll_generation: 0,
                 merges_poll_generation: 0,
@@ -742,6 +746,7 @@ impl Workspace {
                 author: None,
                 regen: None,
                 checks: None,
+                checks_clean: false,
                 commit: None,
                 health_poll_generation: 0,
                 merges_poll_generation: 0,

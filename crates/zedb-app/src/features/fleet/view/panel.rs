@@ -164,12 +164,45 @@ impl Workspace {
                 "Regen: replay the chain and preview current-state churn before writing",
                 cx.listener(|this, _, _, cx| this.codegen_start_regen(cx)),
             ))
-            .child(fleet_icon_button(
-                "fleet-checks",
-                "icons/check-chain.svg",
-                "Check chain: sql, equivalence, and lifecycle against the pinned server",
-                cx.listener(|this, _, _, cx| this.codegen_start_checks(cx)),
-            ))
+            .child({
+                let checks_clean = self.checks_clean;
+                div()
+                    .id("fleet-checks")
+                    .group("fleet-checks")
+                    .size(px(28.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(theme::border())
+                    .child(
+                        svg()
+                            .path("icons/check-chain.svg")
+                            .size(px(14.))
+                            .text_color(if checks_clean {
+                                theme::success()
+                            } else {
+                                theme::text_dim()
+                            })
+                            .when(!checks_clean, |icon| {
+                                icon.group_hover("fleet-checks", |icon| {
+                                    icon.text_color(theme::text())
+                                })
+                            }),
+                    )
+                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(if checks_clean {
+                            "Chain checks passed (sql, equivalence, lifecycle) \u{b7} click to re-run"
+                        } else {
+                            "Check chain: sql, equivalence, and lifecycle against the pinned server"
+                        })
+                        .build(window, cx)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.codegen_start_checks(cx)))
+            })
             .child(self.fleet_verify_all_button(cx))
             .when(
                 self.fleet.git.as_ref().is_some_and(|git| git.dirty > 0),

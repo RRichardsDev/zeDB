@@ -44,7 +44,11 @@ GitHub release notes.
   that blinks open and shut while macOS verifies the fresh binary,
   and a spinning hourglass (with N/M done in the tooltip) while
   databases are diffed. Once every database verifies clean, the
-  verify icon turns green until a row goes unverified again.
+  verify icon turns green until a row goes unverified again. Chain
+  checks behave the same way: a full pass (sql, equivalence,
+  lifecycle) closes the checks window on its own, flashes a notice,
+  and turns the check-chain icon green until the chain, current-state,
+  or repo changes.
 - The authoring overlay's Check button now shows what it is doing
   when the ClickHouse harness has to be fetched first: the label
   shows the download percentage while the button's background fills

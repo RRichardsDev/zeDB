@@ -99,6 +99,7 @@ impl Workspace {
     }
 
     pub(crate) fn codegen_write(&mut self, cx: &mut Context<Self>) {
+        self.checks_clean = false;
         let Some(repo) = self.fleet.repo.clone() else {
             return;
         };
@@ -141,6 +142,7 @@ impl Workspace {
             generation,
             slots: [CheckSlot::Running, CheckSlot::Running, CheckSlot::Running],
         });
+        self.checks_clean = false;
         cx.notify();
 
         for index in 0..3 {
@@ -207,6 +209,17 @@ impl Workspace {
                         Ok(Ok(summary)) => CheckSlot::Pass(summary),
                         Ok(Err(errors)) | Err(errors) => CheckSlot::Fail(errors),
                     };
+                    // A full pass needs no reading: close the modal and
+                    // let the green check-chain icon carry the news.
+                    let all_pass = checks
+                        .slots
+                        .iter()
+                        .all(|slot| matches!(slot, CheckSlot::Pass(_)));
+                    if all_pass {
+                        this.checks = None;
+                        this.checks_clean = true;
+                        this.flash_notice("Chain checks passed: sql, equivalence, lifecycle", cx);
+                    }
                     cx.notify();
                 })
                 .ok();
