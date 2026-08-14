@@ -7,6 +7,10 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## v0.1.29 - 2026-08-14
+
+No functional changes. Internal code maintainability improvements.
+
 ## v0.1.28 - 2026-08-13
 
 This release makes working query tabs easier to preserve and reuse, adds
