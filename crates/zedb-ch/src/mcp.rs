@@ -130,14 +130,36 @@ impl McpServer {
             .ok_or_else(|| "no ClickHouse connection configured for this server".into())
     }
 
-    fn repo(&self) -> Result<&MigrationRepo, String> {
-        self.repo
-            .as_ref()
-            .ok_or_else(|| "no migration repo open for this server".into())
+    /// The repo for this call, resolved fresh: the app's currently
+    /// open repo when the bridge is up (repos attach, detach, and
+    /// grow mid-session), else the one captured at startup, re-opened
+    /// so migrations scaffolded since launch are seen.
+    async fn effective_repo(&self) -> Result<MigrationRepo, String> {
+        match self.bridge_repo_root().await {
+            // The app answered: its word is truth, including "none".
+            Some(root) if root.is_empty() => Err("no migration repo open for this server".into()),
+            Some(root) => MigrationRepo::open_root(std::path::Path::new(&root))
+                .map_err(|error| error.to_string()),
+            // No bridge (CLI-style serving): startup config decides.
+            None => match &self.repo {
+                Some(repo) => {
+                    MigrationRepo::open_root(&repo.root).map_err(|error| error.to_string())
+                }
+                None => Err("no migration repo open for this server".into()),
+            },
+        }
     }
 
-    fn runner(&self) -> Result<Runner<'_>, String> {
-        let repo = self.repo()?;
+    /// Ask the app which repo is open right now; None when no bridge
+    /// is configured or it does not answer.
+    async fn bridge_repo_root(&self) -> Option<String> {
+        if self.app_socket.is_none() {
+            return None;
+        }
+        self.forward_app_tool("repo_root", &Value::Null).await.ok()
+    }
+
+    fn runner_for<'a>(&self, repo: &'a MigrationRepo) -> Result<Runner<'a>, String> {
         let config = self
             .config
             .clone()
@@ -203,8 +225,8 @@ impl McpServer {
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
         let outcome = match name {
             "fleet_status" => self.tool_fleet_status().await,
-            "list_migrations" => self.tool_list_migrations(),
-            "migration_sql" => self.tool_migration_sql(&arguments),
+            "list_migrations" => self.tool_list_migrations().await,
+            "migration_sql" => self.tool_migration_sql(&arguments).await,
             "dry_run" => self.tool_dry_run(&arguments).await,
             "drift" => self.tool_drift(&arguments).await,
             "list_databases" => self.tool_list_databases().await,

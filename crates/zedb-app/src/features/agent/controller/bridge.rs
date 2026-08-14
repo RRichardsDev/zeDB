@@ -98,6 +98,17 @@ impl Workspace {
             cx.notify();
         };
         match tool {
+            // Internal plumbing for the MCP server: the currently open
+            // repo root, empty when none. Not narrated; nothing the
+            // user sees changes.
+            "repo_root" => (
+                self.fleet
+                    .repo
+                    .as_ref()
+                    .map(|repo| repo.root.display().to_string())
+                    .unwrap_or_default(),
+                false,
+            ),
             "navigate" => {
                 let view = arguments
                     .get("view")

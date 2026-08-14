@@ -14,6 +14,11 @@ GitHub release notes.
   created database (or a brand-new service where every database is
   empty) showed nothing until its first table. The cache now carries
   the database list alongside the tables.
+- The agent's fleet tools (fleet_status, list_migrations, dry_run,
+  drift) now follow the app live: a migration repo attached, switched,
+  or grown after the agent thread started is picked up on the next
+  tool call instead of staying frozen at what was open when the
+  session began.
 - Fixed the agent pane's zedb tools (mcp__zedb__*) silently missing
   from sessions: the MCP server's delete-on-read credentials file
   died when the agent runtime respawned the server. Config now

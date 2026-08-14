@@ -89,7 +89,8 @@ impl McpServer {
     }
 
     pub(super) async fn tool_fleet_status(&self) -> Result<String, String> {
-        let runner = self.runner()?;
+        let repo = self.effective_repo().await?;
+        let runner = self.runner_for(&repo)?;
         let resolved = runner
             .resolve_targets(&Targets::All)
             .await
@@ -123,8 +124,8 @@ impl McpServer {
         Ok(out)
     }
 
-    pub(super) fn tool_list_migrations(&self) -> Result<String, String> {
-        let repo = self.repo()?;
+    pub(super) async fn tool_list_migrations(&self) -> Result<String, String> {
+        let repo = self.effective_repo().await?;
         let mut out = String::new();
         for migration in &repo.migrations {
             out.push_str(&format!(
@@ -157,8 +158,8 @@ impl McpServer {
         Ok(out)
     }
 
-    pub(super) fn tool_migration_sql(&self, arguments: &Value) -> Result<String, String> {
-        let repo = self.repo()?;
+    pub(super) async fn tool_migration_sql(&self, arguments: &Value) -> Result<String, String> {
+        let repo = self.effective_repo().await?;
         let number = arguments
             .get("number")
             .and_then(Value::as_u64)
@@ -179,9 +180,9 @@ impl McpServer {
     }
 
     pub(super) async fn tool_dry_run(&self, arguments: &Value) -> Result<String, String> {
-        let repo = self.repo()?;
+        let repo = self.effective_repo().await?;
         let database = required_str(arguments, "database")?;
-        let runner = self.runner()?;
+        let runner = self.runner_for(&repo)?;
         let applied = runner
             .applied_migrations(database)
             .await
@@ -216,13 +217,13 @@ impl McpServer {
     }
 
     pub(super) async fn tool_drift(&self, arguments: &Value) -> Result<String, String> {
-        let repo = self.repo()?;
+        let repo = self.effective_repo().await?;
         let database = required_str(arguments, "database")?;
-        let runner = self.runner()?;
+        let runner = self.runner_for(&repo)?;
         let binary = crate::ensure_binary(&repo.config.engine.version)
             .await
             .map_err(|error| error.to_string())?;
-        let verifier = Verifier::new(repo, &runner, binary);
+        let verifier = Verifier::new(&repo, &runner, binary);
         let drifts = verifier
             .verify(&Targets::Databases(vec![database.to_string()]))
             .await
