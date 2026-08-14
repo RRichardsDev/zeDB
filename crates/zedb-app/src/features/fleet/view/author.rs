@@ -14,6 +14,7 @@ impl Workspace {
         let applied_on = author.applied_on;
         let status_known = author.status_known;
         let checking = author.checking;
+        let download_progress = author.download_progress;
         let saveable = author.saveable(cx) && !readonly;
         let targeted = author.targeted;
         let choice = author.rollback_choice;
@@ -187,7 +188,44 @@ impl Workspace {
                     .border_1()
                     .border_color(theme::border())
                     .text_color(if checking { theme::text_dim() } else { theme::text() })
-                    .child(if checking { "Checking..." } else { "Check" })
+                    .map(|button| match download_progress {
+                        // Fetching the harness: the button's background
+                        // fills left to right with the download.
+                        Some((received, total)) => {
+                            let fraction = total
+                                .filter(|total| *total > 0)
+                                .map(|total| received as f32 / total as f32)
+                                .unwrap_or(0.0);
+                            button
+                                .relative()
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .top_0()
+                                        .bottom_0()
+                                        .w(gpui::relative(fraction.clamp(0.02, 1.0)))
+                                        .rounded(px(3.))
+                                        .bg(theme::hover()),
+                                )
+                                .child(div().relative().child("Downloading\u{2026}"))
+                                .tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(match total {
+                                        Some(total) => format!(
+                                            "Getting a ClickHouse harness to check against \
+                                             \u{b7} {} of {}",
+                                            Workspace::format_bytes(received),
+                                            Workspace::format_bytes(total),
+                                        ),
+                                        None => {
+                                            "Getting a ClickHouse harness to check against".into()
+                                        }
+                                    })
+                                    .build(window, cx)
+                                })
+                        }
+                        None => button.child(if checking { "Checking..." } else { "Check" }),
+                    })
                     .hover(|button| button.bg(theme::hover()).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| this.author_check(cx))),
             )

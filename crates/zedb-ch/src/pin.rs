@@ -85,7 +85,20 @@ pub async fn discover_server_version(config: ChConfig) -> Result<String, PinErro
 /// the substitution is remembered beside the cache so the release
 /// listing is not re-fetched every check.
 pub async fn ensure_binary(version: &str) -> Result<PathBuf, PinError> {
-    let exact = ensure_exact_binary(version).await;
+    ensure_binary_with_progress(version, None).await
+}
+
+/// How far a binary download has come: (bytes received, total when
+/// the server said). Called from the download task; keep it cheap.
+pub type DownloadProgress = std::sync::Arc<dyn Fn(u64, Option<u64>) + Send + Sync>;
+
+/// `ensure_binary` with download progress reported to `progress`;
+/// nothing is reported when the binary is already cached.
+pub async fn ensure_binary_with_progress(
+    version: &str,
+    progress: Option<DownloadProgress>,
+) -> Result<PathBuf, PinError> {
+    let exact = ensure_exact_binary(version, progress.clone()).await;
     let Err(PinError::DownloadFailed { .. }) = &exact else {
         return exact;
     };
@@ -101,7 +114,7 @@ pub async fn ensure_binary(version: &str) -> Result<PathBuf, PinError> {
     let Some(fallback) = fallback else {
         return exact;
     };
-    let path = ensure_exact_binary(&fallback).await?;
+    let path = ensure_exact_binary(&fallback, progress).await?;
     if let Some(parent) = alias_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -183,7 +196,10 @@ fn closest_release_tag<'a>(version: &str, tags: impl Iterator<Item = &'a str>) -
 
 /// Return the cached binary for exactly `version`, downloading it
 /// first if needed.
-async fn ensure_exact_binary(version: &str) -> Result<PathBuf, PinError> {
+async fn ensure_exact_binary(
+    version: &str,
+    progress: Option<DownloadProgress>,
+) -> Result<PathBuf, PinError> {
     if let Some(path) = cached_binary(version) {
         return Ok(path);
     }
@@ -219,7 +235,7 @@ async fn ensure_exact_binary(version: &str) -> Result<PathBuf, PinError> {
             }
         };
         tried.push(url.clone());
-        if download(&url, &staging, version, os == "linux").await? {
+        if download(&url, &staging, version, os == "linux", progress.as_ref()).await? {
             downloaded = true;
             break;
         }
@@ -260,8 +276,9 @@ async fn download(
     staging: &Path,
     version: &str,
     is_tarball: bool,
+    progress: Option<&DownloadProgress>,
 ) -> Result<bool, PinError> {
-    let response = reqwest::get(url)
+    let mut response = reqwest::get(url)
         .await
         .map_err(|error| PinError::Http(error.to_string()))?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -271,10 +288,19 @@ async fn download(
         return Err(PinError::Http(format!("{url}: HTTP {}", response.status())));
     }
 
-    let bytes = response
-        .bytes()
+    // Stream so callers can show real progress on a ~500MB asset.
+    let total = response.content_length();
+    let mut bytes: Vec<u8> = Vec::with_capacity(total.unwrap_or(0) as usize);
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|error| PinError::Http(error.to_string()))?;
+        .map_err(|error| PinError::Http(error.to_string()))?
+    {
+        bytes.extend_from_slice(&chunk);
+        if let Some(progress) = progress {
+            progress(bytes.len() as u64, total);
+        }
+    }
 
     if is_tarball {
         let unpack_dir = staging.with_extension("unpack");

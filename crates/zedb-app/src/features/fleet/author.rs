@@ -70,6 +70,9 @@ pub struct AuthorState {
     pub upgrade: Entity<InputState>,
     pub rollback: Entity<InputState>,
     pub checking: bool,
+    /// While the check downloads its ClickHouse harness: (bytes
+    /// received, total when the server said).
+    pub download_progress: Option<(u64, Option<u64>)>,
     pub check_generation: u64,
     /// Errors from the last completed check (empty means it passed).
     pub check_errors: Option<Vec<String>>,
@@ -122,6 +125,7 @@ impl Workspace {
                     .default_value(rollback_template)
             }),
             checking: false,
+            download_progress: None,
             check_generation: 0,
             check_errors: None,
             clean_for: None,
@@ -198,6 +202,7 @@ impl Workspace {
                     .default_value(rollback_template)
             }),
             checking: false,
+            download_progress: None,
             check_generation: 0,
             check_errors: None,
             clean_for: None,
@@ -249,9 +254,31 @@ impl Workspace {
 
         let upgrade_for_check = upgrade.clone();
         let rollback_for_check = rollback.clone();
+        // Download progress from the pin task, drained into the button
+        // until the sender drops with the task.
+        let (progress_tx, mut progress_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(u64, Option<u64>)>();
+        let progress: zedb_ch::pin::DownloadProgress =
+            std::sync::Arc::new(move |received, total| {
+                let _ = progress_tx.send((received, total));
+            });
+        cx.spawn(async move |this, cx| {
+            while let Some(update) = progress_rx.recv().await {
+                this.update(cx, |this, cx| {
+                    if let Some(author) = &mut this.author {
+                        if author.check_generation == generation && author.checking {
+                            author.download_progress = Some(update);
+                            cx.notify();
+                        }
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
         let handle = rt::tokio().spawn(async move {
             let version = repo.config.engine.version.clone();
-            let binary = zedb_ch::ensure_binary(&version)
+            let binary = zedb_ch::pin::ensure_binary_with_progress(&version, Some(progress))
                 .await
                 .map_err(|error| error.to_string())?;
             tokio::task::spawn_blocking(move || {
@@ -284,6 +311,7 @@ impl Workspace {
                     return;
                 }
                 author.checking = false;
+                author.download_progress = None;
                 match result.map_err(|error| error.to_string()) {
                     Ok(Ok(errors)) => {
                         author.clean_for = errors.is_empty().then_some((upgrade, rollback));

@@ -21,6 +21,10 @@ GitHub release notes.
   closest published release stands in for replay (same major.minor
   first, else the nearest newer, else the newest older), remembered
   beside the binary cache.
+- The authoring overlay's Check button now shows what it is doing
+  when the ClickHouse harness has to be fetched first: the label
+  reads "Downloading", the button's background fills with the actual
+  download progress, and the tooltip carries the byte count.
 - The agent's fleet tools (fleet_status, list_migrations, dry_run,
   drift) now follow the app live: a migration repo attached, switched,
   or grown after the agent thread started is picked up on the next
