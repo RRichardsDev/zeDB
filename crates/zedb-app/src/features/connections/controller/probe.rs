@@ -142,6 +142,9 @@ impl Workspace {
     pub(crate) fn focus_recheck(&mut self, cx: &mut Context<Self>) {
         self.theme_recheck(cx);
         self.settings_sync_tick(cx);
+        // Cloud service states move while the app is unfocused (idling,
+        // console changes); the sidebar markers follow on refocus.
+        self.cloud_refresh(cx);
         // Update check: same quiet path as the periodic loop.
         let update_handle = rt::tokio().spawn(updates::check());
         cx.spawn(async move |this, cx| {

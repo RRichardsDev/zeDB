@@ -29,7 +29,9 @@ GitHub release notes.
   saved (and sync). The sidebar's idle/waking marker sits on its own
   line under the connection name (keeping the badge column clear) and
   clears itself: while a service is waking, zeDB re-polls the control
-  plane until it settles.
+  plane until it settles. Service states are fetched at launch and on
+  window refocus, so the markers exist without ever opening the Cloud
+  panel.
 - New Workload tab on the table inspector: index and projection
   effectiveness measured from the table's real traffic. zeDB
   aggregates the last 7 days of `system.query_log` into query shapes,

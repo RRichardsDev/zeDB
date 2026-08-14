@@ -439,6 +439,13 @@ impl Workspace {
             this.update(cx, |this, cx| this.settings_sync_tick(cx)).ok();
         })
         .detach();
+        // Linked Cloud orgs: fetch service states once at launch so the
+        // sidebar's idle/waking markers exist before the panel is ever
+        // opened (one API call per org, nothing when none are linked).
+        cx.spawn(async move |this, cx| {
+            this.update(cx, |this, cx| this.cloud_refresh(cx)).ok();
+        })
+        .detach();
 
         // Coming back to the window re-checks cluster health and
         // updates, debounced so focus flapping stays quiet.
