@@ -287,6 +287,9 @@ impl Workspace {
             projections: None,
             projections_loading: false,
             projections_error: None,
+            workload: None,
+            workload_loading: false,
+            workload_error: None,
             ddl_editor: ddl_editor.clone(),
             engine_editor: engine_editor.clone(),
             tab,
@@ -303,6 +306,7 @@ impl Workspace {
             }
             ObjectInspectorTab::Dependencies => self.load_dependencies(cx),
             ObjectInspectorTab::Projections => self.load_projections(cx),
+            ObjectInspectorTab::Workload => self.load_workload(cx),
             _ => {}
         }
 

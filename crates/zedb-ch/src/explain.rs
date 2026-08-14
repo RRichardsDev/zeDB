@@ -17,6 +17,8 @@ pub struct ExplainNode {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExplainIndex {
     pub index_type: String,
+    /// Set for skip indexes: the index's name from the DDL.
+    pub name: Option<String>,
     pub keys: Vec<String>,
     pub condition: Option<String>,
     pub initial_parts: u64,
@@ -47,6 +49,8 @@ struct RawNode {
 struct RawIndex {
     #[serde(rename = "Type")]
     index_type: String,
+    #[serde(rename = "Name")]
+    name: Option<String>,
     #[serde(rename = "Keys", default)]
     keys: Vec<String>,
     #[serde(rename = "Condition")]
@@ -70,6 +74,7 @@ fn convert(raw: RawNode) -> ExplainNode {
             .into_iter()
             .map(|index| ExplainIndex {
                 index_type: index.index_type,
+                name: index.name,
                 keys: index.keys,
                 condition: index.condition,
                 initial_parts: index.initial_parts,

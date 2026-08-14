@@ -26,6 +26,7 @@ pub mod schema_cache;
 pub mod schema_intelligence;
 mod types;
 pub mod verify;
+pub mod workload;
 
 pub use client::{
     ChClient, ChConfig, ClusterMembership, QueryProgress, QueryStreamEvent, QueryStreamSummary,

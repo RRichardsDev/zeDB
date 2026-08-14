@@ -20,6 +20,14 @@ GitHub release notes.
   instead of a bare timeout, and the sidebar marks idle services. The
   API key lives in the macOS Keychain; only the org id and name are
   saved (and sync).
+- New Workload tab on the table inspector: index and projection
+  effectiveness measured from the table's real traffic. zeDB
+  aggregates the last 7 days of `system.query_log` into query shapes,
+  EXPLAINs each shape, and shows run-weighted pruning per index, plus
+  findings in the advisor voice: skip indexes that never prune or
+  went unused (with `DROP INDEX` DDL to copy), projections that
+  served no queries, and a primary key that barely prunes the
+  workload. Nothing is applied automatically.
 - New "Estimate query cost" command in the palette: a pre-flight
   `EXPLAIN ESTIMATE` for the statement Run would target, shown as a
   strip above the results with estimated rows, parts, and marks, a
