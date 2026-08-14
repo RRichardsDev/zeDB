@@ -122,6 +122,10 @@ impl Workspace {
                 // Land in the query view; the connection screen's job
                 // is done.
                 this.show_fleet = false;
+                // The ops view outranks the query editor in render
+                // priority; left set, a connection switch would leave
+                // the previous cluster's ops on screen.
+                this.show_ops = false;
                 this.show_query_editor = true;
                 this.start_health_poll(cx);
                 this.notice = Some(format!(

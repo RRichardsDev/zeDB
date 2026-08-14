@@ -9,6 +9,9 @@ GitHub release notes.
 
 ## Unreleased
 
+- Fixed switching connections while the ops view was open leaving the
+  previous cluster's ops on screen: connecting now lands in the query
+  view as intended.
 - Fixed empty databases being invisible in the schema sidebar: the
   schema cache was built purely from `system.tables`, so a freshly
   created database (or a brand-new service where every database is
