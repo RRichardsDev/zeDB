@@ -92,9 +92,11 @@ impl Workspace {
                                 // marks: a triangle in the environment
                                 // color and a square in the read/write
                                 // color. Hovering the row swaps in the
-                                // full pills. The pills stay in flow
-                                // (invisible) so they reserve the width and
-                                // the layout does not shift on hover.
+                                // full pills. Only the small marks hold
+                                // width in flow; the pills overlay on hover
+                                // (with a masking background), so a row
+                                // never truncates its name to reserve pill
+                                // space it is not showing.
                                 div()
                                     .flex_none()
                                     .relative()
@@ -103,27 +105,6 @@ impl Workspace {
                                     .justify_end()
                                     .child(
                                         div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .invisible()
-                                            .group_hover("connection-row", |pills| pills.visible())
-                                            .when(connected, |pills| {
-                                                pills.child(
-                                                    div()
-                                                        .size(px(7.))
-                                                        .rounded_full()
-                                                        .bg(theme::success())
-                                                        .mr_1(),
-                                                )
-                                            })
-                                            .child(Self::write_badge_small(connection.read_only))
-                                            .child(Self::tier_badge_small(connection.tier)),
-                                    )
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .right_0()
                                             .flex()
                                             .items_center()
                                             .gap(px(3.))
@@ -141,6 +122,29 @@ impl Workspace {
                                             })
                                             .child(Self::write_glyph(connection.read_only))
                                             .child(Self::tier_glyph(connection.tier)),
+                                    )
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .right_0()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .pl_1()
+                                            .bg(theme::row_hover())
+                                            .invisible()
+                                            .group_hover("connection-row", |pills| pills.visible())
+                                            .when(connected, |pills| {
+                                                pills.child(
+                                                    div()
+                                                        .size(px(7.))
+                                                        .rounded_full()
+                                                        .bg(theme::success())
+                                                        .mr_1(),
+                                                )
+                                            })
+                                            .child(Self::write_badge_small(connection.read_only))
+                                            .child(Self::tier_badge_small(connection.tier)),
                                     ),
                             ),
                     )

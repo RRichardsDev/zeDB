@@ -11,7 +11,10 @@ GitHub release notes.
 
 - Fixed the connections sidebar pushing tier and read-only badges off
   the edge at narrow widths: long connection names now truncate and
-  the badge column holds its ground.
+  the badge column holds its ground. The row also stops reserving
+  space for the hover-only badge pills, so names no longer truncate
+  early at comfortable sidebar widths; the pills overlay on hover
+  instead.
 
 - ClickHouse Cloud quick setup: link an organization by pasting a
   Cloud API key ("Cloud" in the connections sidebar, or "Link
