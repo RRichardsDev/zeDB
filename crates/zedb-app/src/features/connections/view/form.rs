@@ -176,7 +176,7 @@ impl Workspace {
                                                 .rounded(px(3.))
                                                 .border_1()
                                                 .border_color(gpui::rgb(0xFFCC01))
-                                                .bg(gpui::rgb(0x1A1710))
+                                                .bg(theme::bg_sidebar())
                                                 .text_xs()
                                                 .text_color(gpui::rgb(0xFFCC01))
                                                 .child(
@@ -188,7 +188,7 @@ impl Workspace {
                                                 .child("Provision password")
                                                 .hover(|button| {
                                                     button
-                                                        .bg(gpui::rgb(0x2A250F))
+                                                        .bg(theme::hover())
                                                         .cursor_pointer()
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {

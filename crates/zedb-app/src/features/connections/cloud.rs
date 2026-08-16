@@ -1362,7 +1362,7 @@ impl Workspace {
                                                 .rounded(px(3.))
                                                 .border_1()
                                                 .border_color(gpui::rgb(0xFFCC01))
-                                                .bg(gpui::rgb(0x1A1710))
+                                                .bg(theme::bg_sidebar())
                                                 .text_color(gpui::rgb(0xFFCC01))
                                                 .child(
                                                     gpui::svg()
@@ -1372,7 +1372,7 @@ impl Workspace {
                                                 )
                                                 .child("Sign in")
                                                 .hover(|button| {
-                                                    button.bg(gpui::rgb(0x2A250F)).cursor_pointer()
+                                                    button.bg(theme::hover()).cursor_pointer()
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.cloud_sign_in(cx)
