@@ -31,7 +31,16 @@ best" is measured and finite, and most of it is listed below.
    data plane itself validates JWTs: our probe failed only on "no user
    with such name", meaning a JWT-identified database user closes the
    loop to Snowflake-class passwordless sign-in. Management writes
-   (wake included) still need an API key.
+   (wake included) still need an API key. The read-only-ness of OAuth
+   is upstream policy, not a missing scope: the device flow's scopes
+   are identity scopes, authorization hangs on the audience, and
+   ClickHouse set the clickhousectl audience to read-only; even key
+   creation needs an existing admin key (bootstrap is console-only by
+   design). Standing asks to ClickHouse: a zeDB client id, a
+   write-capable audience or a key-bootstrap-from-OAuth endpoint, and
+   JWT-mapped database users. Softener: querying an idle service
+   wakes it in both auth modes, so OAuth-only users wake services by
+   connecting; only the explicit start command is key-gated.
 2. Control plane. The management API exposes per-service cost
    (usageCost), credit balances, a full typed audit log, Prometheus
    metrics per service, backup config plus restore-as-new-service,
