@@ -161,6 +161,11 @@ impl AssetSource for Assets {
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
             "icons/copy.svg" => Some(include_bytes!("../assets/icons/copy.svg")),
             "icons/clickhouse.svg" => Some(include_bytes!("../assets/icons/clickhouse.svg")),
+            "icons/provider-aws.svg" => Some(include_bytes!("../assets/icons/provider-aws.svg")),
+            "icons/provider-gcp.svg" => Some(include_bytes!("../assets/icons/provider-gcp.svg")),
+            "icons/provider-azure.svg" => {
+                Some(include_bytes!("../assets/icons/provider-azure.svg"))
+            }
             "icons/github.svg" => Some(include_bytes!("../assets/icons/github.svg")),
             "icons/gitlab.svg" => Some(include_bytes!("../assets/icons/gitlab.svg")),
             "icons/ops.svg" => Some(include_bytes!("../assets/icons/ops.svg")),

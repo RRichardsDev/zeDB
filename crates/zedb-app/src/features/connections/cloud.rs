@@ -64,6 +64,70 @@ impl CloudLinkState {
     }
 }
 
+/// The provider's mark and a display name for its tooltip; None for a
+/// provider we have no mark for (the raw string renders instead).
+fn provider_icon(provider: &str) -> Option<(&'static str, &'static str)> {
+    match provider {
+        "aws" => Some(("icons/provider-aws.svg", "Amazon Web Services")),
+        "gcp" => Some(("icons/provider-gcp.svg", "Google Cloud")),
+        "azure" => Some(("icons/provider-azure.svg", "Microsoft Azure")),
+        _ => None,
+    }
+}
+
+/// The flag of the country a cloud region sits in, by prefix, across
+/// the AWS/GCP/Azure region-naming schemes ClickHouse Cloud offers.
+/// None for an unrecognized region (the raw string still renders).
+fn region_flag(region: &str) -> Option<&'static str> {
+    const FLAGS: &[(&str, &str)] = &[
+        ("us-", "\u{1f1fa}\u{1f1f8}"),
+        ("us", "\u{1f1fa}\u{1f1f8}"),
+        ("eastus", "\u{1f1fa}\u{1f1f8}"),
+        ("westus", "\u{1f1fa}\u{1f1f8}"),
+        ("centralus", "\u{1f1fa}\u{1f1f8}"),
+        ("eu-west-1", "\u{1f1ee}\u{1f1ea}"),
+        ("eu-west-2", "\u{1f1ec}\u{1f1e7}"),
+        ("eu-west-3", "\u{1f1eb}\u{1f1f7}"),
+        ("eu-central", "\u{1f1e9}\u{1f1ea}"),
+        ("eu-north", "\u{1f1f8}\u{1f1ea}"),
+        ("europe-west1", "\u{1f1e7}\u{1f1ea}"),
+        ("europe-west2", "\u{1f1ec}\u{1f1e7}"),
+        ("europe-west3", "\u{1f1e9}\u{1f1ea}"),
+        ("europe-west4", "\u{1f1f3}\u{1f1f1}"),
+        ("europe-west9", "\u{1f1eb}\u{1f1f7}"),
+        ("europe-north", "\u{1f1eb}\u{1f1ee}"),
+        ("northeurope", "\u{1f1ee}\u{1f1ea}"),
+        ("westeurope", "\u{1f1f3}\u{1f1f1}"),
+        ("germanywestcentral", "\u{1f1e9}\u{1f1ea}"),
+        ("uksouth", "\u{1f1ec}\u{1f1e7}"),
+        ("francecentral", "\u{1f1eb}\u{1f1f7}"),
+        ("switzerlandnorth", "\u{1f1e8}\u{1f1ed}"),
+        ("ap-south", "\u{1f1ee}\u{1f1f3}"),
+        ("ap-southeast-1", "\u{1f1f8}\u{1f1ec}"),
+        ("ap-southeast-2", "\u{1f1e6}\u{1f1fa}"),
+        ("ap-northeast-1", "\u{1f1ef}\u{1f1f5}"),
+        ("ap-northeast-2", "\u{1f1f0}\u{1f1f7}"),
+        ("asia-south", "\u{1f1ee}\u{1f1f3}"),
+        ("asia-southeast", "\u{1f1f8}\u{1f1ec}"),
+        ("asia-northeast", "\u{1f1ef}\u{1f1f5}"),
+        ("southeastasia", "\u{1f1f8}\u{1f1ec}"),
+        ("centralindia", "\u{1f1ee}\u{1f1f3}"),
+        ("japaneast", "\u{1f1ef}\u{1f1f5}"),
+        ("koreacentral", "\u{1f1f0}\u{1f1f7}"),
+        ("australiaeast", "\u{1f1e6}\u{1f1fa}"),
+        ("sa-east", "\u{1f1e7}\u{1f1f7}"),
+        ("brazilsouth", "\u{1f1e7}\u{1f1f7}"),
+        ("ca-central", "\u{1f1e8}\u{1f1e6}"),
+        ("canadacentral", "\u{1f1e8}\u{1f1e6}"),
+        ("me-central", "\u{1f1e6}\u{1f1ea}"),
+        ("af-south", "\u{1f1ff}\u{1f1e6}"),
+    ];
+    FLAGS
+        .iter()
+        .find(|(prefix, _)| region.starts_with(prefix))
+        .map(|(_, flag)| *flag)
+}
+
 impl Workspace {
     pub(crate) fn cloud_open(&mut self, cx: &mut Context<Self>) {
         self.connection.cloud.open = true;
@@ -795,122 +859,154 @@ impl Workspace {
     pub(crate) fn cloud_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let orgs = self.preferences.cloud_orgs.clone();
         let loading = self.connection.cloud.loading;
-        let service_rows =
-            self.connection
-                .cloud
-                .services
-                .iter()
-                .enumerate()
-                .map(|(index, (org_id, service))| {
-                    let added = self.connection.connections.iter().any(|connection| {
-                        connection
-                            .cloud
-                            .as_ref()
-                            .is_some_and(|cloud| cloud.service_id == service.id)
-                    });
-                    let state_color = if service.is_running() {
-                        theme::success()
-                    } else if service.is_waking() {
-                        theme::warning()
-                    } else {
-                        theme::text_dim()
-                    };
-                    let keyed = self.connection.cloud.org_has_key(&self.preferences, org_id);
-                    let org_id = org_id.clone();
-                    let service_id = service.id.clone();
-                    let asleep = service.is_asleep();
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .rounded(px(3.))
-                        .hover(|row| row.bg(theme::bg_sidebar()))
-                        .child(div().size(px(7.)).rounded_full().bg(state_color))
-                        .child(div().text_color(theme::text()).child(service.name.clone()))
-                        .child(div().text_xs().text_color(theme::text_dim()).child(format!(
-                            "{} \u{b7} {} {}",
-                            service.state, service.provider, service.region
-                        )))
-                        .child(div().flex_1())
-                        .when(asleep && keyed, |row| {
-                            row.child(
-                                div()
-                                    .id(("cloud-start", index))
-                                    .px_2()
-                                    .py_0p5()
-                                    .rounded(px(3.))
-                                    .border_1()
-                                    .border_color(theme::accent())
-                                    .text_xs()
-                                    .text_color(theme::accent())
-                                    .child("Start")
-                                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
-                                    .on_click(cx.listener({
-                                        let org_id = org_id.clone();
-                                        let service_id = service_id.clone();
-                                        move |this, _, _, cx| {
-                                            this.cloud_start_service(
-                                                org_id.clone(),
-                                                service_id.clone(),
-                                                cx,
-                                            )
-                                        }
-                                    })),
-                            )
-                        })
-                        .when(asleep && !keyed, |row| {
-                            // Sign-in tokens are read-only on the
-                            // management API: an honest disabled
-                            // button beats a failing one.
-                            row.child(
-                                div()
-                                    .id(("cloud-start-disabled", index))
-                                    .px_2()
-                                    .py_0p5()
-                                    .rounded(px(3.))
-                                    .border_1()
-                                    .border_color(theme::border())
-                                    .text_xs()
-                                    .text_color(theme::text_dim())
-                                    .child("Start")
-                                    .tooltip(|window, cx| {
-                                        gpui_component::tooltip::Tooltip::new(
-                                            "Starting from here needs an organization API key \
-                                             (the browser sign-in is read-only). Connecting to \
-                                             the service still wakes it; the first query takes \
-                                             a minute.",
-                                        )
-                                        .build(window, cx)
-                                    }),
-                            )
-                        })
-                        .child(if added {
+        let service_rows = self
+            .connection
+            .cloud
+            .services
+            .iter()
+            .enumerate()
+            .map(|(index, (org_id, service))| {
+                let added = self.connection.connections.iter().any(|connection| {
+                    connection
+                        .cloud
+                        .as_ref()
+                        .is_some_and(|cloud| cloud.service_id == service.id)
+                });
+                let state_color = if service.is_running() {
+                    theme::success()
+                } else if service.is_waking() {
+                    theme::warning()
+                } else {
+                    theme::text_dim()
+                };
+                let keyed = self.connection.cloud.org_has_key(&self.preferences, org_id);
+                let org_id = org_id.clone();
+                let service_id = service.id.clone();
+                let asleep = service.is_asleep();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(3.))
+                    .hover(|row| row.bg(theme::bg_sidebar()))
+                    .child(div().size(px(7.)).rounded_full().bg(state_color))
+                    .child(div().text_color(theme::text()).child(service.name.clone()))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .text_xs()
+                            .text_color(theme::text_dim())
+                            .child(format!("{} \u{b7}", service.state))
+                            .child(match provider_icon(&service.provider) {
+                                Some((icon, tooltip)) => div()
+                                    .id(("cloud-provider", index))
+                                    .flex()
+                                    .items_center()
+                                    .child(
+                                        gpui::svg()
+                                            .path(icon)
+                                            .size(px(12.))
+                                            .text_color(theme::text_dim()),
+                                    )
+                                    .tooltip(move |window, cx| {
+                                        gpui_component::tooltip::Tooltip::new(tooltip)
+                                            .build(window, cx)
+                                    })
+                                    .into_any_element(),
+                                None => div().child(service.provider.clone()).into_any_element(),
+                            })
+                            .child(format!(
+                                "{}{}",
+                                region_flag(&service.region)
+                                    .map(|flag| format!("{flag} "))
+                                    .unwrap_or_default(),
+                                service.region
+                            )),
+                    )
+                    .child(div().flex_1())
+                    .when(asleep && keyed, |row| {
+                        row.child(
                             div()
+                                .id(("cloud-start", index))
+                                .px_2()
+                                .py_0p5()
+                                .rounded(px(3.))
+                                .border_1()
+                                .border_color(theme::accent())
                                 .text_xs()
-                                .text_color(theme::text_dim())
-                                .child("Added")
-                                .into_any_element()
-                        } else {
+                                .text_color(theme::accent())
+                                .child("Start")
+                                .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                .on_click(cx.listener({
+                                    let org_id = org_id.clone();
+                                    let service_id = service_id.clone();
+                                    move |this, _, _, cx| {
+                                        this.cloud_start_service(
+                                            org_id.clone(),
+                                            service_id.clone(),
+                                            cx,
+                                        )
+                                    }
+                                })),
+                        )
+                    })
+                    .when(asleep && !keyed, |row| {
+                        // Sign-in tokens are read-only on the
+                        // management API: an honest disabled
+                        // button beats a failing one.
+                        row.child(
                             div()
-                                .id(("cloud-add", index))
+                                .id(("cloud-start-disabled", index))
                                 .px_2()
                                 .py_0p5()
                                 .rounded(px(3.))
                                 .border_1()
                                 .border_color(theme::border())
                                 .text_xs()
-                                .text_color(theme::text())
-                                .child("Add connection")
-                                .hover(|button| button.bg(theme::hover()).cursor_pointer())
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                                .text_color(theme::text_dim())
+                                .child("Start")
+                                .tooltip(|window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(
+                                        "Starting from here needs an organization API key \
+                                             (the browser sign-in is read-only). Connecting to \
+                                             the service still wakes it; the first query takes \
+                                             a minute.",
+                                    )
+                                    .build(window, cx)
+                                }),
+                        )
+                    })
+                    .child(if added {
+                        div()
+                            .text_xs()
+                            .text_color(theme::text_dim())
+                            .child("Added")
+                            .into_any_element()
+                    } else {
+                        div()
+                            .id(("cloud-add", index))
+                            .px_2()
+                            .py_0p5()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(theme::border())
+                            .text_xs()
+                            .text_color(theme::text())
+                            .child("Add connection")
+                            .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| {
                                     this.cloud_add_service(index, cx)
-                                }))
-                                .into_any_element()
-                        })
-                })
-                .collect::<Vec<_>>();
+                                }),
+                            )
+                            .into_any_element()
+                    })
+            })
+            .collect::<Vec<_>>();
         let mut org_names: Vec<String> = orgs.iter().map(|org| org.name.clone()).collect();
         for org in &self.connection.cloud.oauth_orgs {
             if !orgs.iter().any(|keyed| keyed.id == org.id) {
