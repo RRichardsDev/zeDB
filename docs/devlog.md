@@ -1,3 +1,16 @@
+## 2026-08-16: flaky test on record
+
+`verify_detects_drift_at_chain_position` (zedb-ch tests/runner.rs) is
+flaky: it failed once in a full-workspace run and once during a
+bisect, then passed 4/4 consecutive runs at the same commit, and a
+bisect blamed a commit that only touches git credential plumbing.
+Suspected ephemeral-server contention under parallel test load (the
+"missing: ${db}.events" finding reads like the live query hit a
+server that never ran the fixture chain). Note: the test silently
+skips without a cached ClickHouse binary, so runs after a cache wipe
+prove nothing. Worth hardening EphemeralServer port allocation or
+serializing the server-backed suites.
+
 # Devlog
 
 Findings worth remembering, especially GPUI gaps and gotchas that could
