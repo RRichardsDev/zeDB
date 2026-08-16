@@ -215,16 +215,21 @@ impl Workspace {
                                             .flex()
                                             .items_center()
                                             .gap_1()
-                                            // A cloud glyph in the brand
-                                            // yellow: the shape says what
-                                            // it is, the color says whose.
+                                            // The ClickHouse mark says
+                                            // whose, the cloud shape says
+                                            // what; no word needed.
+                                            .child(
+                                                svg()
+                                                    .path("icons/clickhouse.svg")
+                                                    .size(px(11.))
+                                                    .text_color(rgb(0xFFCC01)),
+                                            )
                                             .child(
                                                 svg()
                                                     .path("icons/cloud.svg")
-                                                    .size(px(12.))
-                                                    .text_color(rgb(0xFFCC01)),
+                                                    .size(px(13.))
+                                                    .text_color(theme::text_dim()),
                                             )
-                                            .child("Cloud")
                                             .when(self.connection.cloud.open, |button| {
                                                 button.bg(theme::hover())
                                             })
@@ -270,9 +275,27 @@ impl Workspace {
                                                                     "Self-hosted cluster",
                                                                     Box::new(AddLocalConnection),
                                                                 )
-                                                                .menu(
-                                                                    "ClickHouse Cloud",
+                                                                .menu_element(
                                                                     Box::new(AddCloudConnection),
+                                                                    |_, _| {
+                                                                        div()
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .gap_2()
+                                                                            .child(
+                                                                                svg()
+                                                                                    .path("icons/clickhouse.svg")
+                                                                                    .size(px(11.))
+                                                                                    .text_color(rgb(0xFFCC01)),
+                                                                            )
+                                                                            .child(
+                                                                                svg()
+                                                                                    .path("icons/cloud.svg")
+                                                                                    .size(px(13.))
+                                                                                    .text_color(theme::text_dim()),
+                                                                            )
+                                                                            .child("ClickHouse Cloud")
+                                                                    },
                                                                 )
                                                         },
                                                     ),
