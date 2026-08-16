@@ -1296,19 +1296,28 @@ impl Workspace {
                                         .child(
                                             div()
                                                 .id("cloud-refresh")
-                                                .px_2()
-                                                .py_0p5()
+                                                .w(px(26.))
+                                                .h(px(24.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
                                                 .rounded(px(3.))
-                                                .border_1()
-                                                .border_color(theme::border())
-                                                .text_xs()
-                                                .child(if loading {
-                                                    "Refreshing\u{2026}"
-                                                } else {
-                                                    "Refresh"
-                                                })
+                                                .child(
+                                                    gpui::svg()
+                                                        .path("icons/refresh.svg")
+                                                        .size(px(13.))
+                                                        .text_color(if loading {
+                                                            theme::text()
+                                                        } else {
+                                                            theme::text_dim()
+                                                        }),
+                                                )
                                                 .hover(|button| {
                                                     button.bg(theme::hover()).cursor_pointer()
+                                                })
+                                                .tooltip(|window, cx| {
+                                                    gpui_component::tooltip::Tooltip::new("Refresh")
+                                                        .build(window, cx)
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.cloud_refresh(cx)
