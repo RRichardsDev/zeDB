@@ -5,8 +5,9 @@ this turns the explorer into a real-time console (north-star #5,
 `docs/NORTH-STAR.md`). Reuses the streaming execution + progress plumbing
 already built.
 
-Status: IN PROGRESS. Phase 10.1 adds native instant-tail transports. Follows
-Phase 9 (`docs/PHASE-9.md`).
+Status: IN PROGRESS. Phase 10.1 (native instant-tail transports) is
+COMPLETE and shipped its decision: opt-in `STREAM` is the preferred
+instant mode. Follows Phase 9 (`docs/PHASE-9.md`).
 
 **Increment 1 DONE** (branch `phase-10-live-tail`): poll-over-HTTP tail from
 the schema sidebar's table context menu, on the leading ORDER BY key, off

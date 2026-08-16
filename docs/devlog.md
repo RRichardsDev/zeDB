@@ -1084,3 +1084,46 @@ cancel is not reaped by the server; the orphaned query survived 40+ seconds
 until an explicit `KILL QUERY`. The owned-socket cancel path (and its
 2-second `system.processes` integration test) is therefore load-bearing,
 not belt-and-braces.
+
+## Phase 10.1 verification and ship decision (2026-08-16)
+
+The manual matrix ran against the 26.6 compose cluster, all of it on a
+read-only connection (readonly = 2 confirmed on the live stream session).
+Delivery was exactly-once at ~2ms into the grid; pause/resume survived 67
+rapid cycles with a contiguous, duplicate-free window; a node restart
+mid-tail recovered with an honest downgrade notice and no false rows;
+both nodes tailed independently; closing the tab without stopping cleared
+the server query inside the two-second bound and left no `zedb_tail_*`
+object on either node.
+
+Decision: SHIP. `STREAM` stays the opt-in preferred instant mode behind
+Preferences, above WATCH, fast native polling, and HTTP polling.
+
+The verification earned its keep: five real defects surfaced, each caught
+by comparing the grid against server ground truth, and all are fixed:
+
+1. Resume reopened the stream from the saved `_block_number` cursor,
+   which part merges rewrite, so every pause lost the merged window.
+   Reopens now bound by the last seen key, which the server replays.
+2. The tail sat in Poll mode while a stream connected, so a poll tick in
+   the connect window delivered a row the replay then repeated. The tail
+   now claims Stream mode before connecting; error paths settle it back.
+3. Native-port discovery trusted the server's advertised ports, which a
+   remapped deployment (docker publish, port-forward) reaches elsewhere;
+   node 2 could never offer instant updates. Connect now tries the HTTP
+   remap offset first, identity-checked as before.
+4. Switching nodes kept the old node's rows, boundary, and transport, so
+   the grid showed the wrong node's data and a later stream opened with a
+   poisoned cursor. Node switches now restart active tails from scratch.
+5. The native pool keyed connections by host alone, so two nodes reached
+   through different ports on one host shared a socket and one node's
+   reads silently executed on the other. This affected every
+   native-routed read, not just tails, and the connect-time serverUUID
+   check could not catch it because the pool handed out the socket after
+   that check. The key now carries the full endpoint URL.
+
+Still open, deliberately not blocking: a restored session re-seeds its
+tails before the restored node selection applies, so the grid shows the
+wrong node's rows until one manual node flip; and connection settings
+should let a cluster node declare its native port explicitly instead of
+relying on discovery heuristics (IRL list).

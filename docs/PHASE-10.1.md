@@ -4,7 +4,11 @@ Test whether ClickHouse 26.6 streaming queries can extend Phase 10's instant
 tail while retaining `WATCH` for older ClickHouse versions that still support
 Live Views and preserving the existing polling path.
 
-Status: IMPLEMENTED. Verification in progress. Builds on Phase 10
+Status: COMPLETE, decision SHIP (2026-08-16). The full manual matrix ran
+against the 26.6 compose cluster on a read-only connection; measurements
+and the five defects the verification surfaced (and their fixes) are in
+`docs/devlog.md`. `STREAM` stays the opt-in preferred instant mode with
+the WATCH / fast-poll / HTTP-poll fallback ladder. Builds on Phase 10
 (`docs/PHASE-10.md`).
 
 ## Decision this phase must produce
