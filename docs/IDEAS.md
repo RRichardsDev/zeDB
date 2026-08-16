@@ -19,7 +19,7 @@ phase assignment.
   PHP) that read current state, deploy, and stamp tracking from
   application code. Opt-in per repo and per language in zedb.toml,
   disabled by default; one engine, thin bindings. Candidate Phase 4;
-  design sketch in PHASE-3.md.
+  design sketch lived in the retired PHASE-3 doc; see the devlog.
 - Fleet-wide "apply wave" orchestration: staged rollout groups with
   pause/resume and failure isolation.
 - Migration authoring assistance: live check-as-you-type against the

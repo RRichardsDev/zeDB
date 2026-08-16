@@ -7,7 +7,7 @@ already built.
 
 Status: IN PROGRESS. Phase 10.1 (native instant-tail transports) is
 COMPLETE and shipped its decision: opt-in `STREAM` is the preferred
-instant mode. Follows Phase 9 (`docs/PHASE-9.md`).
+instant mode. Follows Phase 9 (doc retired; history in the devlog and releases).
 
 **Increment 1 DONE** (branch `phase-10-live-tail`): poll-over-HTTP tail from
 the schema sidebar's table context menu, on the leading ORDER BY key, off
