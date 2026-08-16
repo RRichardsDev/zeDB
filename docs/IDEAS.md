@@ -1,54 +1,77 @@
 # Ideas parking lot
 
-Not commitments. Things deliberately kept out of the spec's v1 scope so
-they stop haunting design discussions. Promote to SPEC.md only with a
-phase assignment.
+Not commitments. Things deliberately kept out of scope so they stop
+haunting design discussions. Promote to SPEC.md (or a phase doc) only
+with a phase assignment. Shipped items get pruned; this is the list
+of what is NOT built.
+
+## ClickHouse Cloud (Phase 10.5 remainder)
+
+The front door (10.5a), the truthfulness fixes (10.5b), and the
+connection-page dashboard shipped in v0.1.31. Still open, per
+`docs/CLOUD-STRATEGY.md`:
+
+- Rest of 10.5c, the control-plane surfaces nobody else has: cost in
+  the status bar with burn-rate warnings; pre-flight estimates
+  phrased in wake/compute terms; the audit-log timeline beside ops;
+  wake-before-connect built into connecting itself; backup-restore
+  wired into fleet as migration rehearsal ("rehearse this migration
+  on a restored copy"); ClickPipes surfaced from the API, not just
+  named.
+- 10.5d: Cloud control-plane context (state, tier, cost) exposed
+  read-only to the in-app agent and MCP, with the byte caps
+  re-reasoned as billing ceilings.
+- Query-API Bearer connections: read-only SQL as the signed-in user,
+  no database credentials at all, degrading honestly (no native TCP,
+  no writes, no session settings).
+- Upstream-gated (standing asks to ClickHouse): a zeDB OAuth client
+  id; a write-capable audience or key-bootstrap-from-OAuth endpoint;
+  JWT-mapped database users (Snowflake-class passwordless sign-in);
+  warehouse names in the services API.
 
 ## Exploration
 
-- Saved queries / query library (per repo? per connection?).
-- Query history with instant recall and fuzzy search.
 - Inline charting of result sets.
-- EXPLAIN visualization (pipeline / plan graphs).
-- Table data preview with server-side filtering and sampling.
-- Export result sets (CSV, Parquet, clipboard).
+- EXPLAIN visualization as pipeline / plan graphs (the textual
+  EXPLAIN views shipped; the graphs did not).
 
 ## Migrations / fleet
 
 - Embedded runners: client libraries (Java, Python, Node, C++, Rust,
   PHP) that read current state, deploy, and stamp tracking from
   application code. Opt-in per repo and per language in zedb.toml,
-  disabled by default; one engine, thin bindings. Candidate Phase 4;
-  design sketch lived in the retired PHASE-3 doc; see the devlog.
+  disabled by default; one engine, thin bindings. Design sketch lived
+  in the retired PHASE-3 doc; see the devlog.
 - Fleet-wide "apply wave" orchestration: staged rollout groups with
   pause/resume and failure isolation.
 - Migration authoring assistance: live check-as-you-type against the
-  pinned local server.
-- Schema timeline: scrub through the migration chain and watch an object's
-  DDL evolve.
-- Per-database parameter overrides UI (the ancestor's offset inheritance,
-  generalized).
+  pinned local server (the authoring view checks on demand today).
+- Schema timeline: scrub through the migration chain and watch an
+  object's DDL evolve.
+- Per-database parameter overrides UI (the runner honors overrides;
+  no UI edits them).
 
-## Agent pane (Phase 3.1 spillover)
+## Agent pane
 
-- Preset prompts as one-click thread starters: explain this migration,
-  why is this database drifted, review my draft.
+- Preset prompts as one-click thread starters: explain this
+  migration, why is this database drifted, review my draft.
 
-## Ops (explicitly out of scope for cluster management, parked hard)
+## Ops
 
-- Read-only ops panels: replication lag, mutation queues, disk, running
-  queries.
-- Mutating ops actions: kill query, restart replica, user/grant management.
+- Mutating ops actions beyond KILL QUERY: restart replica, user and
+  grant management. (The read-only panels and KILL shipped.)
 
 ## Drivers
 
-- Guest explorer drivers: Postgres, SQLite, DuckDB (capability: explore
-  only).
+- Guest explorer drivers: Postgres, SQLite, DuckDB (capability:
+  explore only).
 - Investigate replay-based migration support for engines with a cheap
-  embedded form (DuckDB, SQLite) as a proof the capability model works.
+  embedded form (DuckDB, SQLite) as a proof the capability model
+  works.
 
 ## Platform
 
-- Windows support (blocked on GPUI maturity + no native ClickHouse binary;
-  WSL2 story instead?).
-- Collaboration features (shared sessions, Zed-style). Very far future.
+- Windows support (blocked on GPUI maturity + no native ClickHouse
+  binary; WSL2 story instead?).
+- Collaboration features (shared sessions, Zed-style). Very far
+  future.
