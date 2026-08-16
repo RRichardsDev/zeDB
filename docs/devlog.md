@@ -1142,3 +1142,19 @@ database password without a console round-trip. Full findings and the
 resulting one-flow design are in docs/PHASE-10.5.md; the Query API's
 narrower surface (no native TCP, no writes) is why Bearer-only
 connections are a separate increment with explicit degradation.
+
+## The Cloud investigation, widened (2026-08-16)
+
+Three parallel research passes (management-API surface, competitive
+landscape, self-audit) plus a live auth experiment; synthesis in
+docs/CLOUD-STRATEGY.md. The live experiment proved the device flow end
+to end with the public clickhousectl client id (token acquired, org
+listed over the management API) and established that the Cloud data
+plane validates JWTs: the probe against a real service failed with "no
+user with such name" after decoding issuer, audience, and subject, so a
+JWT-identified database user is the one missing piece for passwordless
+full-privilege sessions. The self-audit found six Cloud-truthfulness
+defects, worst first: the ops fan-out filters out the cluster named
+`default` (Cloud's name), the workload advisor reads one replica's
+query_log as if it were the fleet's, and the replication tab reports
+ZooKeeper-era health on SharedMergeTree.
