@@ -133,23 +133,16 @@ fn region_flag(region: &str) -> Option<&'static str> {
         .map(|(_, flag)| *flag)
 }
 
-/// A best-effort display name for a warehouse: the primary service's
-/// name plus "warehouse". The console derives the real name the same
-/// way at creation but keeps it when services are later renamed; the
-/// API does not expose it (a standing ask), so this diverges after a
-/// rename and is only used as an editable default, never as truth.
-fn warehouse_name(services: &[(String, CloudService)], warehouse_id: &str) -> Option<String> {
-    services
-        .iter()
-        .find(|(_, service)| {
-            service.warehouse_id.as_deref() == Some(warehouse_id) && service.is_primary
-        })
-        .or_else(|| {
-            services
-                .iter()
-                .find(|(_, service)| service.warehouse_id.as_deref() == Some(warehouse_id))
-        })
-        .map(|(_, service)| format!("{} warehouse", service.name))
+/// The default (editable) connection name for a shared warehouse:
+/// the same honest relationship label the panel header shows. The
+/// API exposes no warehouse name (a standing ask), so the label
+/// states what is known instead of guessing from a renamable
+/// service.
+fn warehouse_label(services: &[(String, CloudService)], warehouse_id: &str) -> String {
+    format!(
+        "Warehouse \u{b7} {} compute \u{b7} shared data",
+        warehouse_size(services, warehouse_id)
+    )
 }
 
 /// How many visible services share this warehouse.
@@ -667,13 +660,13 @@ impl Workspace {
         };
         let name = service.name.clone();
         // A service in a shared warehouse defaults the connection
-        // name to the warehouse's (console-style) name; the compute
+        // name to the warehouse relationship label; the compute
         // keeps the service's own name.
         let connection_name = service
             .warehouse_id
             .as_deref()
             .filter(|warehouse| warehouse_size(&self.connection.cloud.services, warehouse) > 1)
-            .and_then(|warehouse| warehouse_name(&self.connection.cloud.services, warehouse))
+            .map(|warehouse| warehouse_label(&self.connection.cloud.services, warehouse))
             .unwrap_or_else(|| name.clone());
         self.connection.cloud.open = false;
         self.connection.pending_delete = None;
@@ -844,7 +837,7 @@ impl Workspace {
         let base_name = service
             .warehouse_id
             .as_deref()
-            .and_then(|warehouse| warehouse_name(&self.connection.cloud.services, warehouse))
+            .map(|warehouse| warehouse_label(&self.connection.cloud.services, warehouse))
             .unwrap_or_else(|| "My Cloud Cluster".to_string());
         if self.connection.form.is_none() {
             return;
@@ -1826,19 +1819,18 @@ mod tests {
     }
 
     #[test]
-    fn warehouse_named_after_its_primary() {
+    fn warehouse_label_states_the_relationship() {
         let services = vec![
             service("Side Compute", Some("wh-1"), false),
             service("My Second Service", Some("wh-1"), true),
             service("Elsewhere", Some("wh-2"), true),
         ];
         assert_eq!(
-            warehouse_name(&services, "wh-1").as_deref(),
-            Some("My Second Service warehouse")
+            warehouse_label(&services, "wh-1"),
+            "Warehouse \u{b7} 2 compute \u{b7} shared data"
         );
         assert_eq!(warehouse_size(&services, "wh-1"), 2);
         assert_eq!(warehouse_size(&services, "wh-2"), 1);
-        assert_eq!(warehouse_name(&services, "wh-none"), None);
     }
 
     #[test]
