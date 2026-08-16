@@ -1104,14 +1104,8 @@ impl Workspace {
         let cloud = connection.cloud.as_ref()?;
         let state = self.connection.cloud.states.get(&cloud.service_id)?;
         let service = CloudService {
-            id: String::new(),
-            name: String::new(),
             state: state.clone(),
-            endpoints: Vec::new(),
-            provider: String::new(),
-            region: String::new(),
-            warehouse_id: None,
-            is_primary: false,
+            ..CloudService::default()
         };
         if state == "deleted" {
             Some("deleted")
@@ -1880,11 +1874,9 @@ mod tests {
                 id: name.into(),
                 name: name.into(),
                 state: "running".into(),
-                endpoints: Vec::new(),
-                provider: String::new(),
-                region: String::new(),
                 warehouse_id: warehouse.map(str::to_string),
                 is_primary: primary,
+                ..CloudService::default()
             },
         )
     }

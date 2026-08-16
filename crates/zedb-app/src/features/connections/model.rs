@@ -16,6 +16,8 @@ pub(crate) struct ConnectionState {
     pub(crate) form: Option<ConnectionForm>,
     pub(crate) pending_delete: Option<String>,
     pub(crate) cloud: super::cloud::CloudLinkState,
+    /// The Cloud dashboard on the connection summary page.
+    pub(crate) usage: super::CloudUsageState,
 }
 
 impl ConnectionState {
@@ -30,6 +32,7 @@ impl ConnectionState {
             form: None,
             pending_delete: None,
             cloud: super::cloud::CloudLinkState::new(),
+            usage: super::CloudUsageState::default(),
         }
     }
 }

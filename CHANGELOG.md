@@ -9,6 +9,14 @@ GitHub release notes.
 
 ## Unreleased
 
+- The connection summary page becomes a Cloud dashboard for linked
+  connections: Overview (per-compute state, version, tier, replicas
+  and memory, idle timeout, created date, primary/read-only badges),
+  Cost (the last 30 days of credits as daily bars, warehouse and
+  organization totals, category and per-entity breakdowns), Backups
+  (status, size, duration), and Metrics (the service's filtered
+  Prometheus set), fetched read-only with the org API key or the
+  browser sign-in.
 - Ops cluster scope now works on ClickHouse Cloud: single-host
   clusters are skipped by shape instead of by the name "default",
   which is exactly Cloud's real cluster name.

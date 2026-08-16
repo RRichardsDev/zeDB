@@ -7,7 +7,10 @@ mod controller_persistence;
 #[path = "controller/probe.rs"]
 mod controller_probe;
 mod model;
+mod usage;
 mod view;
+
+pub(crate) use usage::CloudUsageState;
 
 pub(crate) use model::{
     differentiating_cluster, ConnectedCluster, ConnectionDraft, ConnectionForm, ConnectionState,

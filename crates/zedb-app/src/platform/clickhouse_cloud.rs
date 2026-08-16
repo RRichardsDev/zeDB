@@ -28,7 +28,7 @@ pub struct CloudOrg {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct CloudService {
     pub id: String,
     pub name: String,
@@ -50,6 +50,22 @@ pub struct CloudService {
     /// The warehouse's original service; its name names the warehouse.
     #[serde(default, rename = "isPrimary")]
     pub is_primary: bool,
+    #[serde(default, rename = "isReadonly")]
+    pub is_readonly: bool,
+    #[serde(default, rename = "numReplicas")]
+    pub num_replicas: Option<u64>,
+    #[serde(default, rename = "minTotalMemoryGb")]
+    pub min_total_memory_gb: Option<u64>,
+    #[serde(default, rename = "maxTotalMemoryGb")]
+    pub max_total_memory_gb: Option<u64>,
+    #[serde(default, rename = "idleTimeoutMinutes")]
+    pub idle_timeout_minutes: Option<u64>,
+    #[serde(default, rename = "clickhouseVersion")]
+    pub clickhouse_version: Option<String>,
+    #[serde(default, rename = "createdAt")]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub tier: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -156,6 +172,185 @@ async fn get_bearer<T: serde::de::DeserializeOwned>(path: &str, token: &str) -> 
     serde_json::from_str::<Envelope<T>>(&body)
         .map(|envelope| envelope.result)
         .map_err(|error| format!("unexpected Cloud reply: {error}"))
+}
+
+/// Either credential the control plane accepts for reads: the org API
+/// key (basic auth) or the browser sign-in's Bearer token.
+#[derive(Clone)]
+pub enum CloudAuth {
+    Basic { id: String, secret: String },
+    Bearer(String),
+}
+
+impl CloudAuth {
+    fn apply(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self {
+            CloudAuth::Basic { id, secret } => request.basic_auth(id, Some(secret)),
+            CloudAuth::Bearer(token) => request.bearer_auth(token),
+        }
+    }
+}
+
+async fn get_raw(path: &str, auth: &CloudAuth) -> Result<String, String> {
+    let response = auth
+        .apply(client()?.get(format!("{API_BASE}{path}")))
+        .send()
+        .await
+        .map_err(|error| format!("could not reach ClickHouse Cloud: {error}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "ClickHouse Cloud refused the request: {status} {body}"
+        ));
+    }
+    response
+        .text()
+        .await
+        .map_err(|error| format!("unexpected Cloud reply: {error}"))
+}
+
+async fn get_authed<T: serde::de::DeserializeOwned>(
+    path: &str,
+    auth: &CloudAuth,
+) -> Result<T, String> {
+    let body = get_raw(path, auth).await?;
+    serde_json::from_str::<Envelope<T>>(&body)
+        .map(|envelope| envelope.result)
+        .map_err(|error| format!("unexpected Cloud reply: {error}"))
+}
+
+/// One day of one billed entity's usage, in ClickHouse credits.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CostRecord {
+    #[serde(default)]
+    pub date: String,
+    #[serde(default, rename = "entityName")]
+    pub entity_name: String,
+    #[serde(default, rename = "serviceId")]
+    pub service_id: Option<String>,
+    #[serde(default, rename = "totalCHC")]
+    pub total: f64,
+    #[serde(default)]
+    pub metrics: CostMetrics,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CostMetrics {
+    #[serde(default, rename = "computeCHC")]
+    pub compute: f64,
+    #[serde(default, rename = "storageCHC")]
+    pub storage: f64,
+    #[serde(default, rename = "backupCHC")]
+    pub backup: f64,
+    #[serde(default, rename = "dataTransferCHC")]
+    pub data_transfer: f64,
+    #[serde(default, rename = "publicDataTransferCHC")]
+    pub public_data_transfer: f64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CostReport {
+    #[serde(default, rename = "grandTotalCHC")]
+    pub grand_total: f64,
+    #[serde(default)]
+    pub costs: Vec<CostRecord>,
+}
+
+/// The organization's usage cost between two dates (YYYY-MM-DD,
+/// inclusive), in ClickHouse credits, one record per entity per day.
+pub async fn usage_cost(
+    auth: &CloudAuth,
+    org_id: &str,
+    from_date: &str,
+    to_date: &str,
+) -> Result<CostReport, String> {
+    let body = get_raw(
+        &format!("/organizations/{org_id}/usageCost?from_date={from_date}&to_date={to_date}"),
+        auth,
+    )
+    .await?;
+    serde_json::from_str::<Envelope<CostReport>>(&body)
+        .map(|envelope| envelope.result)
+        .map_err(|error| format!("unexpected Cloud cost reply: {error}"))
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CloudBackup {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default, rename = "startedAt")]
+    pub started_at: String,
+    #[serde(default, rename = "sizeInBytes")]
+    pub size_bytes: Option<u64>,
+    #[serde(default, rename = "durationInSeconds")]
+    pub duration_secs: Option<u64>,
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
+}
+
+/// The service's backups, newest first as the API returns them.
+pub async fn list_backups(
+    auth: &CloudAuth,
+    org_id: &str,
+    service_id: &str,
+) -> Result<Vec<CloudBackup>, String> {
+    get_authed(
+        &format!("/organizations/{org_id}/services/{service_id}/backups"),
+        auth,
+    )
+    .await
+}
+
+/// The service's key metrics: the Prometheus endpoint with
+/// `filtered_metrics` on, parsed to (name, value) pairs. Gauges and
+/// counters only; histogram/summary series are skipped.
+pub async fn service_metrics(
+    auth: &CloudAuth,
+    org_id: &str,
+    service_id: &str,
+) -> Result<Vec<(String, f64)>, String> {
+    let text = get_raw(
+        &format!("/organizations/{org_id}/services/{service_id}/prometheus?filtered_metrics=true"),
+        auth,
+    )
+    .await?;
+    Ok(parse_prometheus(&text))
+}
+
+/// Parse Prometheus text exposition to (metric name, value), summing
+/// series that share a name (per-label breakdowns collapse).
+pub fn parse_prometheus(text: &str) -> Vec<(String, f64)> {
+    let mut metrics: Vec<(String, f64)> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((series, value)) = line.rsplit_once(' ') else {
+            continue;
+        };
+        let Ok(value) = value.trim().parse::<f64>() else {
+            continue;
+        };
+        let name = series.split('{').next().unwrap_or(series).trim();
+        if name.is_empty() {
+            continue;
+        }
+        match metrics.iter_mut().find(|(existing, _)| existing == name) {
+            Some((_, sum)) => *sum += value,
+            None => metrics.push((name.to_string(), value)),
+        }
+    }
+    metrics
+}
+
+/// Every service in the organization, with either credential.
+pub async fn list_services_authed(
+    auth: &CloudAuth,
+    org_id: &str,
+) -> Result<Vec<CloudService>, String> {
+    get_authed(&format!("/organizations/{org_id}/services"), auth).await
 }
 
 /// The organizations this API key can see (org-scoped keys see one).
@@ -290,6 +485,23 @@ mod tests {
             service.https_url().as_deref(),
             Some("https://x.clickhouse.cloud:8443")
         );
+    }
+
+    #[test]
+    fn parses_prometheus_exposition() {
+        let text = "# HELP ClickHouseMetrics_Query Number of queries\n\
+            # TYPE ClickHouseMetrics_Query gauge\n\
+            ClickHouseMetrics_Query 3\n\
+            ClickHouseProfileEvents_ReadBytes{host=\"a\"} 100\n\
+            ClickHouseProfileEvents_ReadBytes{host=\"b\"} 50\n\
+            malformed line without value x\n";
+        let metrics = parse_prometheus(text);
+        assert_eq!(metrics[0], ("ClickHouseMetrics_Query".to_string(), 3.0));
+        assert_eq!(
+            metrics[1],
+            ("ClickHouseProfileEvents_ReadBytes".to_string(), 150.0)
+        );
+        assert_eq!(metrics.len(), 2);
     }
 
     #[test]

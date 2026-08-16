@@ -44,6 +44,7 @@ impl Workspace {
                         this.connection.selected = Some(index);
                         this.connection.pending_delete = None;
                         this.notice = None;
+                        this.cloud_usage_refresh(false, cx);
                         cx.notify();
                     }))
                     .context_menu(move |menu, _, _| {

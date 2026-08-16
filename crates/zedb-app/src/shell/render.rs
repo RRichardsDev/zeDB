@@ -333,8 +333,9 @@ impl Render for Workspace {
                                                         .when(
                                                             self.schema.selected_object.is_none(),
                                                             |content| {
-                                                                content
-                                                                    .child(self.cluster_overview())
+                                                                content.child(
+                                                                    self.cluster_overview(cx),
+                                                                )
                                                             },
                                                         )
                                                 },
