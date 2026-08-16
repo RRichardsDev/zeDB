@@ -1158,3 +1158,16 @@ defects, worst first: the ops fan-out filters out the cluster named
 `default` (Cloud's name), the workload advisor reads one replica's
 query_log as if it were the fleet's, and the replication tab reports
 ZooKeeper-era health on SharedMergeTree.
+
+## JWT-to-service: blocked upstream (2026-08-16)
+
+The mapped-user experiment closed the question: on a real Cloud service
+(26.2.1.558), `CREATE USER ... IDENTIFIED WITH jwt` fails with
+"CREATE USER is not supported for JWT" (code 36). The data plane
+validates and maps JWTs (our probe decoded issuer/audience/subject
+server-side), but user-JWT mapping is reserved to the control plane's
+own surfaces (the console's passwordless SQL sessions). Third-party
+passwordless full-privilege sessions are therefore a ClickHouse policy
+gate, not an engineering gap on our side. 10.5a proceeds with OAuth for
+discovery, Query-API Bearer for instant read-only, and
+password paste/provisioning for full access.

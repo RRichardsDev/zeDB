@@ -55,6 +55,14 @@ form. The redesign folds it into the single Add Connection entry:
      connection runs SQL through the Query API with the OAuth Bearer
      token. Every feature that needs the native surface (tails,
      writes, driver settings) degrades with an honest label.
+
+   A passwordless full-access path (JWT database sessions) was tested
+   live and is blocked upstream: the data plane validates JWTs and
+   maps them to users, but `CREATE USER ... IDENTIFIED WITH jwt`
+   returns "CREATE USER is not supported for JWT" (BAD_ARGUMENTS,
+   26.2.1.558); Cloud reserves JWT user mapping for its own console.
+   Filed under "ask ClickHouse"; revisit when customer-mapped JWT
+   users exist.
 5. Any connection linked to a Cloud service wears a 1px border in
    ClickHouse yellow around the editor.
 
