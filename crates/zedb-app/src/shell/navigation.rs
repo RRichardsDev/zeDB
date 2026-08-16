@@ -163,7 +163,13 @@ impl Workspace {
                             .group_hover("connection-row", |line| line.max_h(px(20.)))
                             .child({
                                 let count = connection.nodes.len();
-                                format!("{count} node{}", if count == 1 { "" } else { "s" })
+                                if connection.cloud.is_some() && count > 1 {
+                                    // A warehouse: compute pools over
+                                    // one dataset, not cluster nodes.
+                                    format!("{count} compute \u{b7} shared data")
+                                } else {
+                                    format!("{count} node{}", if count == 1 { "" } else { "s" })
+                                }
                             }),
                     )
             })

@@ -133,6 +133,31 @@ fn region_flag(region: &str) -> Option<&'static str> {
         .map(|(_, flag)| *flag)
 }
 
+/// The console-style display name of a warehouse: the primary
+/// service's name plus "warehouse" (the API exposes no warehouse
+/// name of its own).
+fn warehouse_name(services: &[(String, CloudService)], warehouse_id: &str) -> Option<String> {
+    services
+        .iter()
+        .find(|(_, service)| {
+            service.warehouse_id.as_deref() == Some(warehouse_id) && service.is_primary
+        })
+        .or_else(|| {
+            services
+                .iter()
+                .find(|(_, service)| service.warehouse_id.as_deref() == Some(warehouse_id))
+        })
+        .map(|(_, service)| format!("{} warehouse", service.name))
+}
+
+/// How many visible services share this warehouse.
+fn warehouse_size(services: &[(String, CloudService)], warehouse_id: &str) -> usize {
+    services
+        .iter()
+        .filter(|(_, service)| service.warehouse_id.as_deref() == Some(warehouse_id))
+        .count()
+}
+
 impl Workspace {
     pub(crate) fn cloud_open(&mut self, cx: &mut Context<Self>) {
         self.connection.cloud.open = true;
@@ -434,6 +459,16 @@ impl Workspace {
                     Err(error) => errors.push(error),
                 }
             }
+            // Warehouse-mates sit together (primary first) so the
+            // panel can group them under one header.
+            services.sort_by(|a, b| {
+                (&a.0, &a.1.warehouse_id, !a.1.is_primary, &a.1.name).cmp(&(
+                    &b.0,
+                    &b.1.warehouse_id,
+                    !b.1.is_primary,
+                    &b.1.name,
+                ))
+            });
             (services, errors, oauth_orgs, account)
         });
         cx.spawn(async move |this, cx| {
@@ -629,12 +664,21 @@ impl Workspace {
             service_id: service.id.clone(),
         };
         let name = service.name.clone();
+        // A service in a shared warehouse defaults the connection
+        // name to the warehouse's (console-style) name; the compute
+        // keeps the service's own name.
+        let connection_name = service
+            .warehouse_id
+            .as_deref()
+            .filter(|warehouse| warehouse_size(&self.connection.cloud.services, warehouse) > 1)
+            .and_then(|warehouse| warehouse_name(&self.connection.cloud.services, warehouse))
+            .unwrap_or_else(|| name.clone());
         self.connection.cloud.open = false;
         self.connection.pending_delete = None;
         self.connection.form = Some(ConnectionForm {
             editing: None,
             original_name: None,
-            name: Self::input(name.clone(), "staging", false, cx),
+            name: Self::input(connection_name, "staging", false, cx),
             nodes: vec![NodeForm {
                 name: Self::input(name, "Node 1", false, cx),
                 endpoint: Self::input(url, "https://host:8443", false, cx),
@@ -755,19 +799,51 @@ impl Workspace {
         .detach();
     }
 
+    /// The warehouse of the open form's first service, when known:
+    /// the only warehouse whose compute may join the form.
+    pub(crate) fn form_warehouse_id(&self) -> Option<String> {
+        let service_id = self
+            .connection
+            .form
+            .as_ref()
+            .and_then(|form| form.cloud.as_ref())
+            .map(|cloud| cloud.service_id.clone())?;
+        self.connection
+            .cloud
+            .services
+            .iter()
+            .find(|(_, service)| service.id == service_id)
+            .and_then(|(_, service)| service.warehouse_id.clone())
+    }
+
     /// Append a Cloud service to the open connection form as another
-    /// node (the form's Add node leads to the panel and back). The
-    /// form keeps its provenance from the first service.
+    /// compute (the form's add button leads to the panel and back).
+    /// The form keeps its provenance from the first service.
     pub(crate) fn cloud_add_node_to_form(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some((_, service)) = self.connection.cloud.services.get(index) else {
             return;
         };
+        // A different warehouse is different data: joining it to
+        // this connection would be wrong, not a preference.
+        if service.warehouse_id.is_none() || service.warehouse_id != self.form_warehouse_id() {
+            self.flash_warning(
+                "Different warehouse, different data: only compute sharing this \
+                 connection's warehouse can join it",
+                cx,
+            );
+            return;
+        }
         let Some(url) = service.https_url() else {
             self.flash_warning("The service reports no HTTPS endpoint", cx);
             return;
         };
         let name = service.name.clone();
         let port = service.native_secure_port();
+        let base_name = service
+            .warehouse_id
+            .as_deref()
+            .and_then(|warehouse| warehouse_name(&self.connection.cloud.services, warehouse))
+            .unwrap_or_else(|| "My Cloud Cluster".to_string());
         if self.connection.form.is_none() {
             return;
         }
@@ -792,8 +868,8 @@ impl Workspace {
             }
             None => return,
         };
-        // Two nodes make it a cluster, not one service: swap a
-        // still-default name for the next free "My Cluster" one.
+        // More than one compute makes it the warehouse, not one
+        // service: swap a still-default name for the warehouse's.
         // A name the user typed themselves is left alone.
         if node_count > 1 {
             let current = name_input.read(cx).text();
@@ -805,11 +881,11 @@ impl Workspace {
                     .iter()
                     .map(|connection| connection.name.clone())
                     .collect();
-                let mut cluster_name = "My Cloud Cluster".to_string();
+                let mut cluster_name = base_name.clone();
                 let mut counter = 1;
                 while taken.contains(&cluster_name) {
                     counter += 1;
-                    cluster_name = format!("My Cloud Cluster {counter}");
+                    cluster_name = format!("{base_name} {counter}");
                 }
                 name_input.update(cx, |input, cx| input.set_text(cluster_name, cx));
             }
@@ -970,6 +1046,8 @@ impl Workspace {
             endpoints: Vec::new(),
             provider: String::new(),
             region: String::new(),
+            warehouse_id: None,
+            is_primary: false,
         };
         if service.is_asleep() {
             Some("idle")
@@ -999,6 +1077,34 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
+        let form_warehouse = self.form_warehouse_id();
+        // Warehouse-mates (sorted together by the refresh) group
+        // under one header; the header slot is per row so headers
+        // interleave with the rows below.
+        let services = &self.connection.cloud.services;
+        let headers: Vec<Option<String>> = services
+            .iter()
+            .enumerate()
+            .map(|(index, (org_id, service))| {
+                let warehouse = service.warehouse_id.as_deref()?;
+                if warehouse_size(services, warehouse) < 2 {
+                    return None;
+                }
+                let first = index == 0
+                    || services[index - 1].0 != *org_id
+                    || services[index - 1].1.warehouse_id.as_deref() != Some(warehouse);
+                first.then(|| warehouse_name(services, warehouse)).flatten()
+            })
+            .collect();
+        let grouped: Vec<bool> = services
+            .iter()
+            .map(|(_, service)| {
+                service
+                    .warehouse_id
+                    .as_deref()
+                    .is_some_and(|warehouse| warehouse_size(services, warehouse) > 1)
+            })
+            .collect();
         let service_rows = self
             .connection
             .cloud
@@ -1027,6 +1133,8 @@ impl Workspace {
                     theme::text_dim()
                 };
                 let keyed = self.connection.cloud.org_has_key(&self.preferences, org_id);
+                let same_warehouse =
+                    service.warehouse_id.is_some() && service.warehouse_id == form_warehouse;
                 let org_id = org_id.clone();
                 let service_id = service.id.clone();
                 let asleep = service.is_asleep();
@@ -1037,6 +1145,7 @@ impl Workspace {
                     .gap_2()
                     .px_2()
                     .py_1()
+                    .when(grouped[index], |row| row.pl_4())
                     .rounded(px(3.))
                     .hover(|row| row.bg(theme::bg_sidebar()))
                     .child(div().size(px(7.)).rounded_full().bg(state_color))
@@ -1134,6 +1243,28 @@ impl Workspace {
                             .text_color(theme::text_dim())
                             .child("Added")
                             .into_any_element()
+                    } else if form_open && !same_warehouse {
+                        // Different warehouse, different data: this
+                        // compute cannot join the form's connection.
+                        div()
+                            .id(("cloud-add-foreign", index))
+                            .px_2()
+                            .py_0p5()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(theme::border())
+                            .text_xs()
+                            .text_color(theme::text_dim())
+                            .child("Add compute")
+                            .tooltip(|window, cx| {
+                                gpui_component::tooltip::Tooltip::new(
+                                    "This service belongs to a different warehouse, so it \
+                                     holds different data; only compute sharing the \
+                                     connection's warehouse can join it",
+                                )
+                                .build(window, cx)
+                            })
+                            .into_any_element()
                     } else if running {
                         div()
                             .id(("cloud-add", index))
@@ -1145,7 +1276,7 @@ impl Workspace {
                             .text_xs()
                             .text_color(theme::text())
                             .child(if form_open {
-                                "Add node"
+                                "Add compute"
                             } else {
                                 "Add connection"
                             })
@@ -1172,7 +1303,7 @@ impl Workspace {
                             .text_xs()
                             .text_color(theme::text_dim())
                             .child(if form_open {
-                                "Add node"
+                                "Add compute"
                             } else {
                                 "Add connection"
                             })
@@ -1187,6 +1318,27 @@ impl Workspace {
                     })
             })
             .collect::<Vec<_>>();
+        // Interleave warehouse headers ahead of their (indented)
+        // member rows.
+        let service_rows: Vec<gpui::AnyElement> = headers
+            .into_iter()
+            .zip(service_rows)
+            .flat_map(|(header, row)| {
+                let mut out: Vec<gpui::AnyElement> = Vec::new();
+                if let Some(label) = header {
+                    out.push(
+                        div()
+                            .pt_1()
+                            .text_xs()
+                            .text_color(theme::text_dim())
+                            .child(format!("WAREHOUSE \u{b7} {label}"))
+                            .into_any_element(),
+                    );
+                }
+                out.push(row.into_any_element());
+                out
+            })
+            .collect();
         let mut org_names: Vec<String> = orgs.iter().map(|org| org.name.clone()).collect();
         for org in &self.connection.cloud.oauth_orgs {
             if !orgs.iter().any(|keyed| keyed.id == org.id) {
@@ -1640,5 +1792,53 @@ impl Workspace {
                 ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn service(name: &str, warehouse: Option<&str>, primary: bool) -> (String, CloudService) {
+        (
+            "org".into(),
+            CloudService {
+                id: name.into(),
+                name: name.into(),
+                state: "running".into(),
+                endpoints: Vec::new(),
+                provider: String::new(),
+                region: String::new(),
+                warehouse_id: warehouse.map(str::to_string),
+                is_primary: primary,
+            },
+        )
+    }
+
+    #[test]
+    fn warehouse_named_after_its_primary() {
+        let services = vec![
+            service("Side Compute", Some("wh-1"), false),
+            service("My Second Service", Some("wh-1"), true),
+            service("Elsewhere", Some("wh-2"), true),
+        ];
+        assert_eq!(
+            warehouse_name(&services, "wh-1").as_deref(),
+            Some("My Second Service warehouse")
+        );
+        assert_eq!(warehouse_size(&services, "wh-1"), 2);
+        assert_eq!(warehouse_size(&services, "wh-2"), 1);
+        assert_eq!(warehouse_name(&services, "wh-none"), None);
+    }
+
+    #[test]
+    fn region_flags_cover_the_known_schemes() {
+        assert_eq!(region_flag("eu-west-2"), Some("\u{1f1ec}\u{1f1e7}"));
+        assert_eq!(region_flag("europe-west4"), Some("\u{1f1f3}\u{1f1f1}"));
+        assert_eq!(
+            region_flag("germanywestcentral"),
+            Some("\u{1f1e9}\u{1f1ea}")
+        );
+        assert_eq!(region_flag("mars-central-1"), None);
     }
 }

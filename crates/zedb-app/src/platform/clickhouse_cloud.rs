@@ -43,6 +43,13 @@ pub struct CloudService {
     pub provider: String,
     #[serde(default)]
     pub region: String,
+    /// The warehouse (shared object store + catalog) this service's
+    /// compute is attached to. Services sharing it see the same data.
+    #[serde(default, rename = "dataWarehouseId")]
+    pub warehouse_id: Option<String>,
+    /// The warehouse's original service; its name names the warehouse.
+    #[serde(default, rename = "isPrimary")]
+    pub is_primary: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -278,6 +285,20 @@ mod tests {
             service.https_url().as_deref(),
             Some("https://x.clickhouse.cloud:8443")
         );
+    }
+
+    #[test]
+    fn parses_warehouse_fields() {
+        let raw = r#"{"result": [
+            {"id": "a", "name": "svc", "state": "running",
+             "dataWarehouseId": "wh-1", "isPrimary": true},
+            {"id": "b", "name": "side", "state": "running",
+             "dataWarehouseId": "wh-1"}
+        ]}"#;
+        let services: Envelope<Vec<CloudService>> = serde_json::from_str(raw).unwrap();
+        assert_eq!(services.result[0].warehouse_id.as_deref(), Some("wh-1"));
+        assert!(services.result[0].is_primary);
+        assert!(!services.result[1].is_primary);
     }
 
     #[test]

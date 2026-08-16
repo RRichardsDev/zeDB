@@ -67,6 +67,14 @@ partial numbers.
 
 ## Increment 6: warehouses are shared data, compute is compute
 
+Status: BUILT (2026-08-16). The ON CLUSTER rule landed as prevention
+rather than a lint: the node selector never offers a cluster on Cloud
+connections, `set_apply_cluster` refuses with the reason, and fleet
+execution forces the no-cluster path, whose `decluster` strips every
+ON CLUSTER clause (hardcoded ones included) before SQL reaches the
+server. The connection default name is the warehouse name when the
+service shares one.
+
 The 10.5a add-node flow lets one connection hold several Cloud
 services. In ClickHouse Cloud's model those services are compute
 pools attached to a warehouse (one object store, one shared catalog);

@@ -125,12 +125,13 @@ impl Workspace {
                                         .flex()
                                         .items_center()
                                         .justify_between()
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme::text_dim())
-                                                .child("CLUSTER NODES"),
-                                        )
+                                        .child(div().text_xs().text_color(theme::text_dim()).child(
+                                            if cloud_locked {
+                                                "COMPUTE"
+                                            } else {
+                                                "CLUSTER NODES"
+                                            },
+                                        ))
                                         .child(if cloud_locked {
                                             // Cloud nodes come from the
                                             // control plane: pick the
@@ -144,14 +145,15 @@ impl Workspace {
                                                 .rounded(px(3.))
                                                 .border_1()
                                                 .border_color(theme::border())
-                                                .child("+ Add node")
+                                                .child("+ Add compute")
                                                 .hover(|button| {
                                                     button.bg(theme::bg_sidebar()).cursor_pointer()
                                                 })
                                                 .tooltip(|window, cx| {
                                                     gpui_component::tooltip::Tooltip::new(
-                                                        "Pick another Cloud service to add as a \
-                                                         node of this connection",
+                                                        "Pick another compute from this \
+                                                         connection's warehouse in the Cloud \
+                                                         panel",
                                                     )
                                                     .build(window, cx)
                                                 })

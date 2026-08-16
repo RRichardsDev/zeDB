@@ -47,7 +47,13 @@ impl Workspace {
             .unwrap_or_else(|| "Select node".into());
         // Clusters the connected node belongs to. Picking one runs
         // schema-apply actions ON CLUSTER instead of just this node.
-        let clusters = self.ops_cluster_options();
+        // Never offered on Cloud: a warehouse shares one catalog, so
+        // DDL runs once and ON CLUSTER has nothing to add.
+        let clusters = if connection.cloud.is_some() {
+            Vec::new()
+        } else {
+            self.ops_cluster_options()
+        };
         let apply_cluster = connected.apply_cluster.clone();
         // In cluster scope the label reads the cluster, not the node.
         let label = match &apply_cluster {

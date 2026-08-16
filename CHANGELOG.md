@@ -9,6 +9,13 @@ GitHub release notes.
 
 ## Unreleased
 
+- zeDB now understands ClickHouse Cloud warehouses: the panel groups
+  compute under its warehouse, a connection built from one calls its
+  members compute (not nodes) and defaults to the warehouse's name,
+  only compute sharing the warehouse can join a connection (different
+  warehouse means different data), the sidebar says "N compute,
+  shared data", and ON CLUSTER can never reach a Cloud service: the
+  warehouse shares one catalog, so schema changes run once.
 - Sign in with ClickHouse Cloud from the Cloud panel: approve a code
   in the browser and every organization you belong to lists its
   services with live state, no API key needed. The sign-in is

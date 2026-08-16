@@ -62,8 +62,15 @@ impl Workspace {
         };
         // The ${cluster} for fleet operations comes from the top
         // toolbar's node/cluster selector (apply_cluster), the single
-        // cluster choice in the app.
-        let cluster = connected.apply_cluster.clone();
+        // cluster choice in the app. On Cloud it is forced off: the
+        // warehouse shares one catalog and the runner's no-cluster
+        // path strips every ON CLUSTER clause before it can reach
+        // the server.
+        let cluster = if self.active_connection_is_cloud() {
+            None
+        } else {
+            connected.apply_cluster.clone()
+        };
         let config = connected.client_config.clone();
         self.fleet.action_running = true;
         self.fleet.action_result = None;

@@ -92,6 +92,16 @@ impl Workspace {
     /// Set (or clear) the cluster the schema-apply actions target with
     /// `ON CLUSTER`. Chosen from the node selector.
     pub(crate) fn set_apply_cluster(&mut self, cluster: Option<String>, cx: &mut Context<Self>) {
+        // Cloud warehouses share one catalog: DDL runs once and is
+        // true for every compute, so ON CLUSTER never applies there.
+        // The selector hides the option; this guards every other path.
+        if cluster.is_some() && self.active_connection_is_cloud() {
+            self.flash_notice(
+                "Cloud services share one catalog; schema changes run once without ON CLUSTER",
+                cx,
+            );
+            return;
+        }
         if let Some(connected) = self.connection.connected.as_mut() {
             connected.apply_cluster = cluster;
             cx.notify();
