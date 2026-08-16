@@ -1186,11 +1186,17 @@ impl Workspace {
                         .https_url()
                         .is_some_and(|url| form_endpoints.contains(&url))
                 } else {
+                    // Provenance only records a connection's first
+                    // service; every further compute lives as a node
+                    // endpoint, so both spellings count as added.
                     self.connection.connections.iter().any(|connection| {
                         connection
                             .cloud
                             .as_ref()
                             .is_some_and(|cloud| cloud.service_id == service.id)
+                            || service.https_url().is_some_and(|url| {
+                                connection.nodes.iter().any(|node| node.endpoint == url)
+                            })
                     })
                 };
                 let state_color = if service.is_running() {
