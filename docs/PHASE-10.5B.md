@@ -65,6 +65,36 @@ partial numbers.
 - KILL QUERY on a Cloud read-only connection explains the Cloud
   posture instead of the generic read-only message.
 
+## Increment 6: warehouses are shared data, compute is compute
+
+The 10.5a add-node flow lets one connection hold several Cloud
+services. In ClickHouse Cloud's model those services are compute
+pools attached to a warehouse (one object store, one shared catalog);
+"node" vocabulary and self-hosted cluster assumptions mislead there.
+
+- Terminology: on Cloud-linked connections the form section, node
+  selector, and add button say COMPUTE / "+ Add compute" instead of
+  node language. Self-hosted connections keep "nodes"; the word is
+  accurate there.
+- The Cloud panel groups services by warehouse (`dataWarehouseId`
+  from the service metadata): a warehouse header naming the shared
+  dataset, its services beneath as compute with size and state.
+  Single-service warehouses render as today. The sidebar row for a
+  multi-compute connection hints "N compute \u{b7} shared data"
+  instead of implying a classic cluster.
+- Same-warehouse guard: add-compute only offers services from the
+  same warehouse as the form's first service. Services from another
+  warehouse render disabled with the reason: different warehouse,
+  different data; mixing them in one connection would be wrong, not
+  a preference.
+- Never ON CLUSTER on Cloud: fleet apply/replay/regen and every
+  advisor-generated DDL must not emit `ON CLUSTER` against a
+  Cloud-linked connection. DDL runs once on a read-write service and
+  the shared catalog makes it true for every compute in the
+  warehouse (ClickHouse's own guidance). A lint in the migration
+  author/verify path flags `ON CLUSTER` in migrations targeted at a
+  Cloud fleet.
+
 ## Acceptance
 
 - On a multi-replica Cloud service: ops cluster scope works, the
@@ -75,6 +105,10 @@ partial numbers.
   `SharedMergeTree`, both directions.
 - Deleting a linked service in the Cloud console produces a marked-dead
   connection with a clear message on next refresh.
+- A two-compute warehouse connection says compute, groups under its
+  warehouse in the panel, refuses a service from another warehouse,
+  and a migration containing ON CLUSTER is flagged before it reaches
+  a Cloud fleet.
 - All existing self-hosted behaviour is unchanged (the `default`
   filter's single-node intent is preserved by the shape check).
 
