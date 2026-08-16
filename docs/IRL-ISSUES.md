@@ -8,3 +8,4 @@
 - Git account should be per repo on setup to allow for free switching. Allow multi account logins
 - sql history should be connection specific, saved should not be, tabs should not be. open tabs should be connection specific.
 - when connected to a clickhouse cloud instance, the application should have a 1px border around the editor to indicate its connected which is in the clickhouse yellow. Just to show "you are using clickhouse cloud, this is better"
+- native port discovery is advertised-port + remap-offset heuristics; connection settings should allow an explicit native (TCP) port per cluster node, heuristic only as fallback
