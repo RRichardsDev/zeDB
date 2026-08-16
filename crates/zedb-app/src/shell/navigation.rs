@@ -207,54 +207,6 @@ impl Workspace {
                                     .gap_1()
                                     .child(
                                         div()
-                                            .id("link-cloud")
-                                            .px_2()
-                                            .py_1()
-                                            .rounded(px(3.))
-                                            .text_xs()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            // The ClickHouse mark says
-                                            // whose, the cloud shape says
-                                            // what; no word needed.
-                                            .child(
-                                                svg()
-                                                    .path("icons/clickhouse.svg")
-                                                    .size(px(11.))
-                                                    .text_color(rgb(0xFFCC01)),
-                                            )
-                                            .child(
-                                                svg()
-                                                    .path("icons/cloud.svg")
-                                                    .size(px(13.))
-                                                    .text_color(theme::text_dim()),
-                                            )
-                                            .when(self.connection.cloud.open, |button| {
-                                                button.bg(theme::hover())
-                                            })
-                                            .hover(|button| {
-                                                button
-                                                    .bg(theme::hover())
-                                                    .text_color(theme::text())
-                                                    .cursor_pointer()
-                                            })
-                                            .tooltip(|window, cx| {
-                                                gpui_component::tooltip::Tooltip::new(
-                                                    "Link ClickHouse Cloud services",
-                                                )
-                                                .build(window, cx)
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                if this.connection.cloud.open {
-                                                    this.cloud_close(cx)
-                                                } else {
-                                                    this.cloud_open(cx)
-                                                }
-                                            })),
-                                    )
-                                    .child(
-                                        div()
                                             .id("add-connection")
                                             .rounded(px(3.))
                                             .text_color(theme::text())
