@@ -1050,3 +1050,37 @@ shared tokio mutex, serializing them within the binary. Twelve consecutive
 parallel-suite runs passed with the mutex where roughly one in three
 struck without it. The instrumentation stays, gated behind
 `ZEDB_TRACKING_DEBUG`, so the next hunt starts warm.
+
+## Phase 10.1: the measured polling-versus-stream cost (2026-08-16)
+
+The controlled comparison the spike required, run against the 26.6 compose
+stack on `explain.tail_spike` (a clone of `explain.tail_demo`, dropped
+afterwards). Load: 200 rows inserted over 20 seconds; each transport tagged
+with `log_comment` and read back from `system.query_log`.
+
+With single-row inserts (200 parts, the worst case for a per-block scan):
+
+| Transport | Queries | Rows read | Bytes | CPU | Median latency | p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| HTTP poll, 1500 ms | 16 | 4,209 | 33 KiB | 0.066 s | 0.783 s | 1.461 s |
+| Native poll, 400 ms | 56 | 13,958 | 109 KiB | 0.208 s | 0.228 s | 0.417 s |
+| One `STREAM CURSOR` | 1 | 137,685 | 2.10 MiB | 0.744 s | 0.002 s | 0.004 s |
+
+With the same 200 rows as 10-row batches once per second, the stream read
+14,145 rows at 0.209 s CPU: within a rounding error of fast polling's
+server work, at ~100x better latency. Delivery was 200/200 exactly-once in
+every run; polling delivered the same rows without duplicates at its
+cadence-bounded lag.
+
+So the honest reading of the cost gate: `STREAM` does hide a per-block
+re-scan inside the server, and under row-at-a-time ingestion it costs
+roughly 3.5x fast polling's CPU. Under batched ingestion it matches
+polling's cost while beating its latency by two orders of magnitude. It is
+one long-lived query either way, with bounded memory (1.19 MiB peak against
+polling's 7-9 MiB).
+
+One more incidental finding: a stream whose client dies without a proper
+cancel is not reaped by the server; the orphaned query survived 40+ seconds
+until an explicit `KILL QUERY`. The owned-socket cancel path (and its
+2-second `system.processes` integration test) is therefore load-bearing,
+not belt-and-braces.
