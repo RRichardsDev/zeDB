@@ -229,6 +229,8 @@ pub struct CostRecord {
     pub entity_name: String,
     #[serde(default, rename = "serviceId")]
     pub service_id: Option<String>,
+    #[serde(default, rename = "dataWarehouseId")]
+    pub warehouse_id: Option<String>,
     #[serde(default, rename = "totalCHC")]
     pub total: f64,
     #[serde(default)]

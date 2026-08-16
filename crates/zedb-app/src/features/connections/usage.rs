@@ -386,30 +386,19 @@ impl Workspace {
                 .child("No cost data (the credential may lack billing scope).")
                 .into_any_element();
         };
-        // One bar per day, org-wide; the section below breaks the same
-        // window down by category and by billed entity.
-        let mut days: Vec<(String, f64)> = Vec::new();
-        let mut categories = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
-        let mut entities: Vec<(String, f64)> = Vec::new();
-        for record in &cost.costs {
-            match days.iter_mut().find(|(date, _)| *date == record.date) {
-                Some((_, total)) => *total += record.total,
-                None => days.push((record.date.clone(), record.total)),
-            }
-            categories.0 += record.metrics.compute;
-            categories.1 += record.metrics.storage;
-            categories.2 += record.metrics.backup;
-            categories.3 += record.metrics.data_transfer + record.metrics.public_data_transfer;
-            match entities
-                .iter_mut()
-                .find(|(name, _)| *name == record.entity_name)
-            {
-                Some((_, total)) => *total += record.total,
-                None => entities.push((record.entity_name.clone(), record.total)),
-            }
-        }
-        // This warehouse's share of the same window, by service id.
-        let warehouse_total: f64 = cost
+        // Everything on this tab is scoped to the connection's
+        // warehouse (the console's warehouse row): records match by
+        // service id or by the warehouse's own id (warehouse-level
+        // entities carry no service id). Other services in the org
+        // stay out of the bars and the entity list; the organization
+        // total survives only as the headline's second number.
+        let warehouse = self
+            .connection
+            .usage
+            .services
+            .iter()
+            .find_map(|service| service.warehouse_id.clone());
+        let scoped: Vec<&clickhouse_cloud::CostRecord> = cost
             .costs
             .iter()
             .filter(|record| {
@@ -419,10 +408,31 @@ impl Workspace {
                         .services
                         .iter()
                         .any(|service| service.id == id)
-                })
+                }) || (record.warehouse_id.is_some() && record.warehouse_id == warehouse)
             })
-            .map(|record| record.total)
-            .sum();
+            .collect();
+        let mut days: Vec<(String, f64)> = Vec::new();
+        let mut categories = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        let mut entities: Vec<(String, f64)> = Vec::new();
+        let mut warehouse_total = 0.0f64;
+        for record in &scoped {
+            match days.iter_mut().find(|(date, _)| *date == record.date) {
+                Some((_, total)) => *total += record.total,
+                None => days.push((record.date.clone(), record.total)),
+            }
+            categories.0 += record.metrics.compute;
+            categories.1 += record.metrics.storage;
+            categories.2 += record.metrics.backup;
+            categories.3 += record.metrics.data_transfer + record.metrics.public_data_transfer;
+            warehouse_total += record.total;
+            match entities
+                .iter_mut()
+                .find(|(name, _)| *name == record.entity_name)
+            {
+                Some((_, total)) => *total += record.total,
+                None => entities.push((record.entity_name.clone(), record.total)),
+            }
+        }
         days.sort_by(|a, b| a.0.cmp(&b.0));
         entities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         let peak = days
