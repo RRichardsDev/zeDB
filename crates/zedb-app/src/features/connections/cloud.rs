@@ -1053,7 +1053,10 @@ impl Workspace {
             .child(
                 div().flex().justify_center().w_full().child(
                     div()
-                        .w(px(520.))
+                        // Same width as the Preferences page, so the
+                        // identity rows line up between the two.
+                        .w(px(680.))
+                        .max_w_full()
                         .flex()
                         .flex_col()
                         .gap_4()
@@ -1090,7 +1093,7 @@ impl Workspace {
                         // under its identity row.
                         .child(
                             div()
-                                .pb_3()
+                                .py_3()
                                 .border_b_1()
                                 .border_color(theme::border())
                                 .child(match (&authorizing, signed_in) {
@@ -1173,14 +1176,33 @@ impl Workspace {
                                             .flex()
                                             .items_center()
                                             .gap_3()
-                                            .when_some(avatar, |row, avatar| {
-                                                row.child(
-                                                    gpui::img(gpui::ImageSource::Resource(
+                                            // The avatar slot is always
+                                            // 36px so the row does not
+                                            // shift when the picture
+                                            // finishes loading.
+                                            .child(match avatar {
+                                                Some(avatar) => gpui::img(
+                                                    gpui::ImageSource::Resource(
                                                         gpui::Resource::Path(avatar.into()),
-                                                    ))
-                                                    .size(px(36.))
-                                                    .rounded_full(),
+                                                    ),
                                                 )
+                                                .size(px(36.))
+                                                .rounded_full()
+                                                .into_any_element(),
+                                                None => div()
+                                                    .size(px(36.))
+                                                    .rounded_full()
+                                                    .bg(theme::bg_sidebar())
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .child(
+                                                        gpui::svg()
+                                                            .path("icons/clickhouse.svg")
+                                                            .size(px(14.))
+                                                            .text_color(theme::text_dim()),
+                                                    )
+                                                    .into_any_element(),
                                             })
                                             .child(
                                                 div()
