@@ -883,6 +883,7 @@ impl Workspace {
                 let org_id = org_id.clone();
                 let service_id = service.id.clone();
                 let asleep = service.is_asleep();
+                let running = service.is_running();
                 div()
                     .flex()
                     .items_center()
@@ -986,7 +987,7 @@ impl Workspace {
                             .text_color(theme::text_dim())
                             .child("Added")
                             .into_any_element()
-                    } else {
+                    } else if running {
                         div()
                             .id(("cloud-add", index))
                             .px_2()
@@ -1003,6 +1004,28 @@ impl Workspace {
                                     this.cloud_add_service(index, cx)
                                 }),
                             )
+                            .into_any_element()
+                    } else {
+                        // Adding wants the probe (and the password
+                        // check) to hit a live service: start it
+                        // first.
+                        div()
+                            .id(("cloud-add-disabled", index))
+                            .px_2()
+                            .py_0p5()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(theme::border())
+                            .text_xs()
+                            .text_color(theme::text_dim())
+                            .child("Add connection")
+                            .tooltip(|window, cx| {
+                                gpui_component::tooltip::Tooltip::new(
+                                    "Start the service first; connections are added to a \
+                                     running service",
+                                )
+                                .build(window, cx)
+                            })
                             .into_any_element()
                     })
             })
