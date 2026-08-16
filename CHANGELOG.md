@@ -9,6 +9,8 @@ GitHub release notes.
 
 ## Unreleased
 
+- The Cloud button in the connections header wears the ClickHouse mark
+  in brand yellow.
 - Connection settings can declare an explicit native (TCP) port per
   cluster node. An explicit port is tried first; discovery (advertised
   port, then the HTTP remap offset) remains the fallback, and the

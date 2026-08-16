@@ -205,6 +205,18 @@ impl Workspace {
                                             .py_1()
                                             .rounded(px(3.))
                                             .text_xs()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            // The ClickHouse mark, in its own
+                                            // brand yellow, names whose cloud
+                                            // this is.
+                                            .child(
+                                                svg()
+                                                    .path("icons/clickhouse.svg")
+                                                    .size(px(11.))
+                                                    .text_color(rgb(0xFFCC01)),
+                                            )
                                             .child("Cloud")
                                             .when(self.connection.cloud.open, |button| {
                                                 button.bg(theme::hover())
