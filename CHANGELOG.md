@@ -7,194 +7,115 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.30 - 2026-08-16
 
-- Verify-all now also runs the chain checks in the background, with
-  no window: the check-chain icon spins while they run, turns green
-  on a pass or red on a failure, and clicking it opens the details.
-  Clicking the icon during a silent run shows the live progress
-  instead of restarting; Close hides the window without stopping a
-  run. Concurrent harness downloads (checks plus verify at once) are
-  serialized so they cannot corrupt the cache.
-- The in-app agent gains two read-only tools and a pointer:
-  `check_chain` runs the sql/equivalence/lifecycle checks,
-  `regen_preview` shows what Regen would write without writing, and
-  `highlight_control` flashes a purple border on a fleet control for
-  a few seconds so the agent can point at buttons it deliberately
-  cannot press (the lock, Upgrade all, rollback). Server writes stay
-  unreachable; the contract is written down in docs/ACP-STANDARDS.md.
-  The primer's etiquette: diagnose and explain a failure first, then
-  offer the choice between highlighting the control for the user or
-  fixing repo files itself; highlighting is never a reflex.
-- A failed chain check turns the regen icon yellow with "Chain check
-  failed. Please regen.", pointing at the most common cause (stale
-  current-state) and its fix in one glance.
-- One cluster selector instead of two: the fleet's inline "cluster:"
-  chip is gone, and fleet operations take their ON CLUSTER choice
-  from the top toolbar's node selector (the same place schema apply
-  already did).
-- The fleet toolbar's "Upgrade all" button only appears while
-  something is actually pending; a fully applied fleet shows a green
-  "Up to date" tick instead.
-- Cloning a repository you just created no longer fails on the
-  host's provisioning lag: not-found clones retry with exponential
-  backoff for up to ten seconds before the error is believed.
-- Repos opened through the picker's git route now clone over HTTPS
-  with credentials answered from the Keychain (the elevated token
-  from the picker's approval is kept, per host), so cloning and
-  pushing no longer depend on the machine's SSH keys and switching
-  git accounts stops being an SSH puzzle. Typed git@ URLs keep using
-  your own git and keys. Brokered runs also clear git's configured
-  credential helpers (macOS ships osxkeychain), which otherwise
-  answered with whatever account they stored last and caused
-  not-found failures on private repos of the right account.
-- Clone failures read like sentences now: git's remote banner noise
-  is boiled down to the actual error line, and a not-found or
-  permission failure explains that zeDB clones with your own git over
-  SSH and points at the SSH key.
-- Opening a migration repo grew a real picker: with no path set, the
-  folder button offers "Local folder" (the native directory dialog)
-  or, when signed in to GitHub/GitLab, your repositories (elevated
-  access approved via the usual device code, held only for the
-  picker) plus creating a new private repo. An empty directory now
-  asks "create a new migration repo here?" instead of silently
-  initializing (except a repo you just created to be one), and a
-  non-empty non-repo directory explains itself: pick a migration repo
-  checkout or an empty folder.
-- Connecting to a cluster preloads the fleet in the background: the
-  connection's repo opens, status refreshes, and Verify-all plus the
-  silent chain checks run off the main thread, so the fleet tab
-  already has its verdicts (or honest loading states) when opened.
-- The migration repo now follows the connection: each connection
-  remembers its own repo, switching connections swaps to it (or to
-  none), and one cluster's chain never silently attaches to another.
-  Opening a repo while connected records the pairing.
-- Switching connections now keeps you on the view you were using,
-  with its data following the connection: the ops view restarts its
-  polling against the new cluster, and the fleet matrix drops the
-  previous cluster's rows, drift, and any half-configured action and
-  refetches in place. Only a first connect lands in the query view,
-  and an open table inspector closes since its object belonged to the
-  previous cluster.
-- Fixed empty databases being invisible in the schema sidebar: the
-  schema cache was built purely from `system.tables`, so a freshly
-  created database (or a brand-new service where every database is
-  empty) showed nothing until its first table. The cache now carries
-  the database list alongside the tables.
-- Fleet works against ClickHouse Cloud services: a missing tracking
-  database now reads as "nothing applied yet" instead of erroring the
-  matrix (code 81 on a fresh service), and migration checks no longer
-  fail on Cloud-pinned versions with no OSS release asset; the
-  closest published release stands in for replay (same major.minor
-  first, else the nearest newer, else the newest older), remembered
-  beside the binary cache.
-- Chain checks no longer require the migration chain to create its
-  own `${db}` database: the equivalence and lifecycle harnesses now
-  provision the database up front, the way a real fleet's bootstrap
-  does, so chains that only create tables check clean. Chains whose
-  baseline does create the database are unaffected.
-- Drift verification no longer flags ClickHouse Cloud's automatic
-  engine rewrites: `SharedMergeTree` and friends normalize to their
-  plain MergeTree family before comparing, the same way `Replicated*`
-  engines already did, so a chain that says `MergeTree` verifies
-  clean against a Cloud service.
-- Verify (single database and whole fleet) now fetches its ClickHouse
-  harness itself, with the same closest-release fallback as Check,
-  instead of failing with "not cached; run `zedb pin` first" on a
-  machine that never ran the CLI. The Verify-all button shows its
-  state throughout: download percentage over a green fill, a lock
-  that blinks open and shut while macOS verifies the fresh binary,
-  and a spinning hourglass (with N/M done in the tooltip) while
-  databases are diffed. Once every database verifies clean, the
-  verify icon turns green until a row goes unverified again. Chain
-  checks behave the same way: a full pass (sql, equivalence,
-  lifecycle) closes the checks window on its own, flashes a notice,
-  and turns the check-chain icon green until the chain, current-state,
-  or repo changes. Regen gets the same treatment with a third state:
-  no churn closes the window and turns the regen icon green, while
-  drift between current-state and the chain leaves the churn preview
-  open and turns the icon yellow until the write (or a re-check).
-- The authoring overlay's Check button now shows what it is doing
-  when the ClickHouse harness has to be fetched first: the label
-  shows the download percentage while the button's background fills
-  green with the actual progress, and the tooltip carries the byte count. When the
-  download is done but macOS is still verifying the fresh binary
-  (that long first-run pause), the button says "Verifying" with a
-  lock icon that blinks open and shut instead of looking stuck, and a
-  spinning hourglass marks the Checking state.
-- The agent's fleet tools (fleet_status, list_migrations, dry_run,
-  drift) now follow the app live: a migration repo attached, switched,
-  or grown after the agent thread started is picked up on the next
-  tool call instead of staying frozen at what was open when the
-  session began.
-- Fixed the agent pane's zedb tools (mcp__zedb__*) silently missing
-  from sessions: the MCP server's delete-on-read credentials file
-  died when the agent runtime respawned the server. Config now
-  travels in the server's environment (same-user visibility, nothing
-  persisted on disk) and survives respawns.
-- The agent primer now carries a hard rule: anything about this app's
-  connection is answered only through the zedb tools; if they are
-  missing the agent must say so and stop, never substitute another
-  configured ClickHouse MCP server that points at a different
-  cluster.
-- The agent pane's primer now tells the agent to follow the screen:
-  with the query editor open, SQL arrives via the editor
-  (propose_query), and when it is a DDL change the agent offers, in
-  words, to capture it as a migration instead of opening the
-  migration overlay unprompted.
-- Fixed the connections sidebar pushing tier and read-only badges off
-  the edge at narrow widths: long connection names now truncate and
-  the badge column holds its ground. The row also stops reserving
-  space for the hover-only badge pills, so names no longer truncate
-  early at comfortable sidebar widths; the pills overlay on hover
-  instead.
+Phase 12: zeDB learns ClickHouse Cloud end to end, the fleet view
+becomes glanceable, and the workload itself starts driving advice.
+Built and battle-tested in one sitting against a live Cloud service.
 
-- ClickHouse Cloud quick setup: link an organization by pasting a
-  Cloud API key ("Cloud" in the connections sidebar, or "Link
-  ClickHouse Cloud" in the palette). zeDB lists the org's services
-  with live state (running, idle, waking), and "Add connection" opens
-  the ordinary connection form prefilled with the service's HTTPS
-  endpoint, so only the password is left to type. Idle services can
-  be started from the panel; a failed connect on a Cloud-linked
-  connection names the real cause ("idle in ClickHouse Cloud")
-  instead of a bare timeout, and the sidebar marks idle services. The
-  API key lives in the macOS Keychain; only the org id and name are
-  saved (and sync). The sidebar's idle/waking marker sits on its own
-  line under the connection name (keeping the badge column clear) and
-  clears itself: while a service is waking, zeDB re-polls the control
-  plane until it settles. Service states are fetched at launch and on
-  window refocus, so the markers exist without ever opening the Cloud
-  panel.
-- New Workload tab on the table inspector: index and projection
-  effectiveness measured from the table's real traffic. zeDB
-  aggregates the last 7 days of `system.query_log` into query shapes,
-  EXPLAINs each shape, and shows run-weighted pruning per index, plus
-  findings in the advisor voice: skip indexes that never prune or
-  went unused (with `DROP INDEX` DDL to copy), projections that
-  served no queries, and a primary key that barely prunes the
-  workload. Nothing is applied automatically.
-- The ops view now shows cluster replication health at a glance: a
-  strip under the header stays green until a replica is readonly,
-  lagging, stuck, or off its Keeper, and the Replication tab gains a
-  Keeper Sessions section (per-node session state and uptime from
-  `system.zookeeper_connection`).
-- New Ingestion tab in the ops view answers "where did my rows go":
-  Kafka consumers with last-poll age and errors
-  (`system.kafka_consumers`), materialized views that failed during
-  insert in the last 24 hours (`system.query_views_log`), and the
-  pending async-insert queue (`system.asynchronous_inserts`). Each
-  section degrades gracefully when its system table is absent or its
-  log disabled.
-- New "Estimate query cost" command in the palette: a pre-flight
-  `EXPLAIN ESTIMATE` for the statement Run would target, shown as a
-  strip above the results with estimated rows, parts, and marks, a
-  miniature primary-key pruning bar, and a plain-language warning when
-  the scan is large or the WHERE is not covered by the primary key.
-  It never blocks running the query.
-- Fixed `PRIMARY KEY` not being split onto its own line in the schema
-  panel's engine definition, so a table with an explicit primary key now
-  reads as cleanly as one without.
-- Reworded two query-advisor messages so they no longer use an em-dash.
+### ClickHouse Cloud
+
+- Quick setup: link an organization by pasting a Cloud API key
+  ("Cloud" in the connections sidebar, or the palette). Services list
+  with live state (running, idle, waking), "Add connection" prefills
+  the ordinary form so only the password is left to type, idle
+  services start from the panel, and a failed connect names the real
+  cause ("idle in ClickHouse Cloud") instead of a bare timeout. The
+  key lives in the macOS Keychain; only org id and name persist (and
+  sync). The sidebar marks idle/waking services on their own line and
+  keeps itself current at launch, on refocus, and while waking.
+- The fleet works against Cloud services: a missing tracking database
+  reads as "nothing applied yet", Cloud-pinned versions with no OSS
+  release replay against the closest published release, chain checks
+  provision `${db}` like a real bootstrap, and Cloud's automatic
+  `Shared*MergeTree` engine rewrites no longer read as drift.
+
+### Fleet at a glance
+
+- The toolbar icons now carry verdicts: chain checks turn green on a
+  full pass (the window closes itself) or red on failure; regen goes
+  green when current-state matches the chain, yellow when it has
+  drifted (or when a chain check failed: "Chain check failed. Please
+  regen."); the verify icon turns green once every database verifies
+  clean. Verdicts decay the moment they could be stale.
+- Verify-all also runs the chain checks silently alongside; clicking
+  the spinning icon opens live progress instead of restarting.
+- "Upgrade all" only appears while something is pending; a fully
+  applied fleet shows a green "Up to date" tick.
+- Fetching the ClickHouse harness explains itself: a download
+  percentage over a green fill, a blinking lock while macOS verifies
+  the fresh binary, a spinning hourglass while work runs. Verify
+  fetches the harness itself (no more "run `zedb pin` first"), and
+  concurrent fetches can no longer corrupt the cache.
+- Connecting preloads the fleet in the background, so the tab opens
+  onto verdicts, or their honest loading states.
+
+### Migration repos and git
+
+- Opening a repo grew a real picker: a path entry with a browse
+  button, or your GitHub/GitLab repositories (device-code approval)
+  including creating a new private repo. Empty directories ask before
+  becoming a migration repo; non-repos explain what to pick instead.
+- Each connection remembers its own repo; switching connections swaps
+  chains, and one cluster's chain never silently attaches to another.
+- Repos from the picker clone over HTTPS with credentials answered
+  from the Keychain, overriding git's configured helpers, so cloning
+  and pushing stop depending on SSH keys and stored-account guesses.
+  Typed git@ URLs keep using your own git. Freshly created repos
+  survive the host's provisioning lag (retry with backoff), and clone
+  failures read as one sentence instead of a remote banner wall.
+- One cluster selector: fleet operations take their ON CLUSTER choice
+  from the top toolbar's node selector; the inline chip is gone.
+
+### Queries and tables
+
+- "Estimate query cost" in the palette: a pre-flight
+  `EXPLAIN ESTIMATE` strip with estimated rows, parts, and marks, a
+  miniature pruning bar, and a plain-language warning for large or
+  unpruned scans. It never blocks running.
+- New Workload tab on the table inspector: the last 7 days of
+  `system.query_log` distilled into query shapes, each EXPLAINed, and
+  presented as run-weighted pruning per index with advisor-voice
+  findings: skip indexes that never prune or went unused (DROP DDL to
+  copy), projections serving nothing, a primary key that barely
+  prunes. Nothing applies automatically.
+
+### Ops view
+
+- A replication health strip stays green until a replica is readonly,
+  lagging, stuck, or off its Keeper; the Replication tab lists
+  per-node Keeper sessions.
+- A new Ingestion tab answers "where did my rows go": Kafka consumers
+  with last-poll age and errors, materialized views that failed
+  during insert in the last 24 hours, and the pending async-insert
+  queue; every section degrades gracefully where its source is off.
+
+### Agent pane
+
+- The zedb tools survive agent-runtime respawns (config now travels
+  in the server's environment) and follow the app live: a repo
+  attached mid-session is seen on the next call.
+- Two new read-only tools, `check_chain` and `regen_preview`, plus
+  `highlight_control`, which flashes a purple border on a fleet
+  control so the agent can point at buttons it deliberately cannot
+  press. The etiquette is diagnose, explain, then offer the choice;
+  and a hard rule: the app's connection is answered only through the
+  zedb tools, never a look-alike MCP server. The whole contract lives
+  in docs/ACP-STANDARDS.md.
+- With the query editor open, agent SQL arrives via the editor; DDL
+  comes with a spoken offer to capture it as a migration instead.
+
+### Fixes and polish
+
+- Switching connections keeps your current view, with ops polling and
+  the fleet matrix following the new cluster; only a first connect
+  lands in the query view.
+- Empty databases are visible in the schema sidebar (a fresh service
+  no longer looks blank).
+- Long connection names truncate instead of pushing badges off the
+  sidebar, and rows stop reserving space for hover-only pills.
+- `PRIMARY KEY` splits onto its own line in engine definitions, and
+  two advisor messages lost their em-dashes.
 
 ## v0.1.29 - 2026-08-14
 
