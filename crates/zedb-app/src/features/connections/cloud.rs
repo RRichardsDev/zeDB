@@ -1086,75 +1086,85 @@ impl Workspace {
                                         ),
                                 ),
                         )
-                        .child(match (&authorizing, signed_in) {
-                            // Same code presentation as the forge
-                            // bootstrap: boxed characters, click to
-                            // copy again.
-                            (Some(user_code), _) => div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div()
+                        // Same separator the Preferences page draws
+                        // under its identity row.
+                        .child(
+                            div()
+                                .pb_3()
+                                .border_b_1()
+                                .border_color(theme::border())
+                                .child(match (&authorizing, signed_in) {
+                                    // Same code presentation as the forge
+                                    // bootstrap: boxed characters, click to
+                                    // copy again.
+                                    (Some(user_code), _) => div()
                                         .flex()
-                                        .items_start()
+                                        .flex_col()
                                         .gap_2()
                                         .child(
                                             div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .text_sm()
-                                                .text_color(theme::text_dim())
+                                                .flex()
+                                                .items_start()
+                                                .gap_2()
                                                 .child(
-                                                    "Approve the sign-in at \
+                                                    div()
+                                                        .flex_1()
+                                                        .min_w_0()
+                                                        .text_sm()
+                                                        .text_color(theme::text_dim())
+                                                        .child(
+                                                            "Approve the sign-in at \
                                                      auth.clickhouse.cloud (opened in your \
                                                      browser). The code is on your clipboard; \
                                                      click it to copy it again.",
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id("cloud-signin-cancel")
+                                                        .px_2()
+                                                        .py_1()
+                                                        .rounded(px(3.))
+                                                        .text_color(theme::text_dim())
+                                                        .hover(|button| {
+                                                            button
+                                                                .bg(theme::bg_sidebar())
+                                                                .text_color(theme::text())
+                                                                .cursor_pointer()
+                                                        })
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.cloud_sign_in_cancel(cx)
+                                                        }))
+                                                        .child("Cancel"),
                                                 ),
                                         )
-                                        .child(
-                                            div()
-                                                .id("cloud-signin-cancel")
-                                                .px_2()
-                                                .py_1()
-                                                .rounded(px(3.))
-                                                .text_color(theme::text_dim())
-                                                .hover(|button| {
-                                                    button
-                                                        .bg(theme::bg_sidebar())
-                                                        .text_color(theme::text())
-                                                        .cursor_pointer()
-                                                })
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.cloud_sign_in_cancel(cx)
-                                                }))
-                                                .child("Cancel"),
-                                        ),
-                                )
-                                .child(div().mt_2().child(self.device_code_boxes(
-                                    user_code.clone(),
-                                    "cloud-signin-code",
-                                    cx,
-                                )))
-                                .into_any_element(),
-                            // Same shape as the forge identity row in
-                            // Preferences: avatar, name over a marked
-                            // detail line, bordered Sign out.
-                            (None, true) => {
-                                let name = account
-                                    .as_ref()
-                                    .and_then(|account| account.name.clone())
-                                    .or_else(|| {
-                                        account.as_ref().and_then(|account| account.email.clone())
-                                    })
-                                    .unwrap_or_else(|| "Signed in".to_string());
-                                let email = account
-                                    .as_ref()
-                                    .and_then(|account| account.email.clone())
-                                    .unwrap_or_else(|| "ClickHouse Cloud".to_string());
-                                let avatar =
-                                    account.as_ref().and_then(|account| account.avatar.clone());
-                                div()
+                                        .child(div().mt_2().child(self.device_code_boxes(
+                                            user_code.clone(),
+                                            "cloud-signin-code",
+                                            cx,
+                                        )))
+                                        .into_any_element(),
+                                    // Same shape as the forge identity row in
+                                    // Preferences: avatar, name over a marked
+                                    // detail line, bordered Sign out.
+                                    (None, true) => {
+                                        let name = account
+                                            .as_ref()
+                                            .and_then(|account| account.name.clone())
+                                            .or_else(|| {
+                                                account
+                                                    .as_ref()
+                                                    .and_then(|account| account.email.clone())
+                                            })
+                                            .unwrap_or_else(|| "Signed in".to_string());
+                                        let email = account
+                                            .as_ref()
+                                            .and_then(|account| account.email.clone())
+                                            .unwrap_or_else(|| "ClickHouse Cloud".to_string());
+                                        let avatar = account
+                                            .as_ref()
+                                            .and_then(|account| account.avatar.clone());
+                                        div()
                                     .flex()
                                     .items_center()
                                     .justify_between()
@@ -1222,9 +1232,9 @@ impl Workspace {
                                             .child("Sign out"),
                                     )
                                     .into_any_element()
-                            }
-                            (None, false) => {
-                                div()
+                                    }
+                                    (None, false) => {
+                                        div()
                                     .flex()
                                     .flex_col()
                                     .gap_2()
@@ -1266,8 +1276,9 @@ impl Workspace {
                                      appear here with live state. No API key needed to look.",
                                     ))
                                     .into_any_element()
-                            }
-                        })
+                                    }
+                                }),
+                        )
                         .children(key_early)
                         .when(any_org, |panel| {
                             panel
