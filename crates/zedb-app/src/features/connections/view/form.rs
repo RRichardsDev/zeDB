@@ -10,6 +10,9 @@ impl Workspace {
             .as_ref()
             .expect("form panel requires a form");
         let endpoint_count = form.nodes.len();
+        // Values the Cloud control plane owns render locked: editing
+        // them locally would only break the service link.
+        let cloud_locked = form.cloud.is_some();
         let endpoint_rows = form
             .nodes
             .iter()
@@ -20,10 +23,18 @@ impl Workspace {
                     .items_center()
                     .gap_2()
                     .child(div().w(px(150.)).flex_none().child(node.name.clone()))
-                    .child(div().flex_1().child(node.endpoint.clone()))
+                    .child(div().flex_1().child(if cloud_locked {
+                        Self::locked_value(node.endpoint.read(cx).text()).into_any_element()
+                    } else {
+                        node.endpoint.clone().into_any_element()
+                    }))
                     // Explicit native (TCP) port; empty leaves discovery
                     // (advertised port, then the remap offset) in charge.
-                    .child(div().w(px(90.)).flex_none().child(node.native_port.clone()))
+                    .child(div().w(px(90.)).flex_none().child(if cloud_locked {
+                        Self::locked_value(node.native_port.read(cx).text()).into_any_element()
+                    } else {
+                        node.native_port.clone().into_any_element()
+                    }))
                     .when(endpoint_count > 1, |row| {
                         row.child(
                             div()
@@ -78,7 +89,12 @@ impl Workspace {
                                         .flex()
                                         .items_center()
                                         .gap_2()
-                                        .child(div().flex_1().child(form.name.clone()))
+                                        .child(div().flex_1().child(if cloud_locked {
+                                            Self::locked_value(form.name.read(cx).text())
+                                                .into_any_element()
+                                        } else {
+                                            form.name.clone().into_any_element()
+                                        }))
                                         .child(
                                             div()
                                                 .id("cycle-tier")

@@ -35,6 +35,10 @@ pub(crate) struct CloudLinkState {
     /// disjoint from, the keyed orgs in preferences).
     pub(crate) oauth_orgs: Vec<CloudOrg>,
     pub(crate) oauth_generation: u64,
+    /// Services we asked the control plane to start, with remaining
+    /// refresh polls: the plane can report `idle` for a while after
+    /// accepting the awake, so polling must outlive the state string.
+    pub(crate) waking_watch: HashMap<String, u8>,
 }
 
 impl CloudLinkState {
@@ -54,6 +58,7 @@ impl CloudLinkState {
             authorizing: None,
             oauth_orgs: Vec::new(),
             oauth_generation: 0,
+            waking_watch: HashMap::new(),
         }
     }
 
@@ -450,15 +455,69 @@ impl Workspace {
                     this.connection.cloud.account = account;
                 }
                 this.connection.cloud.error = (!errors.is_empty()).then(|| errors.join(" \u{b7} "));
+                // Services we started stay under watch until they
+                // report running (or the watch runs dry): the plane
+                // can keep saying `idle` for a while after accepting
+                // the awake, so the watch also keeps the row showing
+                // as starting instead of bouncing back to idle.
+                let fresh_states = this.connection.cloud.states.clone();
+                let mut running_now = Vec::new();
+                this.connection.cloud.waking_watch.retain(|id, polls| {
+                    if fresh_states.get(id).map(String::as_str) == Some("running") {
+                        running_now.push(id.clone());
+                        return false;
+                    }
+                    if *polls == 0 {
+                        return false;
+                    }
+                    *polls -= 1;
+                    true
+                });
+                let watched: Vec<String> =
+                    this.connection.cloud.waking_watch.keys().cloned().collect();
+                for id in watched {
+                    if let Some((_, service)) = this
+                        .connection
+                        .cloud
+                        .services
+                        .iter_mut()
+                        .find(|(_, service)| service.id == id)
+                    {
+                        if service.is_asleep() {
+                            service.state = "starting".into();
+                        }
+                    }
+                    if this
+                        .connection
+                        .cloud
+                        .states
+                        .get(&id)
+                        .is_some_and(|state| state == "idle" || state == "stopped")
+                    {
+                        this.connection.cloud.states.insert(id, "starting".into());
+                    }
+                }
+                for id in running_now {
+                    if let Some((_, service)) = this
+                        .connection
+                        .cloud
+                        .services
+                        .iter()
+                        .find(|(_, service)| service.id == id)
+                    {
+                        this.flash_notice(format!("{} is running", service.name), cx);
+                    }
+                }
                 // A waking service settles on its own schedule: keep
                 // polling until nothing is mid-transition, so the
                 // sidebar's "waking" clears itself.
-                if this
-                    .connection
-                    .cloud
-                    .services
-                    .iter()
-                    .any(|(_, service)| service.is_waking())
+                if !this.connection.cloud.waking_watch.is_empty()
+                    || this
+                        .connection
+                        .cloud
+                        .services
+                        .iter()
+                        .any(|(_, service)| service.is_waking())
                 {
                     this.cloud_schedule_refresh(cx);
                 }
@@ -517,6 +576,7 @@ impl Workspace {
             .cloud
             .states
             .insert(service_id.clone(), "starting".into());
+        let watch_id = service_id.clone();
         cx.notify();
         let task = rt::tokio().spawn(async move {
             let stored = zedb_core::secrets::get_plain(&clickhouse_cloud::keychain_key(&org_id))
@@ -541,7 +601,10 @@ impl Workspace {
             let outcome = task.await.unwrap_or_else(|_| Err("Start stopped".into()));
             this.update(cx, |this, cx| match outcome {
                 Ok(()) => {
-                    this.flash_notice("Waking the service; it can take a minute", cx);
+                    // Watch it up to running: 24 polls at the 15s
+                    // cadence is about six minutes of wake time.
+                    this.connection.cloud.waking_watch.insert(watch_id, 24);
+                    this.flash_notice("Waking the service; it can take a few minutes", cx);
                     this.cloud_refresh(cx);
                 }
                 Err(error) => this.flash_warning(format!("Could not start: {error}"), cx),
