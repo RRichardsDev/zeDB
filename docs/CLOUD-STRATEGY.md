@@ -37,8 +37,10 @@ best" is measured and finite, and most of it is listed below.
    ClickHouse set the clickhousectl audience to read-only; even key
    creation needs an existing admin key (bootstrap is console-only by
    design). Standing asks to ClickHouse: a zeDB client id, a
-   write-capable audience or a key-bootstrap-from-OAuth endpoint, and
-   JWT-mapped database users. Softener: querying an idle service
+   write-capable audience or a key-bootstrap-from-OAuth endpoint,
+   JWT-mapped database users, and warehouse names in the services
+   API (only dataWarehouseId is exposed; the console-side warehouse
+   name is unreachable). Softener: querying an idle service
    wakes it in both auth modes, so OAuth-only users wake services by
    connecting; only the explicit start command is key-gated.
 2. Control plane. The management API exposes per-service cost

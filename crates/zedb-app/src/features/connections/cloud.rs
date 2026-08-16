@@ -133,9 +133,11 @@ fn region_flag(region: &str) -> Option<&'static str> {
         .map(|(_, flag)| *flag)
 }
 
-/// The console-style display name of a warehouse: the primary
-/// service's name plus "warehouse" (the API exposes no warehouse
-/// name of its own).
+/// A best-effort display name for a warehouse: the primary service's
+/// name plus "warehouse". The console derives the real name the same
+/// way at creation but keeps it when services are later renamed; the
+/// API does not expose it (a standing ask), so this diverges after a
+/// rename and is only used as an editable default, never as truth.
 fn warehouse_name(services: &[(String, CloudService)], warehouse_id: &str) -> Option<String> {
     services
         .iter()
@@ -1093,7 +1095,15 @@ impl Workspace {
                 let first = index == 0
                     || services[index - 1].0 != *org_id
                     || services[index - 1].1.warehouse_id.as_deref() != Some(warehouse);
-                first.then(|| warehouse_name(services, warehouse)).flatten()
+                // The API exposes no warehouse name (console-only),
+                // so the header states the relationship instead of
+                // guessing a name from a renamable service.
+                first.then(|| {
+                    format!(
+                        "{} COMPUTE \u{b7} SHARED DATA",
+                        warehouse_size(services, warehouse)
+                    )
+                })
             })
             .collect();
         let grouped: Vec<bool> = services
