@@ -8,6 +8,17 @@ pub(crate) fn init(cx: &mut App) {
 
 impl Global for GlobalState {}
 
+/// zeDB patch: whether a text-selection drag is in progress right now.
+/// Hosts embedding selectable [`crate::text::TextView`]s need this to
+/// pause behaviours that fight a drag (stick-to-bottom autoscroll) and
+/// to drive edge autoscroll while selecting. See docs/VENDOR-PATCHES.md.
+pub fn is_text_selecting(cx: &App) -> bool {
+    GlobalState::global(cx)
+        .text_selection()
+        .map(|sel| sel.selecting)
+        .unwrap_or(false)
+}
+
 /// zeDB patch: a text selection that can span several sibling selectable
 /// [`TextView`]s (e.g. the messages of an agent transcript). Both points
 /// are in window coordinates so every view can hit-test its own

@@ -308,9 +308,13 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_2();
+        // One interaction model: drag selects, the wheel scrolls, and a
+        // drag near the edges autoscrolls while selecting. While a
+        // selection drag is live the transcript never jumps on its own.
+        let selecting = gpui_component::is_text_selecting(cx);
         if let Some(thread) = self.agent.thread.as_ref() {
             transcript = transcript.track_scroll(&thread.scroll);
-            if thread.stick_to_bottom {
+            if thread.stick_to_bottom && !selecting {
                 thread.scroll.scroll_to_bottom();
             }
             let scroll = thread.scroll.clone();
@@ -336,6 +340,36 @@ impl Workspace {
                     cx.notify();
                 },
             ));
+            if selecting {
+                // Selecting past the viewport edge scrolls the
+                // transcript along, like the query editor: each move
+                // event near an edge nudges the offset toward it.
+                transcript = transcript.on_mouse_move(cx.listener(
+                    move |this, event: &gpui::MouseMoveEvent, _, cx| {
+                        if !event.dragging() || !gpui_component::is_text_selecting(cx) {
+                            return;
+                        }
+                        let Some(thread) = this.agent.thread.as_mut() else {
+                            return;
+                        };
+                        let bounds = thread.scroll.bounds();
+                        let margin = gpui::px(28.);
+                        let step = gpui::px(14.);
+                        let mut offset = thread.scroll.offset();
+                        if event.position.y < bounds.top() + margin {
+                            thread.stick_to_bottom = false;
+                            offset.y = (offset.y + step).min(gpui::px(0.));
+                        } else if event.position.y > bounds.bottom() - margin {
+                            let max = thread.scroll.max_offset().height;
+                            offset.y = (offset.y - step).max(-max);
+                        } else {
+                            return;
+                        }
+                        thread.scroll.set_offset(offset);
+                        cx.notify();
+                    },
+                ));
+            }
         }
         if let Some(thread) = self.agent.thread.as_ref() {
             for (index, entry) in thread.entries.iter().enumerate() {

@@ -7,6 +7,13 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Selecting text in the agent pane no longer fights scrolling: drag
+  selects, the wheel scrolls, streaming output stops yanking the view
+  to the bottom mid-selection, and dragging near the top or bottom
+  edge autoscrolls the transcript while selecting.
+
 ## v0.1.31 - 2026-08-16
 
 The ClickHouse Cloud release: sign in from the app, see your

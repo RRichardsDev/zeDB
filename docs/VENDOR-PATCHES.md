@@ -215,3 +215,13 @@ triangle (`\u{25b8}`) in `muted_foreground`, right-aligned by the
 existing `justify_between`. Affects every submenu in the app (only the
 schema table's Tail cap menu uses one today). Drop if upstream ships a
 clearer submenu indicator.
+
+## 13. Selection-drag probe (`is_text_selecting`)
+
+`src/global_state.rs` + `src/lib.rs`: the cross-view selection band
+(patch 11) is `pub(crate)`, so hosts could not tell a selection drag
+was live. `is_text_selecting(cx)` exposes exactly that one bit. The
+agent transcript uses it to pause stick-to-bottom autoscroll while
+the user selects (streaming output no longer yanks the view out from
+under a highlight) and to drive edge autoscroll during a selection
+drag. Drop together with patch 11.

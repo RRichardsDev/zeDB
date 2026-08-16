@@ -4,6 +4,8 @@ use std::ops::Deref;
 mod event;
 mod geometry;
 mod global_state;
+// zeDB patch: selection-drag probe for embedding hosts.
+pub use global_state::is_text_selecting;
 mod icon;
 mod index_path;
 #[cfg(any(feature = "inspector", debug_assertions))]

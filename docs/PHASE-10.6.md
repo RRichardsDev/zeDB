@@ -1,6 +1,9 @@
 # Phase 10.6: agent pane drag, select, scroll
 
-Status: PLANNED. From `docs/IRL-ISSUES.md`.
+Status: BUILT (2026-08-16). From `docs/IRL-ISSUES.md`. Landed as a
+vendor selection-drag probe (docs/VENDOR-PATCHES.md patch 13) plus
+transcript wiring: stick-to-bottom pauses while a selection drag is
+live, and dragging near an edge autoscrolls.
 
 Dragging in the AI chat fights text highlighting and scrolling.
 
