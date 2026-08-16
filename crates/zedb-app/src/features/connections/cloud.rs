@@ -1096,11 +1096,58 @@ impl Workspace {
                             },
                         ))
                         .child(div().text_xs().text_color(theme::text_dim()).child(
-                            "The sign-in above is read-only; an organization API key \
-                             (Cloud console \u{2192} Organization \u{2192} API keys) also lets \
-                             zeDB start idle services and provision database passwords. The \
-                             key is stored in the macOS Keychain.",
+                            "The sign-in above is read-only; an organization API key also \
+                             lets zeDB start idle services and provision database passwords. \
+                             The key is stored in the macOS Keychain.",
                         ))
+                        // Console links straight to each unkeyed org's
+                        // API-keys page: after the browser sign-in the
+                        // console session already exists, so this is
+                        // one click and a paste back.
+                        .children(
+                            self.connection
+                                .cloud
+                                .oauth_orgs
+                                .iter()
+                                .filter(|org| !orgs.iter().any(|keyed| keyed.id == org.id))
+                                .map(|org| {
+                                    let url = format!(
+                                        "https://console.clickhouse.cloud/organizations/{}/keys",
+                                        org.id
+                                    );
+                                    div()
+                                        .id(gpui::SharedString::from(format!(
+                                            "cloud-console-keys-{}",
+                                            org.id
+                                        )))
+                                        .text_xs()
+                                        .text_color(theme::accent())
+                                        .child(format!(
+                                            "Create or manage keys for {} in the console",
+                                            org.name
+                                        ))
+                                        .hover(|link| link.cursor_pointer())
+                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                            cx.open_url(&url);
+                                        }))
+                                }),
+                        )
+                        .when(self.connection.cloud.oauth_orgs.is_empty(), |panel| {
+                            panel.child(
+                                div()
+                                    .id("cloud-console-keys")
+                                    .text_xs()
+                                    .text_color(theme::accent())
+                                    .child(
+                                        "Create one in the Cloud console (Organization \
+                                         \u{2192} API keys)",
+                                    )
+                                    .hover(|link| link.cursor_pointer())
+                                    .on_click(cx.listener(|_, _, _, cx| {
+                                        cx.open_url("https://console.clickhouse.cloud");
+                                    })),
+                            )
+                        })
                         .when_some(self.connection.cloud.key_id.clone(), |panel, key_id| {
                             panel.child(Self::field("API KEY ID", key_id))
                         })
