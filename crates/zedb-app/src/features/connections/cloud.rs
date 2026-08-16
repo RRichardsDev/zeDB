@@ -761,8 +761,6 @@ impl Workspace {
     pub(crate) fn cloud_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let orgs = self.preferences.cloud_orgs.clone();
         let loading = self.connection.cloud.loading;
-        let error = self.connection.cloud.error.clone();
-        let linking = self.connection.cloud.linking;
         let service_rows =
             self.connection
                 .cloud
@@ -890,6 +888,32 @@ impl Workspace {
         let signed_in = self.connection.cloud.signed_in;
         let account = self.connection.cloud.account.clone();
         let authorizing = self.connection.cloud.authorizing.clone();
+        // Once signed in, a key is the natural next step while any
+        // visible org lacks one: the section renders right under the
+        // identity row, ahead of the service list, and sinks to the
+        // bottom once every org is keyed.
+        let unkeyed_org = self
+            .connection
+            .cloud
+            .oauth_orgs
+            .iter()
+            .any(|org| !orgs.iter().any(|keyed| keyed.id == org.id));
+        let key_next = signed_in && authorizing.is_none() && unkeyed_org;
+        let key_section = self.cloud_key_section(
+            if key_next {
+                "NEXT \u{b7} LINK AN API KEY"
+            } else if orgs.is_empty() {
+                "API KEY \u{b7} FOR WAKING AND MANAGING"
+            } else {
+                "API KEY \u{b7} ANOTHER ORGANIZATION"
+            },
+            cx,
+        );
+        let (key_early, key_late) = if key_next {
+            (Some(key_section), None)
+        } else {
+            (None, Some(key_section))
+        };
 
         div()
             .id("cloud-panel-scroll")
@@ -1034,6 +1058,7 @@ impl Workspace {
                                 ))
                                 .into_any_element(),
                         })
+                        .children(key_early)
                         .when(any_org, |panel| {
                             panel
                                 .child(
@@ -1088,99 +1113,100 @@ impl Workspace {
                                         }))
                                 }))
                         })
-                        .child(div().text_xs().text_color(theme::text_dim()).child(
-                            if orgs.is_empty() {
-                                "API KEY \u{b7} FOR WAKING AND MANAGING"
-                            } else {
-                                "API KEY \u{b7} ANOTHER ORGANIZATION"
-                            },
-                        ))
-                        .child(div().text_xs().text_color(theme::text_dim()).child(
-                            "The sign-in above is read-only; an organization API key also \
-                             lets zeDB start idle services and provision database passwords. \
-                             The key is stored in the macOS Keychain.",
-                        ))
-                        // Console links straight to each unkeyed org's
-                        // API-keys page: after the browser sign-in the
-                        // console session already exists, so this is
-                        // one click and a paste back.
-                        .children(
-                            self.connection
-                                .cloud
-                                .oauth_orgs
-                                .iter()
-                                .filter(|org| !orgs.iter().any(|keyed| keyed.id == org.id))
-                                .map(|org| {
-                                    let url = format!(
-                                        "https://console.clickhouse.cloud/organizations/{}/keys",
-                                        org.id
-                                    );
-                                    div()
-                                        .id(gpui::SharedString::from(format!(
-                                            "cloud-console-keys-{}",
-                                            org.id
-                                        )))
-                                        .text_xs()
-                                        .text_color(theme::accent())
-                                        .child(format!(
-                                            "Create or manage keys for {} in the console",
-                                            org.name
-                                        ))
-                                        .hover(|link| link.cursor_pointer())
-                                        .on_click(cx.listener(move |_, _, _, cx| {
-                                            cx.open_url(&url);
-                                        }))
-                                }),
-                        )
-                        .when(self.connection.cloud.oauth_orgs.is_empty(), |panel| {
-                            panel.child(
-                                div()
-                                    .id("cloud-console-keys")
-                                    .text_xs()
-                                    .text_color(theme::accent())
-                                    .child(
-                                        "Create one in the Cloud console (Organization \
-                                         \u{2192} API keys)",
-                                    )
-                                    .hover(|link| link.cursor_pointer())
-                                    .on_click(cx.listener(|_, _, _, cx| {
-                                        cx.open_url("https://console.clickhouse.cloud");
-                                    })),
-                            )
-                        })
-                        .when_some(self.connection.cloud.key_id.clone(), |panel, key_id| {
-                            panel.child(Self::field("API KEY ID", key_id))
-                        })
-                        .when_some(
-                            self.connection.cloud.key_secret.clone(),
-                            |panel, key_secret| {
-                                panel.child(Self::field("API KEY SECRET", key_secret))
-                            },
-                        )
-                        .when_some(error, |panel, error| {
-                            panel.child(div().text_xs().text_color(theme::danger()).child(error))
-                        })
-                        .child(
-                            div().flex().justify_end().child(
-                                div()
-                                    .id("cloud-link")
-                                    .px_3()
-                                    .py_1()
-                                    .rounded(px(3.))
-                                    .bg(theme::primary())
-                                    .text_color(theme::primary_foreground())
-                                    .child(if linking { "Linking\u{2026}" } else { "Link" })
-                                    .hover(|button| {
-                                        button.bg(theme::primary_hover()).cursor_pointer()
-                                    })
-                                    .when(!linking, |button| {
-                                        button.on_click(
-                                            cx.listener(|this, _, _, cx| this.cloud_link(cx)),
-                                        )
-                                    }),
-                            ),
-                        ),
+                        .children(key_late),
                 ),
             )
+    }
+
+    /// The API-key entry block: heading, what a key adds, console
+    /// deep links for unkeyed orgs, id/secret fields, and the Link
+    /// button. Rendered directly under the identity row as the next
+    /// step while a signed-in org lacks a key; at the bottom of the
+    /// panel otherwise.
+    fn cloud_key_section(&self, heading: &'static str, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let orgs = self.preferences.cloud_orgs.clone();
+        let error = self.connection.cloud.error.clone();
+        let linking = self.connection.cloud.linking;
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().text_xs().text_color(theme::text_dim()).child(heading))
+            .child(div().text_xs().text_color(theme::text_dim()).child(
+                "The sign-in is read-only; an organization API key (Admin role) also lets \
+                 zeDB start idle services and provision database passwords. The key is \
+                 stored in the macOS Keychain.",
+            ))
+            // Console links straight to each unkeyed org's API-keys
+            // page: after the browser sign-in the console session
+            // already exists, so this is one click and a paste back.
+            .children(
+                self.connection
+                    .cloud
+                    .oauth_orgs
+                    .iter()
+                    .filter(|org| !orgs.iter().any(|keyed| keyed.id == org.id))
+                    .map(|org| {
+                        let url = format!(
+                            "https://console.clickhouse.cloud/organizations/{}/keys",
+                            org.id
+                        );
+                        div()
+                            .id(gpui::SharedString::from(format!(
+                                "cloud-console-keys-{}",
+                                org.id
+                            )))
+                            .text_xs()
+                            .text_color(theme::accent())
+                            .child(format!(
+                                "Create or manage keys for {} in the console",
+                                org.name
+                            ))
+                            .hover(|link| link.cursor_pointer())
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.open_url(&url);
+                            }))
+                    }),
+            )
+            .when(self.connection.cloud.oauth_orgs.is_empty(), |section| {
+                section.child(
+                    div()
+                        .id("cloud-console-keys")
+                        .text_xs()
+                        .text_color(theme::accent())
+                        .child("Create one in the Cloud console (Organization \u{2192} API keys)")
+                        .hover(|link| link.cursor_pointer())
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.open_url("https://console.clickhouse.cloud");
+                        })),
+                )
+            })
+            .when_some(self.connection.cloud.key_id.clone(), |section, key_id| {
+                section.child(Self::field("API KEY ID", key_id))
+            })
+            .when_some(
+                self.connection.cloud.key_secret.clone(),
+                |section, key_secret| section.child(Self::field("API KEY SECRET", key_secret)),
+            )
+            .when_some(error, |section, error| {
+                section.child(div().text_xs().text_color(theme::danger()).child(error))
+            })
+            .child(
+                div().flex().justify_end().child(
+                    div()
+                        .id("cloud-link")
+                        .px_3()
+                        .py_1()
+                        .rounded(px(3.))
+                        .bg(theme::primary())
+                        .text_color(theme::primary_foreground())
+                        .child(if linking { "Linking\u{2026}" } else { "Link" })
+                        .hover(|button| button.bg(theme::primary_hover()).cursor_pointer())
+                        .when(!linking, |button| {
+                            button.on_click(cx.listener(|this, _, _, cx| this.cloud_link(cx)))
+                        }),
+                ),
+            )
+            .into_any_element()
     }
 }
