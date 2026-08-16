@@ -18,8 +18,10 @@ GitHub release notes.
 - Open tabs are connection-scoped: each connection shows its own tabs
   (plus never-run scratch tabs), and switching back restarts any tails
   those tabs were running instead of leaving them frozen.
-- Fleet view: the green "Up to date" tick now appears only while writes
-  are locked; unlocked shows the state as plain text beside the actions.
+- Fleet view: locked and clean condenses to a bare green tick; unlocked
+  spells out a green "Up to date" beside the actions.
+- Any query tab can be closed, the last one included; an empty strip
+  opens a fresh scratch tab.
 - A successful regen closes itself and reruns the chain check in the
   background instead of leaving a stale failure on the button.
 

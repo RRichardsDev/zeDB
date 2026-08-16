@@ -19,8 +19,8 @@ impl Workspace {
             .iter()
             .map(|&(index, tab)| {
                 let tab_id = tab.id;
-                let multiple = visible_count > 1;
                 let has_right = index < last_visible_index;
+                let others = visible_count > 1;
                 let active = index == self.query.active_tab;
                 // Tail tabs are labelled "Tail N" and wear a steel-blue,
                 // top-rounded border so they read as a distinct live view.
@@ -79,25 +79,21 @@ impl Workspace {
                         this.reorder_query_tab(drag.index, index, cx);
                     }))
                     .context_menu(move |menu, _, _| {
-                        menu.menu_with_enable(
-                            "Close tab",
-                            Box::new(CloseQueryTab { tab_id }),
-                            multiple,
-                        )
-                        .menu_with_enable(
-                            "Close others",
-                            Box::new(CloseOtherQueryTabs { tab_id }),
-                            multiple,
-                        )
-                        .menu_with_enable(
-                            "Close to the right",
-                            Box::new(CloseQueryTabsToRight { tab_id }),
-                            has_right,
-                        )
+                        menu.menu("Close tab", Box::new(CloseQueryTab { tab_id }))
+                            .menu_with_enable(
+                                "Close others",
+                                Box::new(CloseOtherQueryTabs { tab_id }),
+                                others,
+                            )
+                            .menu_with_enable(
+                                "Close to the right",
+                                Box::new(CloseQueryTabsToRight { tab_id }),
+                                has_right,
+                            )
                     })
                     .gap_2()
                     .child(label)
-                    .when(visible_count > 1, |tab_row| {
+                    .when(visible_count >= 1, |tab_row| {
                         tab_row.child(
                             div()
                                 .id(("close-query-tab", tab_id))

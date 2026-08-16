@@ -72,15 +72,8 @@ impl Workspace {
     }
 
     pub(crate) fn close_query_tab(&mut self, tab_id: usize, cx: &mut Context<Self>) {
-        let visible_count = self
-            .query
-            .tabs
-            .iter()
-            .filter(|tab| self.tab_on_active_connection(tab))
-            .count();
-        if visible_count <= 1 {
-            return;
-        }
+        // Any tab may close, the last one included; the render
+        // invariant opens a fresh scratch tab when none is left.
         let Some(index) = self.query.tabs.iter().position(|tab| tab.id == tab_id) else {
             return;
         };
