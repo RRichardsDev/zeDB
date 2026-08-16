@@ -781,8 +781,38 @@ impl Workspace {
                 cx,
             ),
         };
-        if let Some(form) = self.connection.form.as_mut() {
-            form.nodes.push(node);
+        let (name_input, first_node_name, node_count) = match self.connection.form.as_mut() {
+            Some(form) => {
+                form.nodes.push(node);
+                (
+                    form.name.clone(),
+                    form.nodes[0].name.clone(),
+                    form.nodes.len(),
+                )
+            }
+            None => return,
+        };
+        // Two nodes make it a cluster, not one service: swap a
+        // still-default name for the next free "My Cluster" one.
+        // A name the user typed themselves is left alone.
+        if node_count > 1 {
+            let current = name_input.read(cx).text();
+            let default_name = first_node_name.read(cx).text();
+            if current == default_name || current.is_empty() {
+                let taken: Vec<String> = self
+                    .connection
+                    .connections
+                    .iter()
+                    .map(|connection| connection.name.clone())
+                    .collect();
+                let mut cluster_name = "My Cloud Cluster".to_string();
+                let mut counter = 1;
+                while taken.contains(&cluster_name) {
+                    counter += 1;
+                    cluster_name = format!("My Cloud Cluster {counter}");
+                }
+                name_input.update(cx, |input, cx| input.set_text(cluster_name, cx));
+            }
         }
         self.connection.cloud.open = false;
         cx.notify();
