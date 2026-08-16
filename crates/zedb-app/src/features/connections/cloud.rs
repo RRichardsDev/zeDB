@@ -905,11 +905,11 @@ impl Workspace {
         let signed_in = self.connection.cloud.signed_in;
         let account = self.connection.cloud.account.clone();
         let authorizing = self.connection.cloud.authorizing.clone();
-        // Once signed in, a key is the natural next step while any
-        // visible org lacks one: the section renders right under the
-        // identity row, ahead of the service list. Signed in with
-        // every org keyed, the section disappears entirely; without
-        // a sign-in it stays at the bottom as the fallback door.
+        // The key section shows in exactly two states: as the NEXT
+        // step under the identity row while a signed-in org lacks a
+        // key, or at the bottom as the fallback door when there is
+        // neither a sign-in nor any linked key. Any linked key hides
+        // it (unlinking the org brings it back).
         let unkeyed_org = self
             .connection
             .cloud
@@ -922,7 +922,7 @@ impl Workspace {
                 Some(self.cloud_key_section("NEXT \u{b7} LINK AN API KEY", cx)),
                 None,
             )
-        } else if !signed_in && authorizing.is_none() {
+        } else if !signed_in && authorizing.is_none() && orgs.is_empty() {
             (
                 None,
                 Some(self.cloud_key_section("API KEY \u{b7} FOR WAKING AND MANAGING", cx)),
