@@ -1028,35 +1028,50 @@ impl Workspace {
                                         ),
                                 )
                                 .into_any_element(),
-                            (None, false) => div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div().flex().child(
-                                        div()
-                                            .id("cloud-sign-in")
-                                            .px_3()
-                                            .py_1()
-                                            .rounded(px(3.))
-                                            .bg(theme::primary())
-                                            .text_color(theme::primary_foreground())
-                                            .child("Sign in with ClickHouse Cloud")
-                                            .hover(|button| {
-                                                button.bg(theme::primary_hover()).cursor_pointer()
-                                            })
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| {
+                            (None, false) => {
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(
+                                        div().flex().child(
+                                            // Brand button: the ClickHouse
+                                            // mark and yellow on a dark
+                                            // ground, like the console's
+                                            // own sign-in.
+                                            div()
+                                                .id("cloud-sign-in")
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .px_3()
+                                                .py_1()
+                                                .rounded(px(3.))
+                                                .border_1()
+                                                .border_color(gpui::rgb(0xFFCC01))
+                                                .bg(gpui::rgb(0x1A1710))
+                                                .text_color(gpui::rgb(0xFFCC01))
+                                                .child(
+                                                    gpui::svg()
+                                                        .path("icons/clickhouse.svg")
+                                                        .size(px(12.))
+                                                        .text_color(gpui::rgb(0xFFCC01)),
+                                                )
+                                                .child("Sign in")
+                                                .hover(|button| {
+                                                    button.bg(gpui::rgb(0x2A250F)).cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
                                                     this.cloud_sign_in(cx)
-                                                }),
-                                            ),
-                                    ),
-                                )
-                                .child(div().text_xs().text_color(theme::text_dim()).child(
-                                    "Approve in the browser; your organizations and services \
+                                                })),
+                                        ),
+                                    )
+                                    .child(div().text_xs().text_color(theme::text_dim()).child(
+                                        "Approve in the browser; your organizations and services \
                                      appear here with live state. No API key needed to look.",
-                                ))
-                                .into_any_element(),
+                                    ))
+                                    .into_any_element()
+                            }
                         })
                         .children(key_early)
                         .when(any_org, |panel| {
