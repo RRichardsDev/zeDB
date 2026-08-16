@@ -1,26 +1,76 @@
 # Phase 10.5: ClickHouse Cloud that feels native
 
-Status: PLANNED. Groups the Cloud items from `docs/IRL-ISSUES.md`. Read
+Status: SPIKE COMPLETE (2026-08-16), design below awaiting direction.
+Groups the Cloud items from `docs/IRL-ISSUES.md`. Read
 `docs/PRODUCT-PRINCIPLES.md` before changing the setup flow's character.
 
-Cloud setup works but feels bolted on beside the normal cluster flow.
+## Spike findings: the OAuth answer is yes
 
-## Scope
+ClickHouse Cloud now exposes a real OAuth device flow, shipped for
+`clickhousectl` (Apache-2.0, so the mechanics are public):
 
-- Investigate whether ClickHouse Cloud offers an OAuth (or
-  device-code) login the app can drive, replacing hand-copied API keys.
-  This is a spike with a written answer first; integration only if the
-  answer is yes.
-- Whatever the answer, fold Cloud setup into the primary connection flow
-  so it stops feeling like a separate bolted-on path.
-- When connected to a Cloud instance, a 1px border in ClickHouse yellow
-  around the editor says "you are on Cloud" at a glance.
+- Device flow against `https://auth.clickhouse.cloud/oauth/device/code`
+  with a public embedded client id, scope
+  `openid profile email offline_access` (so refresh tokens), audience
+  `clickhousectl`. Staging and dev control planes have their own hosts
+  and client ids.
+- OAuth tokens are read-only for the management API: list
+  organizations, services, backups; no create/scale/delete/wake.
+- The per-service Query API accepts the user's OAuth Bearer token
+  directly: read-only SQL as the user's own identity, no per-service
+  credentials at all, with idle-wake confirmation built into the
+  endpoint.
+- Management writes still need an org API key (HTTP Basic), and the
+  management API has
+  `PATCH /v1/organizations/{org}/services/{id}/password`: with an API
+  key, zeDB can provision the database password itself instead of
+  sending the user to the console.
 
-## Acceptance
+Caveats: an OAuth token cannot wake or mutate; the embedded client id
+identifies as clickhousectl (asking ClickHouse for a zeDB client id is
+the clean long-term move, and costs nothing to defer); and the Query
+API is a narrower surface than the service's own HTTP interface, so a
+Bearer-only connection cannot carry native TCP (no instant tails),
+writes, or session settings.
 
-- The spike's findings are recorded (devlog) with a ship or stop call on
-  OAuth.
-- Cloud connections are created from the same entry point as other
-  connections.
+## Design: one connection flow, Cloud as a first-class citizen
+
+Today Cloud linking is a separate bolted-on path beside the manual
+form. The redesign folds it into the single Add Connection entry:
+
+1. Add Connection offers two doors: "ClickHouse Cloud" (primary) and
+   "Self-hosted / direct" (the existing form).
+2. The Cloud door signs in via the device flow in-app: show the code,
+   open the browser, poll; refresh token in the Keychain. API-key
+   entry remains as the fallback door for CI-style orgs and as the
+   write-capable credential.
+3. Signed in, zeDB lists organizations and services with live state
+   badges (running/idle), and the user picks services to link.
+4. Per linked service, two access levels:
+   - Full access: the database password, either pasted (as today,
+     but with everything else prefilled) or provisioned by zeDB via
+     the password-reset endpoint when an API key is present, with an
+     explicit warning that it rotates the existing password.
+   - Read-only, instant (later increment): no password at all; the
+     connection runs SQL through the Query API with the OAuth Bearer
+     token. Every feature that needs the native surface (tails,
+     writes, driver settings) degrades with an honest label.
+5. Any connection linked to a Cloud service wears a 1px border in
+   ClickHouse yellow around the editor.
+
+## Increments
+
+- 10.5a: device-flow sign-in, org/service discovery, unified Add
+  Connection entry, prefilled full-access setup with optional API-key
+  password provisioning, the yellow border.
+- 10.5b: Bearer read-only connections over the Query API (a second
+  client path with graceful degradation everywhere).
+
+## Acceptance (10.5a)
+
+- A fresh user with only a browser login reaches a connected service
+  without ever copying an endpoint URL.
+- The password step is either one paste with everything prefilled, or
+  zero pastes with an API key (behind an explicit rotation warning).
 - The yellow border appears exactly when the active connection is a
   Cloud service and never otherwise.

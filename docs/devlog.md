@@ -1127,3 +1127,18 @@ tails before the restored node selection applies, so the grid shows the
 wrong node's rows until one manual node flip; and connection settings
 should let a cluster node declare its native port explicitly instead of
 relying on discovery heuristics (IRL list).
+
+## Phase 10.5 spike: ClickHouse Cloud OAuth (2026-08-16)
+
+The IRL question "does ch cloud provide any oauth login" is now a yes.
+`clickhousectl` (Apache-2.0) ships an Auth0-style device flow against
+`auth.clickhouse.cloud` with a public embedded client id, offline_access
+scope (refresh tokens), and read-only management access; the per-service
+Query API additionally accepts the OAuth Bearer token for read-only SQL
+with no per-service credentials, including the idle-wake confirmation
+dance. Management writes stay on org API keys, and
+`PATCH .../services/{id}/password` means an API key can provision the
+database password without a console round-trip. Full findings and the
+resulting one-flow design are in docs/PHASE-10.5.md; the Query API's
+narrower surface (no native TCP, no writes) is why Bearer-only
+connections are a separate increment with explicit degradation.
