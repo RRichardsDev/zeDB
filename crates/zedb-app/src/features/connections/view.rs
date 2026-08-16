@@ -25,7 +25,9 @@ impl Workspace {
     /// for values the ClickHouse Cloud control plane owns (name,
     /// endpoint, port), where a local edit would only break the link.
     pub(crate) fn locked_value(value: String) -> impl IntoElement {
+        let full = value.clone();
         div()
+            .id(gpui::SharedString::from(format!("locked-{value}")))
             .h(px(34.))
             .px_2()
             .flex()
@@ -36,12 +38,25 @@ impl Workspace {
             .border_color(theme::border())
             .bg(theme::bg_sidebar())
             .text_color(theme::text_dim())
-            .child(div().flex_1().child(value))
+            // Long values (Cloud endpoints) clip; the tooltip carries
+            // the whole thing.
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(value),
+            )
             .child(
                 gpui::svg()
                     .path("icons/lock.svg")
                     .size(px(11.))
+                    .flex_none()
                     .text_color(theme::text_dim()),
             )
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(full.clone()).build(window, cx)
+            })
     }
 }
