@@ -890,8 +890,9 @@ impl Workspace {
         let authorizing = self.connection.cloud.authorizing.clone();
         // Once signed in, a key is the natural next step while any
         // visible org lacks one: the section renders right under the
-        // identity row, ahead of the service list, and sinks to the
-        // bottom once every org is keyed.
+        // identity row, ahead of the service list. Signed in with
+        // every org keyed, the section disappears entirely; without
+        // a sign-in it stays at the bottom as the fallback door.
         let unkeyed_org = self
             .connection
             .cloud
@@ -899,20 +900,18 @@ impl Workspace {
             .iter()
             .any(|org| !orgs.iter().any(|keyed| keyed.id == org.id));
         let key_next = signed_in && authorizing.is_none() && unkeyed_org;
-        let key_section = self.cloud_key_section(
-            if key_next {
-                "NEXT \u{b7} LINK AN API KEY"
-            } else if orgs.is_empty() {
-                "API KEY \u{b7} FOR WAKING AND MANAGING"
-            } else {
-                "API KEY \u{b7} ANOTHER ORGANIZATION"
-            },
-            cx,
-        );
         let (key_early, key_late) = if key_next {
-            (Some(key_section), None)
+            (
+                Some(self.cloud_key_section("NEXT \u{b7} LINK AN API KEY", cx)),
+                None,
+            )
+        } else if !signed_in && authorizing.is_none() {
+            (
+                None,
+                Some(self.cloud_key_section("API KEY \u{b7} FOR WAKING AND MANAGING", cx)),
+            )
         } else {
-            (None, Some(key_section))
+            (None, None)
         };
 
         div()
@@ -958,49 +957,55 @@ impl Workspace {
                                 ),
                         )
                         .child(match (&authorizing, signed_in) {
+                            // Same code presentation as the forge
+                            // bootstrap: boxed characters, click to
+                            // copy again.
                             (Some(user_code), _) => div()
                                 .flex()
                                 .flex_col()
                                 .gap_2()
-                                .p_3()
-                                .rounded(px(4.))
-                                .border_1()
-                                .border_color(theme::border())
-                                .child(div().text_xs().text_color(theme::text_dim()).child(
-                                    "Approve the sign-in in your browser with this code (copied):",
-                                ))
                                 .child(
                                     div()
                                         .flex()
-                                        .items_center()
-                                        .gap_3()
+                                        .items_start()
+                                        .gap_2()
                                         .child(
                                             div()
-                                                .text_lg()
-                                                .font_family("Menlo")
-                                                .text_color(theme::text())
-                                                .child(user_code.clone()),
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_sm()
+                                                .text_color(theme::text_dim())
+                                                .child(
+                                                    "Approve the sign-in at \
+                                                     auth.clickhouse.cloud (opened in your \
+                                                     browser). The code is on your clipboard; \
+                                                     click it to copy it again.",
+                                                ),
                                         )
-                                        .child(div().flex_1())
                                         .child(
                                             div()
                                                 .id("cloud-signin-cancel")
                                                 .px_2()
-                                                .py_0p5()
+                                                .py_1()
                                                 .rounded(px(3.))
-                                                .border_1()
-                                                .border_color(theme::border())
-                                                .text_xs()
                                                 .text_color(theme::text_dim())
-                                                .child("Cancel")
                                                 .hover(|button| {
-                                                    button.bg(theme::hover()).cursor_pointer()
+                                                    button
+                                                        .bg(theme::bg_sidebar())
+                                                        .text_color(theme::text())
+                                                        .cursor_pointer()
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.cloud_sign_in_cancel(cx)
-                                                })),
+                                                }))
+                                                .child("Cancel"),
                                         ),
                                 )
+                                .child(div().mt_2().child(self.device_code_boxes(
+                                    user_code.clone(),
+                                    "cloud-signin-code",
+                                    cx,
+                                )))
                                 .into_any_element(),
                             (None, true) => div()
                                 .flex()
