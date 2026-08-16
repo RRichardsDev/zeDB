@@ -164,16 +164,32 @@ impl Workspace {
                                         .child(
                                             div()
                                                 .id("cloud-provision")
+                                                // Brand treatment like
+                                                // the sign-in button: it
+                                                // acts on ClickHouse
+                                                // Cloud itself.
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
                                                 .px_2()
                                                 .py_0p5()
                                                 .rounded(px(3.))
                                                 .border_1()
-                                                .border_color(theme::border())
+                                                .border_color(gpui::rgb(0xFFCC01))
+                                                .bg(gpui::rgb(0x1A1710))
                                                 .text_xs()
-                                                .text_color(theme::text())
+                                                .text_color(gpui::rgb(0xFFCC01))
+                                                .child(
+                                                    gpui::svg()
+                                                        .path("icons/clickhouse.svg")
+                                                        .size(px(11.))
+                                                        .text_color(gpui::rgb(0xFFCC01)),
+                                                )
                                                 .child("Provision password")
                                                 .hover(|button| {
-                                                    button.bg(theme::hover()).cursor_pointer()
+                                                    button
+                                                        .bg(gpui::rgb(0x2A250F))
+                                                        .cursor_pointer()
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     if let Some(form) =
