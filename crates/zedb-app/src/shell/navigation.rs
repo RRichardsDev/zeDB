@@ -11,6 +11,7 @@ impl Workspace {
             .enumerate()
             .map(|(index, connection)| {
                 let selected = self.connection.selected == Some(index);
+                let cloud_state = self.cloud_state_label(connection);
                 let connected = self
                     .connection
                     .connected
@@ -59,14 +60,25 @@ impl Workspace {
                             .child(
                                 // Name plus an inline muted node count "(N)"
                                 // at rest; hovering hides it and reveals the
-                                // full "N nodes" line below.
+                                // full "N nodes" line below. The name gives
+                                // way (truncates) before the badge column
+                                // does: marks must survive any sidebar width.
                                 div()
+                                    .flex_1()
+                                    .min_w_0()
                                     .flex()
                                     .items_center()
                                     .gap_1p5()
-                                    .child(connection.name.clone())
                                     .child(
                                         div()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .child(connection.name.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_none()
                                             .text_xs()
                                             .text_color(theme::text_dim())
                                             .group_hover("connection-row", |count| {
@@ -80,37 +92,19 @@ impl Workspace {
                                 // marks: a triangle in the environment
                                 // color and a square in the read/write
                                 // color. Hovering the row swaps in the
-                                // full pills. The pills stay in flow
-                                // (invisible) so they reserve the width and
-                                // the layout does not shift on hover.
+                                // full pills. Only the small marks hold
+                                // width in flow; the pills overlay on hover
+                                // (with a masking background), so a row
+                                // never truncates its name to reserve pill
+                                // space it is not showing.
                                 div()
+                                    .flex_none()
                                     .relative()
                                     .flex()
                                     .items_center()
                                     .justify_end()
                                     .child(
                                         div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .invisible()
-                                            .group_hover("connection-row", |pills| pills.visible())
-                                            .when(connected, |pills| {
-                                                pills.child(
-                                                    div()
-                                                        .size(px(7.))
-                                                        .rounded_full()
-                                                        .bg(theme::success())
-                                                        .mr_1(),
-                                                )
-                                            })
-                                            .child(Self::write_badge_small(connection.read_only))
-                                            .child(Self::tier_badge_small(connection.tier)),
-                                    )
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .right_0()
                                             .flex()
                                             .items_center()
                                             .gap(px(3.))
@@ -128,9 +122,37 @@ impl Workspace {
                                             })
                                             .child(Self::write_glyph(connection.read_only))
                                             .child(Self::tier_glyph(connection.tier)),
+                                    )
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .right_0()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .pl_1()
+                                            .bg(theme::row_hover())
+                                            .invisible()
+                                            .group_hover("connection-row", |pills| pills.visible())
+                                            .when(connected, |pills| {
+                                                pills.child(
+                                                    div()
+                                                        .size(px(7.))
+                                                        .rounded_full()
+                                                        .bg(theme::success())
+                                                        .mr_1(),
+                                                )
+                                            })
+                                            .child(Self::write_badge_small(connection.read_only))
+                                            .child(Self::tier_badge_small(connection.tier)),
                                     ),
                             ),
                     )
+                    .when_some(cloud_state, |row, state| {
+                        // The linked Cloud service is not running: its own
+                        // line under the name, clear of the badge column.
+                        row.child(div().text_xs().text_color(theme::text_dim()).child(state))
+                    })
                     .child(
                         // The full "N nodes" line is collapsed at rest (the
                         // inline "(N)" stands in) and expands on hover.
@@ -173,14 +195,55 @@ impl Workspace {
                             .child("CONNECTIONS")
                             .child(
                                 div()
-                                    .id("add-connection")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded(px(3.))
-                                    .text_color(theme::text())
-                                    .child("+")
-                                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
-                                    .on_click(cx.listener(|this, _, _, cx| this.start_add(cx))),
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .id("link-cloud")
+                                            .px_2()
+                                            .py_1()
+                                            .rounded(px(3.))
+                                            .text_xs()
+                                            .child("Cloud")
+                                            .when(self.connection.cloud.open, |button| {
+                                                button.bg(theme::hover())
+                                            })
+                                            .hover(|button| {
+                                                button
+                                                    .bg(theme::hover())
+                                                    .text_color(theme::text())
+                                                    .cursor_pointer()
+                                            })
+                                            .tooltip(|window, cx| {
+                                                gpui_component::tooltip::Tooltip::new(
+                                                    "Link ClickHouse Cloud services",
+                                                )
+                                                .build(window, cx)
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                if this.connection.cloud.open {
+                                                    this.cloud_close(cx)
+                                                } else {
+                                                    this.cloud_open(cx)
+                                                }
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("add-connection")
+                                            .px_2()
+                                            .py_1()
+                                            .rounded(px(3.))
+                                            .text_color(theme::text())
+                                            .child("+")
+                                            .hover(|button| {
+                                                button.bg(theme::hover()).cursor_pointer()
+                                            })
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| this.start_add(cx)),
+                                            ),
+                                    ),
                             ),
                     )
                     .child(
@@ -198,6 +261,18 @@ impl Workspace {
                                         .pt_3()
                                         .text_color(theme::text_dim())
                                         .child("No saved connections"),
+                                )
+                                .child(
+                                    div()
+                                        .id("link-cloud-empty")
+                                        .pt_1()
+                                        .text_xs()
+                                        .text_color(theme::accent())
+                                        .child("Link ClickHouse Cloud")
+                                        .hover(|button| button.cursor_pointer())
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.cloud_open(cx)),
+                                        ),
                                 )
                             })
                             .children(rows),

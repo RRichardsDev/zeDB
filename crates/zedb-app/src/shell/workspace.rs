@@ -155,6 +155,11 @@ impl Workspace {
                 dirty: editor_text.trim() != state.baseline.trim(),
             }
         });
+        // Owned snapshot of the pre-flight estimate for the same reason.
+        let estimate_info = active
+            .estimate
+            .as_ref()
+            .map(|estimate| (active.id, estimate.clone()));
         // Ask needs a remembered agent that discovery has not ruled out.
         let ask_agent = self.preferences.last_agent.clone().filter(|name| {
             self.agent.agents.is_empty()
@@ -473,6 +478,11 @@ impl Workspace {
             // is already resting on the newest rows.
             .when_some(tail_info, |panel, info| {
                 panel.child(self.tail_strip(info, cx))
+            })
+            // The pre-flight estimate reads in the same place: above the
+            // results the query would produce.
+            .when_some(estimate_info, |panel, (tab_id, estimate)| {
+                panel.child(self.estimate_strip(tab_id, estimate, cx))
             })
             .when(has_result, |panel| {
                 panel.child(

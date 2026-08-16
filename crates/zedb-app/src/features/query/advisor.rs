@@ -567,6 +567,7 @@ mod tests {
     fn pk_index(initial: u64, selected: u64, keys: &[&str]) -> ExplainIndex {
         ExplainIndex {
             index_type: "PrimaryKey".to_string(),
+            name: None,
             keys: keys.iter().map(|k| k.to_string()).collect(),
             condition: Some("some condition".to_string()),
             initial_parts: 4,
@@ -579,6 +580,7 @@ mod tests {
     fn partition_index(initial_parts: u64, selected_parts: u64) -> ExplainIndex {
         ExplainIndex {
             index_type: "Partition".to_string(),
+            name: None,
             keys: vec![],
             condition: Some("true".to_string()),
             initial_parts,

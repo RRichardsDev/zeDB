@@ -338,6 +338,7 @@ impl Workspace {
                     (ObjectInspectorTab::Columns, "Columns"),
                     (ObjectInspectorTab::Parts, "Parts"),
                     (ObjectInspectorTab::Projections, "Projections"),
+                    (ObjectInspectorTab::Workload, "Workload"),
                     (ObjectInspectorTab::Dependencies, "Dependencies"),
                     (ObjectInspectorTab::Ddl, "DDL"),
                 ]
@@ -376,6 +377,9 @@ impl Workspace {
                             }
                             if button_tab == ObjectInspectorTab::Projections {
                                 this.load_projections(cx);
+                            }
+                            if button_tab == ObjectInspectorTab::Workload {
+                                this.load_workload(cx);
                             }
                         }))
                         .child(label)
@@ -713,6 +717,7 @@ impl Workspace {
                         .children(column_rows),
                 ),
             ObjectInspectorTab::Parts => self.parts_panel(selected, cx),
+            ObjectInspectorTab::Workload => self.workload_panel(selected, cx),
             ObjectInspectorTab::Dependencies => self.dependencies_panel(selected, cx),
             ObjectInspectorTab::Projections => self.projections_panel(selected),
             ObjectInspectorTab::Ddl => {

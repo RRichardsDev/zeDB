@@ -2,6 +2,8 @@
 mod agent_pane;
 #[path = "features/fleet/author.rs"]
 mod author;
+#[path = "platform/clickhouse_cloud.rs"]
+mod clickhouse_cloud;
 #[path = "features/fleet/codegen.rs"]
 mod codegen;
 #[path = "features/settings/command_palette.rs"]
@@ -93,9 +95,9 @@ use features::connections::{
 };
 use features::query::{
     max_rows_from_limit, nearest_occurrence, resolve_query_variables, split_statements,
-    statement_at_cursor, tab_display_name, MaxRows, QueryOutcome, QueryResizeTarget, QueryState,
-    QueryTab, RunEvent, TailBatch, TailPush, TailState, TailStream, TailStreamBatch, TailStripInfo,
-    TailWatch,
+    statement_at_cursor, tab_display_name, MaxRows, QueryEstimate, QueryOutcome, QueryResizeTarget,
+    QueryState, QueryTab, RunEvent, TailBatch, TailPush, TailState, TailStream, TailStreamBatch,
+    TailStripInfo, TailWatch,
 };
 use features::schema::{
     database_nodes_from_cache, schema_object_from_cache, DatabaseNode, ObjectInspectorTab,
@@ -172,6 +174,7 @@ impl AssetSource for Assets {
             "icons/regen.svg" => Some(include_bytes!("../assets/icons/regen.svg")),
             "icons/folder-open.svg" => Some(include_bytes!("../assets/icons/folder-open.svg")),
             "icons/lock.svg" => Some(include_bytes!("../assets/icons/lock.svg")),
+            "icons/hourglass.svg" => Some(include_bytes!("../assets/icons/hourglass.svg")),
             "icons/lock-open.svg" => Some(include_bytes!("../assets/icons/lock-open.svg")),
             "icons/plug.svg" => Some(include_bytes!("../assets/icons/plug.svg")),
             "icons/plug-off.svg" => Some(include_bytes!("../assets/icons/plug-off.svg")),
@@ -317,6 +320,20 @@ struct Workspace {
     author: Option<author::AuthorState>,
     regen: Option<codegen::RegenState>,
     checks: Option<codegen::ChecksState>,
+    /// Whether the chain-checks modal is on screen; silent runs (the
+    /// auto-run beside Verify-all) keep it hidden until asked for.
+    checks_open: bool,
+    /// A fleet control the agent asked to point at; its border shows
+    /// purple until the timer clears it.
+    control_highlight: Option<String>,
+    control_highlight_generation: u64,
+    /// The last run of the chain checks passed in full and nothing in
+    /// the repo changed since; tints the check-chain icon green.
+    checks_clean: bool,
+    /// The last regen's verdict: Some(true) current-state matches the
+    /// chain (green icon), Some(false) it has drifted and a write is
+    /// pending (yellow), None unknown.
+    regen_status: Option<bool>,
     commit: Option<commit::CommitState>,
     show_fleet: bool,
     show_ops: bool,
@@ -435,6 +452,13 @@ impl Workspace {
         // Settings sync: one reconcile pass at launch.
         cx.spawn(async move |this, cx| {
             this.update(cx, |this, cx| this.settings_sync_tick(cx)).ok();
+        })
+        .detach();
+        // Linked Cloud orgs: fetch service states once at launch so the
+        // sidebar's idle/waking markers exist before the panel is ever
+        // opened (one API call per org, nothing when none are linked).
+        cx.spawn(async move |this, cx| {
+            this.update(cx, |this, cx| this.cloud_refresh(cx)).ok();
         })
         .detach();
 
@@ -683,6 +707,11 @@ impl Workspace {
                 author: None,
                 regen: None,
                 checks: None,
+                checks_open: false,
+                control_highlight: None,
+                control_highlight_generation: 0,
+                checks_clean: false,
+                regen_status: None,
                 commit: None,
                 health_poll_generation: 0,
                 merges_poll_generation: 0,
@@ -732,6 +761,11 @@ impl Workspace {
                 author: None,
                 regen: None,
                 checks: None,
+                checks_open: false,
+                control_highlight: None,
+                control_highlight_generation: 0,
+                checks_clean: false,
+                regen_status: None,
                 commit: None,
                 health_poll_generation: 0,
                 merges_poll_generation: 0,
@@ -931,14 +965,32 @@ fn quit_ze_db(_: &QuitZeDb, cx: &mut App) {
 }
 
 /// Hidden server mode: the agent pane spawns this same executable as
-/// its MCP server (the bundle ships no separate CLI). The config file
-/// carries the connection credentials at 0600 and is deleted on read.
+/// its MCP server (the bundle ships no separate CLI). Config arrives
+/// in the environment (ZEDB_MCP_*), which survives the agent runtime
+/// respawning the server; a config-file argument remains supported
+/// for older registrations (0600, deleted on read).
 fn run_mcp_serve(config_path: &str) -> ! {
     let outcome = (|| -> Result<(), String> {
-        let raw = std::fs::read_to_string(config_path).map_err(|error| error.to_string())?;
-        let _ = std::fs::remove_file(config_path);
-        let config: serde_json::Value =
-            serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+        let config: serde_json::Value = if config_path.is_empty() {
+            let mut map = serde_json::Map::new();
+            for (key, name) in [
+                ("repo", "ZEDB_MCP_REPO"),
+                ("url", "ZEDB_MCP_URL"),
+                ("user", "ZEDB_MCP_USER"),
+                ("password", "ZEDB_MCP_PASSWORD"),
+                ("app_socket", "ZEDB_MCP_APP_SOCKET"),
+                ("schema_cache", "ZEDB_MCP_SCHEMA_CACHE"),
+            ] {
+                if let Ok(value) = std::env::var(name) {
+                    map.insert(key.into(), value.into());
+                }
+            }
+            serde_json::Value::Object(map)
+        } else {
+            let raw = std::fs::read_to_string(config_path).map_err(|error| error.to_string())?;
+            let _ = std::fs::remove_file(config_path);
+            serde_json::from_str(&raw).map_err(|error| error.to_string())?
+        };
         let repo = config
             .get("repo")
             .and_then(|value| value.as_str())
@@ -985,6 +1037,38 @@ fn run_mcp_serve(config_path: &str) -> ! {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // Hidden GIT_ASKPASS mode: git (spawned by zeDB with the broker
+    // envs) asks for a username or password; the answer comes from
+    // the Keychain, never argv or the environment.
+    if std::env::var_os("ZEDB_GIT_ASKPASS").is_some() {
+        let prompt = args.get(1).cloned().unwrap_or_default();
+        let host = std::env::var("ZEDB_GIT_HOST").unwrap_or_default();
+        let answer = if prompt.starts_with("Username") {
+            if host.contains("gitlab") {
+                "oauth2"
+            } else {
+                "x-access-token"
+            }
+            .to_string()
+        } else {
+            zedb_core::secrets::get_plain(&format!("zedb-git-elevated-{host}"))
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        };
+        zedb_core::git::git_debug(&format!(
+            "askpass host={host} answered_len={} kind={}",
+            answer.len(),
+            if prompt.starts_with("Username") {
+                "username"
+            } else {
+                "secret"
+            },
+        ));
+        println!("{answer}");
+        std::process::exit(0);
+    }
+    zedb_core::git::set_auth_broker(std::env::current_exe().ok());
     if args.get(1).map(String::as_str) == Some("zedb-mcp-serve") {
         let config_path = args.get(2).cloned().unwrap_or_default();
         run_mcp_serve(&config_path);

@@ -89,7 +89,8 @@ impl McpServer {
     }
 
     pub(super) async fn tool_fleet_status(&self) -> Result<String, String> {
-        let runner = self.runner()?;
+        let repo = self.effective_repo().await?;
+        let runner = self.runner_for(&repo)?;
         let resolved = runner
             .resolve_targets(&Targets::All)
             .await
@@ -123,8 +124,8 @@ impl McpServer {
         Ok(out)
     }
 
-    pub(super) fn tool_list_migrations(&self) -> Result<String, String> {
-        let repo = self.repo()?;
+    pub(super) async fn tool_list_migrations(&self) -> Result<String, String> {
+        let repo = self.effective_repo().await?;
         let mut out = String::new();
         for migration in &repo.migrations {
             out.push_str(&format!(
@@ -157,8 +158,8 @@ impl McpServer {
         Ok(out)
     }
 
-    pub(super) fn tool_migration_sql(&self, arguments: &Value) -> Result<String, String> {
-        let repo = self.repo()?;
+    pub(super) async fn tool_migration_sql(&self, arguments: &Value) -> Result<String, String> {
+        let repo = self.effective_repo().await?;
         let number = arguments
             .get("number")
             .and_then(Value::as_u64)
@@ -179,9 +180,9 @@ impl McpServer {
     }
 
     pub(super) async fn tool_dry_run(&self, arguments: &Value) -> Result<String, String> {
-        let repo = self.repo()?;
+        let repo = self.effective_repo().await?;
         let database = required_str(arguments, "database")?;
-        let runner = self.runner()?;
+        let runner = self.runner_for(&repo)?;
         let applied = runner
             .applied_migrations(database)
             .await
@@ -216,13 +217,13 @@ impl McpServer {
     }
 
     pub(super) async fn tool_drift(&self, arguments: &Value) -> Result<String, String> {
-        let repo = self.repo()?;
+        let repo = self.effective_repo().await?;
         let database = required_str(arguments, "database")?;
-        let runner = self.runner()?;
+        let runner = self.runner_for(&repo)?;
         let binary = crate::ensure_binary(&repo.config.engine.version)
             .await
             .map_err(|error| error.to_string())?;
-        let verifier = Verifier::new(repo, &runner, binary);
+        let verifier = Verifier::new(&repo, &runner, binary);
         let drifts = verifier
             .verify(&Targets::Databases(vec![database.to_string()]))
             .await
@@ -308,6 +309,106 @@ impl McpServer {
                 "(capped at {} rows; narrow the query for more)\n",
                 self.caps.max_result_rows
             ));
+        }
+        Ok(out)
+    }
+}
+
+impl super::McpServer {
+    /// The chain checks (sql parse, current-state equivalence,
+    /// lifecycle up-down-up), read-only against the pinned harness;
+    /// the same three verdicts the fleet toolbar's check-chain icon
+    /// carries.
+    pub(super) async fn tool_check_chain(&self) -> Result<String, String> {
+        let repo = self.effective_repo().await?;
+        let binary = crate::ensure_binary(&repo.config.engine.version)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut out = String::new();
+
+        let sql_repo = self.effective_repo().await?;
+        let sql_binary = binary.clone();
+        let sql = tokio::task::spawn_blocking(move || {
+            crate::checks::check_sql(&sql_binary, &sql_repo).map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+        if sql.errors.is_empty() {
+            out.push_str(&format!("sql: PASS ({} files parse)\n", sql.checked));
+        } else {
+            out.push_str("sql: FAIL\n");
+            for error in &sql.errors {
+                out.push_str(&format!("  {error}\n"));
+            }
+        }
+
+        let equivalence_repo = self.effective_repo().await?;
+        let equivalence_binary = binary.clone();
+        let equivalence = tokio::task::spawn_blocking(move || {
+            crate::checks::check_equivalence(equivalence_binary, &equivalence_repo)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+        if equivalence.differences.is_empty() {
+            out.push_str(&format!(
+                "equivalence: PASS (current-state {} objects match chain {})\n",
+                equivalence.state_objects, equivalence.chain_objects
+            ));
+        } else {
+            out.push_str("equivalence: FAIL\n");
+            for difference in &equivalence.differences {
+                out.push_str(&format!("  {difference}\n"));
+            }
+        }
+
+        let lifecycle = crate::lifecycle::check_lifecycle(&repo, binary)
+            .await
+            .map_err(|error| error.to_string())?;
+        if lifecycle.differences.is_empty() {
+            out.push_str(&format!(
+                "lifecycle: PASS ({} live objects match {} expected)\n",
+                lifecycle.live_objects, lifecycle.expected_objects
+            ));
+        } else {
+            out.push_str("lifecycle: FAIL\n");
+            for difference in &lifecycle.differences {
+                out.push_str(&format!("  {difference}\n"));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Replay the chain and diff the canonical current-state tree
+    /// against the repo's files. Pure preview: nothing is written; the
+    /// user writes through Regen in the fleet view.
+    pub(super) async fn tool_regen_preview(&self) -> Result<String, String> {
+        let repo = self.effective_repo().await?;
+        let binary = crate::ensure_binary(&repo.config.engine.version)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (files, churn) = tokio::task::spawn_blocking(move || {
+            let files = crate::regen::Regenerator::new(&repo, binary)
+                .regenerate()
+                .map_err(|error| error.to_string())?;
+            let churn =
+                crate::regen::diff_tree(&repo, &files).map_err(|error| error.to_string())?;
+            Ok::<_, String>((files.len(), churn))
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+        if churn.is_empty() {
+            return Ok(format!(
+                "current-state matches the chain ({files} file(s)); nothing to write"
+            ));
+        }
+        let mut out = String::from(
+            "current-state has drifted from the chain. Preview only; nothing was \
+             written. The user applies this through Regen in the fleet view (or \
+             edits current-state/ directly):\n",
+        );
+        for line in churn {
+            out.push_str(&format!("  {line}\n"));
         }
         Ok(out)
     }

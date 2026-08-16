@@ -36,6 +36,17 @@ db = { param = "db" }
 /// content is left strictly alone, so a mistyped path can never be
 /// scribbled into a migration repo.
 pub fn init_repo_if_empty(path: &Path) -> Result<bool, RepoError> {
+    if !is_effectively_empty(path)? {
+        return Ok(false);
+    }
+    init_repo(path)?;
+    Ok(true)
+}
+
+/// Whether `path` is a directory holding nothing beyond git
+/// bookkeeping and README/LICENSE-style files, and is not already a
+/// repo. The precondition for offering to initialize it.
+pub fn is_effectively_empty(path: &Path) -> Result<bool, RepoError> {
     if !path.is_dir() || path.join("zedb.toml").exists() {
         return Ok(false);
     }
@@ -51,7 +62,6 @@ pub fn init_repo_if_empty(path: &Path) -> Result<bool, RepoError> {
             return Ok(false);
         }
     }
-    init_repo(path)?;
     Ok(true)
 }
 

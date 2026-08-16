@@ -7,12 +7,115 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.30 - 2026-08-16
 
-- Fixed `PRIMARY KEY` not being split onto its own line in the schema
-  panel's engine definition, so a table with an explicit primary key now
-  reads as cleanly as one without.
-- Reworded two query-advisor messages so they no longer use an em-dash.
+Phase 12: zeDB learns ClickHouse Cloud end to end, the fleet view
+becomes glanceable, and the workload itself starts driving advice.
+Built and battle-tested in one sitting against a live Cloud service.
+
+### ClickHouse Cloud
+
+- Quick setup: link an organization by pasting a Cloud API key
+  ("Cloud" in the connections sidebar, or the palette). Services list
+  with live state (running, idle, waking), "Add connection" prefills
+  the ordinary form so only the password is left to type, idle
+  services start from the panel, and a failed connect names the real
+  cause ("idle in ClickHouse Cloud") instead of a bare timeout. The
+  key lives in the macOS Keychain; only org id and name persist (and
+  sync). The sidebar marks idle/waking services on their own line and
+  keeps itself current at launch, on refocus, and while waking.
+- The fleet works against Cloud services: a missing tracking database
+  reads as "nothing applied yet", Cloud-pinned versions with no OSS
+  release replay against the closest published release, chain checks
+  provision `${db}` like a real bootstrap, and Cloud's automatic
+  `Shared*MergeTree` engine rewrites no longer read as drift.
+
+### Fleet at a glance
+
+- The toolbar icons now carry verdicts: chain checks turn green on a
+  full pass (the window closes itself) or red on failure; regen goes
+  green when current-state matches the chain, yellow when it has
+  drifted (or when a chain check failed: "Chain check failed. Please
+  regen."); the verify icon turns green once every database verifies
+  clean. Verdicts decay the moment they could be stale.
+- Verify-all also runs the chain checks silently alongside; clicking
+  the spinning icon opens live progress instead of restarting.
+- "Upgrade all" only appears while something is pending; a fully
+  applied fleet shows a green "Up to date" tick.
+- Fetching the ClickHouse harness explains itself: a download
+  percentage over a green fill, a blinking lock while macOS verifies
+  the fresh binary, a spinning hourglass while work runs. Verify
+  fetches the harness itself (no more "run `zedb pin` first"), and
+  concurrent fetches can no longer corrupt the cache.
+- Connecting preloads the fleet in the background, so the tab opens
+  onto verdicts, or their honest loading states.
+
+### Migration repos and git
+
+- Opening a repo grew a real picker: a path entry with a browse
+  button, or your GitHub/GitLab repositories (device-code approval)
+  including creating a new private repo. Empty directories ask before
+  becoming a migration repo; non-repos explain what to pick instead.
+- Each connection remembers its own repo; switching connections swaps
+  chains, and one cluster's chain never silently attaches to another.
+- Repos from the picker clone over HTTPS with credentials answered
+  from the Keychain, overriding git's configured helpers, so cloning
+  and pushing stop depending on SSH keys and stored-account guesses.
+  Typed git@ URLs keep using your own git. Freshly created repos
+  survive the host's provisioning lag (retry with backoff), and clone
+  failures read as one sentence instead of a remote banner wall.
+- One cluster selector: fleet operations take their ON CLUSTER choice
+  from the top toolbar's node selector; the inline chip is gone.
+
+### Queries and tables
+
+- "Estimate query cost" in the palette: a pre-flight
+  `EXPLAIN ESTIMATE` strip with estimated rows, parts, and marks, a
+  miniature pruning bar, and a plain-language warning for large or
+  unpruned scans. It never blocks running.
+- New Workload tab on the table inspector: the last 7 days of
+  `system.query_log` distilled into query shapes, each EXPLAINed, and
+  presented as run-weighted pruning per index with advisor-voice
+  findings: skip indexes that never prune or went unused (DROP DDL to
+  copy), projections serving nothing, a primary key that barely
+  prunes. Nothing applies automatically.
+
+### Ops view
+
+- A replication health strip stays green until a replica is readonly,
+  lagging, stuck, or off its Keeper; the Replication tab lists
+  per-node Keeper sessions.
+- A new Ingestion tab answers "where did my rows go": Kafka consumers
+  with last-poll age and errors, materialized views that failed
+  during insert in the last 24 hours, and the pending async-insert
+  queue; every section degrades gracefully where its source is off.
+
+### Agent pane
+
+- The zedb tools survive agent-runtime respawns (config now travels
+  in the server's environment) and follow the app live: a repo
+  attached mid-session is seen on the next call.
+- Two new read-only tools, `check_chain` and `regen_preview`, plus
+  `highlight_control`, which flashes a purple border on a fleet
+  control so the agent can point at buttons it deliberately cannot
+  press. The etiquette is diagnose, explain, then offer the choice;
+  and a hard rule: the app's connection is answered only through the
+  zedb tools, never a look-alike MCP server. The whole contract lives
+  in docs/ACP-STANDARDS.md.
+- With the query editor open, agent SQL arrives via the editor; DDL
+  comes with a spoken offer to capture it as a migration instead.
+
+### Fixes and polish
+
+- Switching connections keeps your current view, with ops polling and
+  the fleet matrix following the new cluster; only a first connect
+  lands in the query view.
+- Empty databases are visible in the schema sidebar (a fresh service
+  no longer looks blank).
+- Long connection names truncate instead of pushing badges off the
+  sidebar, and rows stop reserving space for hover-only pills.
+- `PRIMARY KEY` splits onto its own line in engine definitions, and
+  two advisor messages lost their em-dashes.
 
 ## v0.1.29 - 2026-08-14
 

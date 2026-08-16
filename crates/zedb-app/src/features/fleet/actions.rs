@@ -39,9 +39,21 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         // An effectively empty directory (fresh clone, nothing beyond
-        // git bookkeeping and a README) becomes a format-1 repo on the
-        // spot; anything with real content is left alone and errors as
-        // before.
+        // git bookkeeping and a README) only becomes a format-1 repo
+        // with the user's say-so: the confirm dialog, or the one-shot
+        // auto_init flag set when they explicitly created the repo to
+        // be one. Anything with real content is left strictly alone.
+        if let Ok(true) = zedb_core::repo::is_effectively_empty(&expanded) {
+            if !self.fleet.auto_init_once {
+                self.fleet.repo_picker = Some(super::view::RepoPicker::ConfirmInit {
+                    path: expanded,
+                    source,
+                });
+                cx.notify();
+                return;
+            }
+        }
+        self.fleet.auto_init_once = false;
         if let Ok(true) = zedb_core::repo::init_repo_if_empty(&expanded) {
             self.notice = Some(
                 "Initialized an empty checkout as a format-1 migration repo; \
@@ -80,13 +92,23 @@ impl Workspace {
         }
         match MigrationRepo::open(&expanded) {
             Ok(repo) => {
+                // A (re)opened repo invalidates the last checks and
+                // regen verdicts.
+                self.checks_clean = false;
+                self.regen_status = None;
                 self.fleet.git = zedb_core::git::read_git_status(&repo.root);
                 self.fleet.repo = Some(Arc::new(repo));
                 self.fleet.repo_error = None;
                 self.fleet.editing_repo_path = false;
                 self.fleet.rows.clear();
                 self.fleet.fetched_at = None;
-                self.preferences.fleet_repo = Some(source);
+                self.preferences.fleet_repo = Some(source.clone());
+                // The repo follows the connection it was opened for.
+                if let Some(connected) = &self.connection.connected {
+                    self.preferences
+                        .fleet_repos
+                        .insert(connected.name.clone(), source);
+                }
                 if let Err(error) = save_preferences(&self.preferences) {
                     self.notice = Some(format!("Could not save preferences: {error}"));
                 }
@@ -96,7 +118,16 @@ impl Workspace {
                 self.fleet.repo = None;
                 self.fleet.git = None;
                 self.fleet.rows.clear();
-                self.fleet.repo_error = Some(error.to_string());
+                self.fleet.repo_error = Some(
+                    if matches!(error, zedb_core::repo::RepoError::NotARepo(_)) {
+                        format!(
+                            "{} is not a migration repo (no zedb.toml). Pick a checkout                              of one, or an empty folder to start one.",
+                            expanded.display()
+                        )
+                    } else {
+                        error.to_string()
+                    },
+                );
             }
         }
         cx.notify();
@@ -191,7 +222,22 @@ impl Workspace {
                         this.fleet_open_local(dest, url, cx);
                     }
                     Ok(Err(error)) | Err(error) => {
-                        this.fleet.repo_error = Some(format!("clone failed: {error}"));
+                        let summary = zedb_core::git::summarize_git_error(&error);
+                        this.fleet.repo_error = Some(
+                            if summary.contains("could not be found")
+                                || summary.contains("Permission denied")
+                                || summary.contains("access rights")
+                            {
+                                format!(
+                                    "clone failed: {summary} \u{b7} zeDB clones with \
+                                     your own git over SSH; check that your SSH key \
+                                     is registered with the host and can reach this \
+                                     repo"
+                                )
+                            } else {
+                                format!("clone failed: {summary}")
+                            },
+                        );
                         this.notice = None;
                     }
                 }
@@ -242,6 +288,25 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    /// The connection target changed: everything the fleet view learned
+    /// from the previous cluster (status rows, drift, a half-configured
+    /// action) is about a different world now. The repo stays open;
+    /// the next fleet open refetches against the new cluster.
+    pub(crate) fn fleet_connection_reset(&mut self) {
+        self.fleet.rows.clear();
+        self.fleet.fetched_at = None;
+        self.fleet.fetch_error = None;
+        self.fleet.selected = None;
+        self.fleet.drift.clear();
+        self.fleet.drift_loading.clear();
+        self.fleet.drift_error = None;
+        self.fleet.harness_phase = None;
+        self.fleet.verify_total = 0;
+        self.fleet.pending_action = None;
+        self.fleet.ack_structural = false;
+        self.fleet.action_running = false;
     }
 
     pub(crate) fn fleet_refresh(&mut self, cx: &mut Context<Self>) {

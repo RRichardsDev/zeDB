@@ -112,6 +112,9 @@ pub(crate) struct SelectedSchemaObject {
     pub(crate) projections: Option<Vec<zedb_ch::ProjectionInfo>>,
     pub(crate) projections_loading: bool,
     pub(crate) projections_error: Option<String>,
+    pub(crate) workload: Option<zedb_ch::workload::WorkloadReport>,
+    pub(crate) workload_loading: bool,
+    pub(crate) workload_error: Option<String>,
     pub(crate) ddl_editor: Entity<InputState>,
     pub(crate) engine_editor: Entity<InputState>,
     pub(crate) tab: ObjectInspectorTab,
@@ -124,6 +127,7 @@ pub(crate) enum ObjectInspectorTab {
     Columns,
     Parts,
     Projections,
+    Workload,
     Dependencies,
     Ddl,
 }

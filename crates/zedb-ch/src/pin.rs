@@ -78,10 +78,158 @@ pub async fn discover_server_version(config: ChConfig) -> Result<String, PinErro
         .ok_or_else(|| PinError::Discovery("SELECT version() returned no rows".into()))
 }
 
-/// Return the cached binary for `version`, downloading it first if needed.
+/// Return the cached binary for `version`, downloading it first if
+/// needed. Cloud servers pin builds (e.g. 26.2.1.558) that have no
+/// OSS release asset; when the exact version is not published, the
+/// nearest published release of the same major.minor stands in, and
+/// the substitution is remembered beside the cache so the release
+/// listing is not re-fetched every check.
 pub async fn ensure_binary(version: &str) -> Result<PathBuf, PinError> {
-    if let Some(path) = cached_binary(version) {
-        return Ok(path);
+    ensure_binary_with_progress(version, None).await
+}
+
+/// Where getting a binary currently stands. Called from the pin
+/// task; keep the callback cheap.
+#[derive(Clone, Copy, Debug)]
+pub enum PinPhase {
+    Downloading {
+        received: u64,
+        total: Option<u64>,
+    },
+    /// First execution of a fresh binary: macOS assesses it before
+    /// letting it run, which can take a while. There is no API to
+    /// observe that assessment; this phase brackets the exec that
+    /// triggers it, which amounts to the same window.
+    Verifying,
+}
+
+pub type DownloadProgress = std::sync::Arc<dyn Fn(PinPhase) + Send + Sync>;
+
+/// `ensure_binary` with download progress reported to `progress`;
+/// nothing is reported when the binary is already cached.
+pub async fn ensure_binary_with_progress(
+    version: &str,
+    progress: Option<DownloadProgress>,
+) -> Result<PathBuf, PinError> {
+    let exact = ensure_exact_binary(version, progress.clone()).await;
+    let Err(PinError::DownloadFailed { .. }) = &exact else {
+        return exact;
+    };
+    let alias_path = binary_cache_dir().join(version).join("fallback-version");
+    let remembered = std::fs::read_to_string(&alias_path)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let fallback = match remembered {
+        Some(fallback) => Some(fallback),
+        None => nearest_published_release(version).await?,
+    };
+    let Some(fallback) = fallback else {
+        return exact;
+    };
+    let path = ensure_exact_binary(&fallback, progress).await?;
+    if let Some(parent) = alias_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&alias_path, &fallback);
+    Ok(path)
+}
+
+/// The closest published release to `version`, from the GitHub
+/// releases listing; None when nothing is published at all.
+async fn nearest_published_release(version: &str) -> Result<Option<String>, PinError> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("zeDB/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| PinError::Http(error.to_string()))?;
+    let body = client
+        .get("https://api.github.com/repos/ClickHouse/ClickHouse/releases?per_page=100")
+        .send()
+        .await
+        .map_err(|error| PinError::Http(error.to_string()))?
+        .error_for_status()
+        .map_err(|error| PinError::Http(error.to_string()))?
+        .text()
+        .await
+        .map_err(|error| PinError::Http(error.to_string()))?;
+    let releases: serde_json::Value =
+        serde_json::from_str(&body).map_err(|error| PinError::Http(error.to_string()))?;
+    let tags = releases
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|release| release.get("tag_name").and_then(|tag| tag.as_str()));
+    Ok(closest_release_tag(version, tags))
+}
+
+fn version_key(version: &str) -> Vec<u64> {
+    version
+        .split('.')
+        .map(|part| part.parse().unwrap_or(0))
+        .collect()
+}
+
+/// The closest published version to `version` among tags like
+/// `v26.2.1.9999-stable`: newest of the same major.minor first, else
+/// the nearest newer release (a newer binary still speaks the older
+/// dialect; an older one may not), else the newest older one.
+fn closest_release_tag<'a>(version: &str, tags: impl Iterator<Item = &'a str>) -> Option<String> {
+    let target = version_key(version);
+    let same_minor: Vec<u64> = target.iter().copied().take(2).collect();
+    let mut best_same: Option<(Vec<u64>, String)> = None;
+    let mut best_newer: Option<(Vec<u64>, String)> = None;
+    let mut best_older: Option<(Vec<u64>, String)> = None;
+    for tag in tags {
+        let Some(candidate) = tag
+            .strip_prefix('v')
+            .and_then(|tag| tag.rsplit_once('-'))
+            .map(|(version, _)| version)
+        else {
+            continue;
+        };
+        let key = version_key(candidate);
+        let entry = (key.clone(), candidate.to_string());
+        if key.len() >= 2 && key[..2] == same_minor[..] {
+            if best_same.as_ref().map(|(k, _)| key > *k).unwrap_or(true) {
+                best_same = Some(entry);
+            }
+        } else if key > target {
+            if best_newer.as_ref().map(|(k, _)| key < *k).unwrap_or(true) {
+                best_newer = Some(entry);
+            }
+        } else if best_older.as_ref().map(|(k, _)| key > *k).unwrap_or(true) {
+            best_older = Some(entry);
+        }
+    }
+    best_same
+        .or(best_newer)
+        .or(best_older)
+        .map(|(_, candidate)| candidate)
+}
+
+/// Return the cached binary for exactly `version`, downloading it
+/// first if needed.
+async fn ensure_exact_binary(
+    version: &str,
+    progress: Option<DownloadProgress>,
+) -> Result<PathBuf, PinError> {
+    // Concurrent callers (the three chain checks, Verify-all) share
+    // one staging path per version; serialize so a download is not
+    // clobbered mid-write. Late arrivals find the cache warm.
+    static DOWNLOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = DOWNLOAD_LOCK.lock().await;
+    let report = |phase: PinPhase| {
+        if let Some(progress) = &progress {
+            progress(phase);
+        }
+    };
+    if binary_path(version).is_file() {
+        // The cache probe executes the binary; a binary that has
+        // never run stalls here while macOS verifies it.
+        report(PinPhase::Verifying);
+        if let Some(path) = cached_binary(version) {
+            return Ok(path);
+        }
     }
 
     let os = std::env::consts::OS;
@@ -115,7 +263,7 @@ pub async fn ensure_binary(version: &str) -> Result<PathBuf, PinError> {
             }
         };
         tried.push(url.clone());
-        if download(&url, &staging, version, os == "linux").await? {
+        if download(&url, &staging, version, os == "linux", progress.as_ref()).await? {
             downloaded = true;
             break;
         }
@@ -134,6 +282,8 @@ pub async fn ensure_binary(version: &str) -> Result<PathBuf, PinError> {
     }
     std::fs::rename(&staging, &target)?;
 
+    // First run of the fresh download: macOS verifies it here.
+    report(PinPhase::Verifying);
     if !binary_reports_version(&target, version) {
         let actual = Command::new(&target)
             .args(["local", "--version"])
@@ -156,8 +306,9 @@ async fn download(
     staging: &Path,
     version: &str,
     is_tarball: bool,
+    progress: Option<&DownloadProgress>,
 ) -> Result<bool, PinError> {
-    let response = reqwest::get(url)
+    let mut response = reqwest::get(url)
         .await
         .map_err(|error| PinError::Http(error.to_string()))?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -167,10 +318,22 @@ async fn download(
         return Err(PinError::Http(format!("{url}: HTTP {}", response.status())));
     }
 
-    let bytes = response
-        .bytes()
+    // Stream so callers can show real progress on a ~500MB asset.
+    let total = response.content_length();
+    let mut bytes: Vec<u8> = Vec::with_capacity(total.unwrap_or(0) as usize);
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|error| PinError::Http(error.to_string()))?;
+        .map_err(|error| PinError::Http(error.to_string()))?
+    {
+        bytes.extend_from_slice(&chunk);
+        if let Some(progress) = progress {
+            progress(PinPhase::Downloading {
+                received: bytes.len() as u64,
+                total,
+            });
+        }
+    }
 
     if is_tarball {
         let unpack_dir = staging.with_extension("unpack");
@@ -210,5 +373,38 @@ pub fn smoke_replay(binary: &Path) -> Result<(), PinError> {
             "smoke replay failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picks_the_closest_published_release() {
+        let tags = [
+            "v26.3.1.100-stable",
+            "v26.2.1.400-stable",
+            "v26.2.1.999-lts",
+            "v26.2.1.998-stable",
+            "v25.8.9.1-lts",
+            "not-a-version",
+        ];
+        // Same major.minor available: its newest wins.
+        assert_eq!(
+            closest_release_tag("26.2.1.558", tags.iter().copied()),
+            Some("26.2.1.999".to_string())
+        );
+        // No 26.1 published: the nearest newer release stands in.
+        assert_eq!(
+            closest_release_tag("26.1.1.1", tags.iter().copied()),
+            Some("26.2.1.400".to_string())
+        );
+        // Nothing newer than 27.x: the newest older one, last resort.
+        assert_eq!(
+            closest_release_tag("27.1.1.1", tags.iter().copied()),
+            Some("26.3.1.100".to_string())
+        );
+        assert_eq!(closest_release_tag("26.4.1.1", [].iter().copied()), None);
     }
 }

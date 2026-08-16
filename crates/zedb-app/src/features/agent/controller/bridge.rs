@@ -98,6 +98,52 @@ impl Workspace {
             cx.notify();
         };
         match tool {
+            // Internal plumbing for the MCP server: the currently open
+            // repo root, empty when none. Not narrated; nothing the
+            // user sees changes.
+            "repo_root" => (
+                self.fleet
+                    .repo
+                    .as_ref()
+                    .map(|repo| repo.root.display().to_string())
+                    .unwrap_or_default(),
+                false,
+            ),
+            "highlight_control" => {
+                const CONTROLS: [&str; 7] = [
+                    "lock",
+                    "upgrade_all",
+                    "rollback",
+                    "new_migration",
+                    "regen",
+                    "check_chain",
+                    "verify_all",
+                ];
+                let control = arguments
+                    .get("control")
+                    .and_then(|control| control.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if !CONTROLS.contains(&control.as_str()) {
+                    return (format!("unknown control: {control}"), true);
+                }
+                self.control_highlight = Some(control.clone());
+                self.control_highlight_generation += 1;
+                let generation = self.control_highlight_generation;
+                cx.spawn(async move |this, cx| {
+                    gpui::Timer::after(std::time::Duration::from_secs(4)).await;
+                    this.update(cx, |this, cx| {
+                        if this.control_highlight_generation == generation {
+                            this.control_highlight = None;
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
+                narrate(self, format!("agent: pointed at the {control} control"), cx);
+                (format!("{control} is highlighted for a few seconds"), false)
+            }
             "navigate" => {
                 let view = arguments
                     .get("view")
@@ -284,61 +330,59 @@ impl Workspace {
 
     /// The zedb MCP server registration for a new session, when there
     /// is anything to serve (an open repo, a connection, or both).
+    ///
+    /// Config travels in the server's environment, not argv (argv is
+    /// world-readable; env is same-user-only on macOS) and not a file:
+    /// agent runtimes respawn MCP servers at will, and the old
+    /// delete-on-read credentials file killed every respawn with "No
+    /// such file or directory", silently costing the session its zedb
+    /// tools.
     pub(crate) fn agent_mcp_server_config(
         &self,
         bridge_socket: Option<std::path::PathBuf>,
     ) -> Vec<zedb_acp::McpServerConfig> {
-        let repo = self
-            .fleet
-            .repo
-            .as_ref()
-            .map(|repo| repo.root.display().to_string());
-        let connection = self.connection.connected.as_ref().map(|connected| {
-            (
-                connected.client_config.url.clone(),
-                connected.client_config.user.clone(),
-                connected.client_config.password.clone().unwrap_or_default(),
-            )
-        });
-        let mut config = serde_json::Map::new();
-        if let Some(repo) = repo {
-            config.insert("repo".into(), repo.into());
+        let variable = |name: &str, value: String| zedb_acp::EnvVariable {
+            name: name.to_string(),
+            value,
+        };
+        let mut env = Vec::new();
+        if let Some(repo) = &self.fleet.repo {
+            env.push(variable("ZEDB_MCP_REPO", repo.root.display().to_string()));
         }
-        if let Some((url, user, password)) = connection {
-            config.insert("url".into(), url.into());
-            config.insert("user".into(), user.into());
-            config.insert("password".into(), password.into());
+        if let Some(connected) = &self.connection.connected {
+            env.push(variable(
+                "ZEDB_MCP_URL",
+                connected.client_config.url.clone(),
+            ));
+            env.push(variable(
+                "ZEDB_MCP_USER",
+                connected.client_config.user.clone(),
+            ));
+            env.push(variable(
+                "ZEDB_MCP_PASSWORD",
+                connected.client_config.password.clone().unwrap_or_default(),
+            ));
         }
         if let Some(socket) = bridge_socket {
-            config.insert("app_socket".into(), socket.display().to_string().into());
+            env.push(variable(
+                "ZEDB_MCP_APP_SOCKET",
+                socket.display().to_string(),
+            ));
         }
         if let Some(cache) = &self.schema.cache {
-            config.insert(
-                "schema_cache".into(),
-                cache.snapshot_path().display().to_string().into(),
-            );
+            env.push(variable(
+                "ZEDB_MCP_SCHEMA_CACHE",
+                cache.snapshot_path().display().to_string(),
+            ));
         }
-        let Some(dir) = dirs::data_local_dir().map(|dir| dir.join("zedb").join("mcp")) else {
-            return Vec::new();
-        };
-        if std::fs::create_dir_all(&dir).is_err() {
-            return Vec::new();
-        }
-        let path = dir.join(format!("session-{}.json", self.agent.next_generation));
-        let value = serde_json::Value::Object(config);
-        if std::fs::write(&path, value.to_string()).is_err() {
-            return Vec::new();
-        }
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         let Ok(exe) = std::env::current_exe() else {
             return Vec::new();
         };
         vec![zedb_acp::McpServerConfig {
             name: "zedb".into(),
             command: exe.display().to_string(),
-            args: vec!["zedb-mcp-serve".into(), path.display().to_string()],
-            env: Vec::new(),
+            args: vec!["zedb-mcp-serve".into()],
+            env,
         }]
     }
 }

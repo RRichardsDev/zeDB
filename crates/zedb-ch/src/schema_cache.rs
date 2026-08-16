@@ -99,6 +99,17 @@ impl SchemaCache {
     }
 
     pub fn publish_tables(&self, records: Vec<TableRecord>) -> io::Result<()> {
+        self.publish_catalog(records, Vec::new())
+    }
+
+    /// Publish tables plus the full database list, so databases with
+    /// no tables yet (a fresh service, a just-created fleet) still
+    /// exist in the snapshot instead of vanishing from the sidebar.
+    pub fn publish_catalog(
+        &self,
+        records: Vec<TableRecord>,
+        database_names: Vec<String>,
+    ) -> io::Result<()> {
         let previous = self.snapshot();
         let mut databases: HashMap<String, CachedDatabase> = HashMap::new();
         for record in records {
@@ -126,6 +137,18 @@ impl SchemaCache {
                     columns: old_object.and_then(|object| object.columns.clone()),
                 },
             );
+        }
+        for name in database_names {
+            databases
+                .entry(name.clone())
+                .or_insert_with(|| CachedDatabase {
+                    name: name.clone(),
+                    objects: HashMap::new(),
+                    touched: previous
+                        .database(&name)
+                        .map(|database| database.touched)
+                        .unwrap_or(0),
+                });
         }
         self.publish(SchemaSnapshot {
             format: SNAPSHOT_FORMAT,
@@ -191,6 +214,15 @@ impl SchemaCache {
 
     pub async fn refresh_tables(&self, client: &ChClient) -> Result<()> {
         let mut records = client.list_schema_cache_tables().await?;
+        // The database list travels separately: a freshly created
+        // database has no rows in system.tables, and a cache built
+        // only from tables would leave it invisible in the sidebar.
+        let database_names = client
+            .list_databases()
+            .await?
+            .into_iter()
+            .map(|meta| meta.name)
+            .collect::<Vec<_>>();
         // Distributed tables report no storage of their own; sum the
         // underlying local table across shards (best effort: a partly
         // unreachable cluster just leaves the totals empty).
@@ -222,7 +254,7 @@ impl SchemaCache {
                 record.total_rows = rows;
             }
         }
-        self.publish_tables(records)
+        self.publish_catalog(records, database_names)
             .map_err(|error| ChError::Decode(format!("could not persist schema cache: {error}")))?;
         Ok(())
     }
@@ -346,6 +378,19 @@ mod tests {
                 })
             })
             .collect()
+    }
+
+    #[test]
+    fn empty_databases_survive_a_catalog_publish() {
+        let directory = tempdir().unwrap();
+        let cache = SchemaCache::open(directory.path().join("schema.json")).unwrap();
+        cache
+            .publish_catalog(tables(1, 2), vec!["db_0000".into(), "just_created".into()])
+            .unwrap();
+        let snapshot = cache.snapshot();
+        assert_eq!(snapshot.databases.len(), 2);
+        let empty = snapshot.databases.get("just_created").unwrap();
+        assert!(empty.objects.is_empty());
     }
 
     #[test]

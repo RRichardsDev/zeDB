@@ -272,7 +272,15 @@ impl Render for Workspace {
                                 |main| main.child(self.form_panel(cx)),
                             )
                             .when(
-                                !self.show_preferences && self.connection.form.is_none(),
+                                !self.show_preferences
+                                    && self.connection.form.is_none()
+                                    && self.connection.cloud.open,
+                                |main| main.child(self.cloud_panel(cx)),
+                            )
+                            .when(
+                                !self.show_preferences
+                                    && self.connection.form.is_none()
+                                    && !self.connection.cloud.open,
                                 |main| {
                                     main.child(self.connection_toolbar(cx)).child(
                                         div()

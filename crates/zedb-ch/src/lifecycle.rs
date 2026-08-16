@@ -109,6 +109,15 @@ pub async fn check_lifecycle(
             .await
             .map_err(|error| LifecycleError::Bootstrap(error.to_string()))?;
     }
+    // The ${db} database itself is bootstrap's job too: on a real
+    // fleet databases exist before any migration runs, so chains are
+    // not required to create their own.
+    admin
+        .execute(&format!(
+            "CREATE DATABASE IF NOT EXISTS {DB} ON CLUSTER {CLUSTER}"
+        ))
+        .await
+        .map_err(|error| LifecycleError::Bootstrap(error.to_string()))?;
 
     let step = |steps: &mut Vec<String>, text: String| {
         steps.push(text);

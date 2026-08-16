@@ -47,7 +47,9 @@ pub enum PaletteCommand {
     ToggleOps,
     ToggleQueryHistory,
     ExplainQuery,
+    EstimateQuery,
     ExportResults,
+    LinkCloud,
 }
 
 const ALL_COMMANDS: &[PaletteCommand] = &[
@@ -66,7 +68,9 @@ const ALL_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand::ToggleOps,
     PaletteCommand::ToggleQueryHistory,
     PaletteCommand::ExplainQuery,
+    PaletteCommand::EstimateQuery,
     PaletteCommand::ExportResults,
+    PaletteCommand::LinkCloud,
 ];
 
 impl PaletteCommand {
@@ -87,6 +91,8 @@ impl PaletteCommand {
             Self::ToggleOps => "Ops view",
             Self::ToggleQueryHistory => "Query history and saved queries",
             Self::ExplainQuery => "Explain query (plan and index pruning)",
+            Self::EstimateQuery => "Estimate query cost (parts, rows, marks)",
+            Self::LinkCloud => "Link ClickHouse Cloud",
             Self::ExportResults => "Export current query results",
         }
     }
@@ -98,7 +104,8 @@ impl PaletteCommand {
             | Self::NewQuery
             | Self::ToggleFleet
             | Self::ToggleOps
-            | Self::ExplainQuery => workspace.connection.connected.is_some(),
+            | Self::ExplainQuery
+            | Self::EstimateQuery => workspace.connection.connected.is_some(),
             Self::ExportResults => workspace.export_available(),
             _ => true,
         }
@@ -121,7 +128,9 @@ impl PaletteCommand {
             Self::ToggleOps => workspace.ops_toggle(cx),
             Self::ToggleQueryHistory => workspace.history_toggle(cx),
             Self::ExplainQuery => workspace.explain_query(window, cx),
+            Self::EstimateQuery => workspace.estimate_query(window, cx),
             Self::ExportResults => workspace.export_open(cx),
+            Self::LinkCloud => workspace.cloud_open(cx),
         }
     }
 }

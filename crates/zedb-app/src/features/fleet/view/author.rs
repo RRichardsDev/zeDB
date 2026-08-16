@@ -3,6 +3,7 @@ use gpui_component::input::{Input, InputState};
 
 use super::*;
 use crate::author::RollbackChoice;
+use crate::fleet::view::panel::verifying_lock;
 use crate::theme;
 
 impl Workspace {
@@ -14,6 +15,7 @@ impl Workspace {
         let applied_on = author.applied_on;
         let status_known = author.status_known;
         let checking = author.checking;
+        let harness_phase = author.harness_phase;
         let saveable = author.saveable(cx) && !readonly;
         let targeted = author.targeted;
         let choice = author.rollback_choice;
@@ -183,11 +185,95 @@ impl Workspace {
                     .id("author-check")
                     .px_3()
                     .py_1()
+                    // One width fits every state (Check, 43%, Verifying,
+                    // Checking), so the footer never jitters as the
+                    // button moves through them.
+                    .w(px(118.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap_1p5()
                     .rounded(px(3.))
                     .border_1()
                     .border_color(theme::border())
                     .text_color(if checking { theme::text_dim() } else { theme::text() })
-                    .child(if checking { "Checking..." } else { "Check" })
+                    .map(|button| match harness_phase {
+                        // Fetching the harness: the button's background
+                        // fills left to right with the download.
+                        Some(zedb_ch::pin::PinPhase::Downloading { received, total }) => {
+                            let fraction = total
+                                .filter(|total| *total > 0)
+                                .map(|total| received as f32 / total as f32)
+                                .unwrap_or(0.0);
+                            button
+                                .relative()
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .top_0()
+                                        .bottom_0()
+                                        .w(gpui::relative(fraction.clamp(0.02, 1.0)))
+                                        .rounded(px(3.))
+                                        // Green, but quiet enough that the
+                                        // label stays readable on top.
+                                        .bg(theme::success().opacity(0.35)),
+                                )
+                                .child(div().relative().child(match total {
+                                    // The label is the number; the tooltip
+                                    // keeps the words and the bytes.
+                                    Some(_) => format!("{:.0}%", fraction * 100.0),
+                                    None => "Downloading\u{2026}".to_string(),
+                                }))
+                                .tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(match total {
+                                        Some(total) => format!(
+                                            "Getting a ClickHouse harness to check against \
+                                             \u{b7} {} of {}",
+                                            Workspace::format_bytes(received),
+                                            Workspace::format_bytes(total),
+                                        ),
+                                        None => {
+                                            "Getting a ClickHouse harness to check against".into()
+                                        }
+                                    })
+                                    .build(window, cx)
+                                })
+                        }
+                        // The stall between download and first use:
+                        // macOS assessing the fresh binary.
+                        Some(zedb_ch::pin::PinPhase::Verifying) => button
+                            .child(verifying_lock("author-verify-lock", 13.))
+                            .child("Verifying\u{2026}")
+                            .tooltip(|window, cx| {
+                                gpui_component::tooltip::Tooltip::new(
+                                    "macOS is verifying the ClickHouse harness \
+                                     (first run only)",
+                                )
+                                .build(window, cx)
+                            }),
+                        None if checking => {
+                            use gpui::{percentage, Animation, AnimationExt as _, Transformation};
+                            use gpui_component::Sizable as _;
+                            button.child(
+                                gpui_component::Icon::empty()
+                                    .path("icons/hourglass.svg")
+                                    .with_size(gpui_component::Size::Small)
+                                    .text_color(theme::text_dim())
+                                    .with_animation(
+                                        "author-check-spin",
+                                        Animation::new(std::time::Duration::from_secs(1)).repeat(),
+                                        |icon, delta| {
+                                            icon.transform(Transformation::rotate(percentage(
+                                                delta,
+                                            )))
+                                        },
+                                    ),
+                            )
+                            .child("Checking...")
+                        }
+                        None => button.child("Check"),
+                    })
                     .hover(|button| button.bg(theme::hover()).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| this.author_check(cx))),
             )

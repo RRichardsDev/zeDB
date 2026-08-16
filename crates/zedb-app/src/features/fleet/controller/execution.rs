@@ -60,7 +60,10 @@ impl Workspace {
         let Some(connected) = &self.connection.connected else {
             return;
         };
-        let cluster = self.fleet.selected_cluster.clone();
+        // The ${cluster} for fleet operations comes from the top
+        // toolbar's node/cluster selector (apply_cluster), the single
+        // cluster choice in the app.
+        let cluster = connected.apply_cluster.clone();
         let config = connected.client_config.clone();
         self.fleet.action_running = true;
         self.fleet.action_result = None;

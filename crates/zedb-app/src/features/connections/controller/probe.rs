@@ -71,6 +71,9 @@ impl Workspace {
                         format!("No node accepted the connection details for {name}"),
                         cx,
                     );
+                    // A Cloud-linked connection can name the real cause:
+                    // the service may simply be asleep.
+                    this.cloud_explain_unreachable(&connection, cx);
                     return;
                 };
 
@@ -86,6 +89,7 @@ impl Workspace {
                 }
                 this.connection.endpoint_health.insert(name.clone(), health);
                 this.fleet.write_unlocked = false;
+                let first_connect = this.connection.connected.is_none();
                 this.connection.connected = Some(ConnectedCluster {
                     name: name.clone(),
                     active_node: active_node.node_index,
@@ -116,10 +120,49 @@ impl Workspace {
                 this.schema
                     .provider
                     .set_context(this.schema.cache.clone(), connection.database.clone());
-                // Land in the query view; the connection screen's job
-                // is done.
-                this.show_fleet = false;
-                this.show_query_editor = true;
+                // Cluster-derived state always resets (the world
+                // changed), but the view sticks: switching connections
+                // from the ops or fleet view stays there, showing the
+                // new cluster. Only a first connect (nothing was
+                // connected) lands in the query view; the schema
+                // loader below closes any table details, whose object
+                // belonged to the old cluster.
+                this.fleet_connection_reset();
+                // The migration repo follows the connection: swap to
+                // the repo remembered for this one (or none), so one
+                // cluster's chain never silently attaches to another.
+                let remembered = this.preferences.fleet_repos.get(&name).cloned();
+                let current = this.fleet.repo_path.read(cx).text().trim().to_string();
+                let target = remembered.unwrap_or_default();
+                if current != target {
+                    let text = target.clone();
+                    this.fleet
+                        .repo_path
+                        .update(cx, |input, cx| input.set_text(text, cx));
+                    this.fleet.repo = None;
+                    this.fleet.git = None;
+                    this.checks = None;
+                    this.checks_open = false;
+                    this.checks_clean = false;
+                    this.regen_status = None;
+                }
+                if first_connect {
+                    this.show_fleet = false;
+                    this.show_ops = false;
+                    this.show_query_editor = true;
+                }
+                // Preload the fleet regardless of the visible view:
+                // the refresh cascades into Verify-all and the silent
+                // chain checks off the main thread, so opening the
+                // tab later finds verdicts already there, or their
+                // honest loading states when opened instantly.
+                if this.fleet.repo.is_none()
+                    && !this.fleet.repo_path.read(cx).text().trim().is_empty()
+                {
+                    this.fleet_open_repo(cx);
+                } else if this.fleet.repo.is_some() {
+                    this.fleet_refresh(cx);
+                }
                 this.start_health_poll(cx);
                 this.notice = Some(format!(
                     "Connected to {name} via {} ({reachable}/{total} nodes reachable)",
@@ -139,6 +182,9 @@ impl Workspace {
     pub(crate) fn focus_recheck(&mut self, cx: &mut Context<Self>) {
         self.theme_recheck(cx);
         self.settings_sync_tick(cx);
+        // Cloud service states move while the app is unfocused (idling,
+        // console changes); the sidebar markers follow on refocus.
+        self.cloud_refresh(cx);
         // Update check: same quiet path as the periodic loop.
         let update_handle = rt::tokio().spawn(updates::check());
         cx.spawn(async move |this, cx| {

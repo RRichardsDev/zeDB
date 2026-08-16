@@ -13,7 +13,9 @@ pub use chain::{discover_chain, Migration, RollbackClass};
 pub use config::{ParamConfig, ReplayConfig, RepoConfig, ScopeConfig};
 pub use exclusions::{ExclusionGroup, Exclusions};
 pub use import::{import_repo, ImportReport};
-pub use scaffold::{init_repo, init_repo_if_empty, scaffold_migration, ScaffoldOptions};
+pub use scaffold::{
+    init_repo, init_repo_if_empty, is_effectively_empty, scaffold_migration, ScaffoldOptions,
+};
 pub use template::{placeholders, render, undeclared_placeholders, BUILTIN_PARAMS};
 
 #[derive(Debug, thiserror::Error)]

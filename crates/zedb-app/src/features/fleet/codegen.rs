@@ -58,6 +58,7 @@ impl Workspace {
             error: None,
             result: None,
         });
+        self.regen_status = None;
         cx.notify();
 
         let handle = rt::tokio().spawn(async move {
@@ -88,7 +89,24 @@ impl Workspace {
                 }
                 regen.running = false;
                 match result.map_err(|error| error.to_string()) {
-                    Ok(Ok(result)) => regen.result = Some(result),
+                    Ok(Ok(result)) => {
+                        // No churn: current-state already matches the
+                        // chain; nothing to read or write, the green
+                        // icon carries the verdict. Churn keeps the
+                        // window open awaiting the explicit write.
+                        let clean = result.1.is_empty();
+                        regen.result = Some(result);
+                        if clean {
+                            this.regen = None;
+                            this.regen_status = Some(true);
+                            this.flash_notice(
+                                "Regen: current-state matches the chain; nothing to write",
+                                cx,
+                            );
+                        } else {
+                            this.regen_status = Some(false);
+                        }
+                    }
                     Ok(Err(error)) | Err(error) => regen.error = Some(error),
                 }
                 cx.notify();
@@ -99,6 +117,7 @@ impl Workspace {
     }
 
     pub(crate) fn codegen_write(&mut self, cx: &mut Context<Self>) {
+        self.checks_clean = false;
         let Some(repo) = self.fleet.repo.clone() else {
             return;
         };
@@ -118,6 +137,8 @@ impl Workspace {
                 ));
                 self.notice_warning = false;
                 self.regen = None;
+                // The written tree is exactly the chain replay.
+                self.regen_status = Some(true);
             }
             Err(error) => {
                 if let Some(regen) = &mut self.regen {
@@ -128,7 +149,37 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The icon click: surface the modal, starting a run unless one
+    /// is already going (a silent auto-run just gets its UI shown).
     pub(crate) fn codegen_start_checks(&mut self, cx: &mut Context<Self>) {
+        self.checks_open = true;
+        let running = self.checks.as_ref().is_some_and(|checks| {
+            checks
+                .slots
+                .iter()
+                .any(|slot| matches!(slot, CheckSlot::Running))
+        });
+        if !running {
+            self.codegen_run_checks(cx);
+        }
+        cx.notify();
+    }
+
+    /// Start the checks without touching modal visibility; Verify-all
+    /// auto-runs them this way, and the icon carries the verdict.
+    pub(crate) fn codegen_run_checks_silent(&mut self, cx: &mut Context<Self>) {
+        let running = self.checks.as_ref().is_some_and(|checks| {
+            checks
+                .slots
+                .iter()
+                .any(|slot| matches!(slot, CheckSlot::Running))
+        });
+        if !running {
+            self.codegen_run_checks(cx);
+        }
+    }
+
+    fn codegen_run_checks(&mut self, cx: &mut Context<Self>) {
         let Some(repo) = self.fleet.repo.clone() else {
             return;
         };
@@ -141,6 +192,7 @@ impl Workspace {
             generation,
             slots: [CheckSlot::Running, CheckSlot::Running, CheckSlot::Running],
         });
+        self.checks_clean = false;
         cx.notify();
 
         for index in 0..3 {
@@ -207,6 +259,18 @@ impl Workspace {
                         Ok(Ok(summary)) => CheckSlot::Pass(summary),
                         Ok(Err(errors)) | Err(errors) => CheckSlot::Fail(errors),
                     };
+                    // A full pass needs no reading: close the modal and
+                    // let the green check-chain icon carry the news.
+                    let all_pass = checks
+                        .slots
+                        .iter()
+                        .all(|slot| matches!(slot, CheckSlot::Pass(_)));
+                    if all_pass {
+                        this.checks = None;
+                        this.checks_open = false;
+                        this.checks_clean = true;
+                        this.flash_notice("Chain checks passed: sql, equivalence, lifecycle", cx);
+                    }
                     cx.notify();
                 })
                 .ok();
@@ -216,7 +280,8 @@ impl Workspace {
     }
 
     pub(crate) fn codegen_panel(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        if self.regen.is_none() && self.checks.is_none() {
+        let checks_visible = self.checks_open && self.checks.is_some();
+        if self.regen.is_none() && !checks_visible {
             return None;
         }
 
@@ -273,7 +338,7 @@ impl Workspace {
                     body = body.child(list);
                 }
             }
-        } else if let Some(checks) = &self.checks {
+        } else if let Some(checks) = self.checks.as_ref().filter(|_| self.checks_open) {
             title = "Chain checks";
             for (name, slot) in CHECK_NAMES.iter().zip(&checks.slots) {
                 let row = div().flex().flex_col().gap_1();
@@ -351,7 +416,9 @@ impl Workspace {
                     .hover(|button| button.bg(theme::hover()).cursor_pointer())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.regen = None;
-                        this.checks = None;
+                        // Close hides the checks; a still-running run
+                        // keeps going and the icon keeps its verdict.
+                        this.checks_open = false;
                         cx.notify();
                     })),
             );

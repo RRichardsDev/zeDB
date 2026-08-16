@@ -91,6 +91,19 @@ impl Provider {
         }
     }
 
+    /// The API/auth host, and the Keychain key for the stored
+    /// elevated token that zeDB's git broker answers with.
+    pub fn git_host(self) -> &'static str {
+        match self {
+            Self::GitHub => "github.com",
+            Self::GitLab => "gitlab.com",
+        }
+    }
+
+    pub fn broker_keychain_key(self) -> String {
+        format!("zedb-git-elevated-{}", self.git_host())
+    }
+
     pub fn ssh_url(self, owner: &str, repo: &str) -> String {
         match self {
             Self::GitHub => format!("git@github.com:{owner}/{repo}.git"),
@@ -162,12 +175,18 @@ pub async fn start_device_flow_scoped(
 pub struct RepoInfo {
     pub full_name: String,
     pub ssh_url: String,
+    /// HTTPS clone URL: preferred for repos opened through zeDB, whose
+    /// git runs route credentials through the Keychain broker.
+    #[serde(rename = "clone_url", default)]
+    pub http_url: String,
 }
 
 #[derive(Deserialize)]
 struct GitLabProject {
     path_with_namespace: String,
     ssh_url_to_repo: String,
+    #[serde(default)]
+    http_url_to_repo: String,
 }
 
 impl From<GitLabProject> for RepoInfo {
@@ -175,6 +194,7 @@ impl From<GitLabProject> for RepoInfo {
         RepoInfo {
             full_name: project.path_with_namespace,
             ssh_url: project.ssh_url_to_repo,
+            http_url: project.http_url_to_repo,
         }
     }
 }
@@ -220,6 +240,42 @@ pub async fn get_repo(
 }
 
 /// Create a private repo on the user's account.
+/// The user's repositories, newest activity first (elevated scope:
+/// private repos are invisible to the read-only sign-in token).
+pub async fn list_repos(provider: Provider, token: &str) -> Result<Vec<RepoInfo>, String> {
+    let url = match provider {
+        Provider::GitHub => {
+            "https://api.github.com/user/repos?per_page=60&sort=updated&affiliation=owner"
+        }
+        Provider::GitLab => {
+            "https://gitlab.com/api/v4/projects?membership=true&order_by=last_activity_at&per_page=60"
+        }
+    };
+    let response = client()?
+        .get(url)
+        .header("Accept", "application/json")
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| format!("could not reach {}: {error}", provider.name()))?
+        .error_for_status()
+        .map_err(|error| format!("{} refused the listing: {error}", provider.name()))?;
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("unexpected repo listing: {error}"))?;
+    let repos = match provider {
+        Provider::GitHub => serde_json::from_str::<Vec<RepoInfo>>(&body)
+            .map_err(|error| format!("unexpected repo listing: {error}"))?,
+        Provider::GitLab => serde_json::from_str::<Vec<GitLabProject>>(&body)
+            .map_err(|error| format!("unexpected repo listing: {error}"))?
+            .into_iter()
+            .map(RepoInfo::from)
+            .collect(),
+    };
+    Ok(repos)
+}
+
 pub async fn create_private_repo(
     provider: Provider,
     token: &str,

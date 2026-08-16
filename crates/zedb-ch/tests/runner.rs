@@ -6,6 +6,13 @@ use zedb_ch::runner::{Runner, RunnerOptions, Targets};
 use zedb_ch::ChConfig;
 use zedb_core::repo::MigrationRepo;
 
+/// The three tests here each run a real server and interleave heavy
+/// DDL. Run concurrently, filtered SELECTs (tracking reads,
+/// system.tables) intermittently return empty despite the rows
+/// provably existing: see devlog 2026-08-16. Serialize them until
+/// that is understood; correctness first.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../zedb-core/tests/fixtures/demo-repo")
 }
@@ -51,6 +58,7 @@ fn dbs(names: &[&str]) -> Targets {
 /// without one, leaving every one of those behaviours unverified.
 #[tokio::test]
 async fn runner_walks_the_chain_on_a_real_server() {
+    let _serial = SERIAL.lock().await;
     let Some(binary) = any_cached_binary() else {
         eprintln!("skipping: no cached clickhouse binary (run `zedb pin`)");
         return;
@@ -174,6 +182,7 @@ async fn runner_walks_the_chain_on_a_real_server() {
 /// silently without one, leaving fleet targeting unverified.
 #[tokio::test]
 async fn fleet_targeting_discovers_and_skips_exclusions() {
+    let _serial = SERIAL.lock().await;
     let Some(binary) = any_cached_binary() else {
         eprintln!("skipping: no cached clickhouse binary (run `zedb pin`)");
         return;
@@ -239,6 +248,7 @@ async fn fleet_targeting_discovers_and_skips_exclusions() {
 /// without one, leaving drift detection unverified.
 #[tokio::test]
 async fn verify_detects_drift_at_chain_position() {
+    let _serial = SERIAL.lock().await;
     let Some(binary) = any_cached_binary() else {
         eprintln!("skipping: no cached clickhouse binary (run `zedb pin`)");
         return;

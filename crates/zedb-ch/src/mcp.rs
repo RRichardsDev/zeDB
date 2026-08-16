@@ -130,14 +130,36 @@ impl McpServer {
             .ok_or_else(|| "no ClickHouse connection configured for this server".into())
     }
 
-    fn repo(&self) -> Result<&MigrationRepo, String> {
-        self.repo
-            .as_ref()
-            .ok_or_else(|| "no migration repo open for this server".into())
+    /// The repo for this call, resolved fresh: the app's currently
+    /// open repo when the bridge is up (repos attach, detach, and
+    /// grow mid-session), else the one captured at startup, re-opened
+    /// so migrations scaffolded since launch are seen.
+    async fn effective_repo(&self) -> Result<MigrationRepo, String> {
+        match self.bridge_repo_root().await {
+            // The app answered: its word is truth, including "none".
+            Some(root) if root.is_empty() => Err("no migration repo open for this server".into()),
+            Some(root) => MigrationRepo::open_root(std::path::Path::new(&root))
+                .map_err(|error| error.to_string()),
+            // No bridge (CLI-style serving): startup config decides.
+            None => match &self.repo {
+                Some(repo) => {
+                    MigrationRepo::open_root(&repo.root).map_err(|error| error.to_string())
+                }
+                None => Err("no migration repo open for this server".into()),
+            },
+        }
     }
 
-    fn runner(&self) -> Result<Runner<'_>, String> {
-        let repo = self.repo()?;
+    /// Ask the app which repo is open right now; None when no bridge
+    /// is configured or it does not answer.
+    async fn bridge_repo_root(&self) -> Option<String> {
+        if self.app_socket.is_none() {
+            return None;
+        }
+        self.forward_app_tool("repo_root", &Value::Null).await.ok()
+    }
+
+    fn runner_for<'a>(&self, repo: &'a MigrationRepo) -> Result<Runner<'a>, String> {
         let config = self
             .config
             .clone()
@@ -203,8 +225,8 @@ impl McpServer {
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
         let outcome = match name {
             "fleet_status" => self.tool_fleet_status().await,
-            "list_migrations" => self.tool_list_migrations(),
-            "migration_sql" => self.tool_migration_sql(&arguments),
+            "list_migrations" => self.tool_list_migrations().await,
+            "migration_sql" => self.tool_migration_sql(&arguments).await,
             "dry_run" => self.tool_dry_run(&arguments).await,
             "drift" => self.tool_drift(&arguments).await,
             "list_databases" => self.tool_list_databases().await,
@@ -213,7 +235,9 @@ impl McpServer {
             "run_query" => self.tool_run_query(&arguments).await,
             "schema_search" => self.tool_schema_search(&arguments),
             "lint_sql" => self.tool_lint_sql(&arguments),
-            "propose_migration" | "propose_query" | "navigate" => {
+            "check_chain" => self.tool_check_chain().await,
+            "regen_preview" => self.tool_regen_preview().await,
+            "propose_migration" | "propose_query" | "navigate" | "highlight_control" => {
                 self.forward_app_tool(name, &arguments).await
             }
             other => Err(format!("unknown tool: {other}")),
@@ -337,6 +361,16 @@ fn tool_definitions(with_app_tools: bool, with_schema_cache: bool) -> Value {
             },
         }));
     }
+    items.push(json!({
+        "name": "check_chain",
+        "description": "Run the repo's chain checks (sql parse, current-state equivalence, lifecycle up-down-up) against the pinned ClickHouse harness. Read-only and slow (a cold harness downloads first). The fleet toolbar's check-chain icon shows the same verdicts.",
+        "inputSchema": { "type": "object", "properties": {} },
+    }));
+    items.push(json!({
+        "name": "regen_preview",
+        "description": "Replay the migration chain and diff the canonical current-state tree against the repo's files. Read-only preview of what the fleet view's Regen would write; nothing is written.",
+        "inputSchema": { "type": "object", "properties": {} },
+    }));
     if with_app_tools {
         items.push(json!({
             "name": "propose_migration",
@@ -356,6 +390,20 @@ fn tool_definitions(with_app_tools: bool, with_schema_cache: bool) -> Value {
             "name": "propose_query",
             "description": "Put SQL into a zeDB query editor tab for the user to run themselves. Use this for any statement you cannot or should not run (writes, DDL) and for queries the user asked to have in the editor.",
             "inputSchema": string_arg("sql", "the SQL to place in the editor"),
+        }));
+        items.push(json!({
+            "name": "highlight_control",
+            "description": "Draw the user's eye to one fleet-view control: its border flashes purple for a few seconds. Use this instead of describing where a button is, especially for the consent-gated write controls you cannot press (lock, upgrade_all, rollback).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "control": {
+                        "type": "string",
+                        "enum": ["lock", "upgrade_all", "rollback", "new_migration", "regen", "check_chain", "verify_all"],
+                    },
+                },
+                "required": ["control"],
+            },
         }));
         items.push(json!({
             "name": "navigate",

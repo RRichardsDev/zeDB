@@ -33,9 +33,11 @@ static ON_CLUSTER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)\s+ON\s+CLUSTER\s+('[^']*'|"[^"]*"|`[^`]*`|[A-Za-z_][A-Za-z0-9_]*)"#)
         .expect("static regex")
 });
-// ReplicatedXMergeTree('/zk/path', '{replica}'[, args]) -> XMergeTree([args])
+// ReplicatedXMergeTree('/zk/path', '{replica}'[, args]) -> XMergeTree([args]);
+// ClickHouse Cloud's SharedXMergeTree takes the same two coordination
+// arguments and declusters the same way.
 static REPLICATED_ENGINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"Replicated(\w*MergeTree)\(\s*'[^']*'\s*,\s*'[^']*'\s*(?:,\s*)?")
+    Regex::new(r"(?:Replicated|Shared)(\w*MergeTree)\(\s*'[^']*'\s*,\s*'[^']*'\s*(?:,\s*)?")
         .expect("static regex")
 });
 static ACCESS_CONTROL: LazyLock<Regex> = LazyLock::new(|| {
@@ -48,9 +50,9 @@ static DROP_SYNC: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s+SYNC\s*$").expect("static regex"));
 
 /// Rewrite rendered SQL for a single ephemeral node, where `ON CLUSTER`
-/// and Replicated engines cannot work: coordination clauses are dropped
-/// and Replicated engines fall back to their plain equivalents. The
-/// schema is otherwise identical.
+/// and Replicated/Shared engines cannot work: coordination clauses are
+/// dropped and Replicated engines (and Cloud's Shared variants) fall
+/// back to their plain equivalents. The schema is otherwise identical.
 pub fn decluster(sql: &str) -> String {
     let sql = ON_CLUSTER.replace_all(sql, "");
     REPLICATED_ENGINE.replace_all(&sql, "$1(").into_owned()
@@ -254,10 +256,11 @@ impl LocalReplay {
             .collect();
 
         let mut script = String::new();
+        // Every side database is provisioned up front, like the real
+        // fleet where databases exist before migrations run; chains
+        // whose baseline creates ${db} itself are unaffected.
         for database in &all_databases {
-            if database.contains("__") {
-                script.push_str(&format!("CREATE DATABASE IF NOT EXISTS {database};\n"));
-            }
+            script.push_str(&format!("CREATE DATABASE IF NOT EXISTS {database};\n"));
         }
         for side in sides {
             script.push_str(&Self::prepare(side, params, shared_databases)?);

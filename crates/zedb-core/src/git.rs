@@ -126,11 +126,75 @@ pub fn changed_paths(root: &Path) -> Option<Vec<String>> {
     Some(paths)
 }
 
-fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+/// The executable git invokes as GIT_ASKPASS for HTTPS remotes on
+/// known hosts: the app binary in a hidden answer mode that reads the
+/// token from the Keychain. Unset (the CLI, tests), git behaves
+/// exactly as before: the user's own auth.
+static AUTH_BROKER: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+
+pub fn set_auth_broker(exe: Option<std::path::PathBuf>) {
+    let _ = AUTH_BROKER.set(exe);
+}
+
+/// Env overrides that route an HTTPS github.com/gitlab.com remote's
+/// credentials through the broker; empty for everything else (SSH
+/// stays the user's own git).
+fn auth_envs(url: &str) -> Vec<(String, String)> {
+    let Some(Some(broker)) = AUTH_BROKER.get() else {
+        return Vec::new();
+    };
+    if !url.starts_with("https://") {
+        return Vec::new();
+    }
+    let host = url
+        .trim_start_matches("https://")
+        .split(['/', '@'])
+        .next()
+        .unwrap_or_default();
+    if host != "github.com" && host != "gitlab.com" {
+        return Vec::new();
+    }
+    vec![
+        ("GIT_ASKPASS".into(), broker.display().to_string()),
+        ("ZEDB_GIT_ASKPASS".into(), "1".into()),
+        ("ZEDB_GIT_HOST".into(), host.to_string()),
+        ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+    ]
+}
+
+/// The auth envs for a checkout, from its origin URL.
+fn auth_envs_for_root(root: &Path) -> Vec<(String, String)> {
+    let url = Command::new("git")
         .arg("-C")
         .arg(root)
+        .args(["config", "--get", "remote.origin.url"])
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_default();
+    auth_envs(&url)
+}
+
+fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
+    run_git_env(root, args, &[])
+}
+
+fn run_git_env(root: &Path, args: &[&str], envs: &[(String, String)]) -> Result<String, String> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root);
+    if !envs.is_empty() {
+        // Configured credential helpers (macOS ships osxkeychain)
+        // outrank GIT_ASKPASS and answer with whatever account they
+        // stored last; clear the helper list so the broker is the
+        // only voice for this run.
+        command.args(["-c", "credential.helper="]);
+    }
+    let output = command
         .args(args)
+        .envs(
+            envs.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
         .output()
         .map_err(|error| format!("could not run git: {error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -166,7 +230,7 @@ pub fn commit_paths(root: &Path, pathspecs: &[String], message: &str) -> Result<
 /// Push the current branch with the user's own git auth. Failures (no
 /// upstream, auth, non-fast-forward) return git's message verbatim.
 pub fn push(root: &Path) -> Result<String, String> {
-    run_git(root, &["push"])
+    run_git_env(root, &["push"], &auth_envs_for_root(root))
 }
 
 /// Whether `url` is a reachable git remote for this user's own git
@@ -188,7 +252,11 @@ pub fn push_setting_upstream(root: &Path) -> Result<String, String> {
     if has_upstream(root) {
         push(root)
     } else {
-        run_git(root, &["push", "-u", "origin", "HEAD"])
+        run_git_env(
+            root,
+            &["push", "-u", "origin", "HEAD"],
+            &auth_envs_for_root(root),
+        )
     }
 }
 
@@ -203,7 +271,7 @@ pub fn has_upstream(root: &Path) -> bool {
 /// resolves conflicts. Diverged history comes back as git's own
 /// message and the checkout is left exactly as it was.
 pub fn pull(root: &Path) -> Result<String, String> {
-    run_git(root, &["pull", "--ff-only"])
+    run_git_env(root, &["pull", "--ff-only"], &auth_envs_for_root(root))
 }
 
 /// Does this look like a git remote URL rather than a local path?
@@ -218,6 +286,45 @@ pub fn is_remote_url(text: &str) -> bool {
 
 /// The checkout directory name a remote URL clones into: its last path
 /// segment minus `.git`, sanitized to filesystem-safe characters.
+/// Boil git's stderr down to the lines that say something: the
+/// `remote:` banner noise (empty lines, ==== rules) drops, prefixes
+/// strip, and ERROR/fatal lines lead.
+pub fn summarize_git_error(raw: &str) -> String {
+    let mut meaningful: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        let line = line.strip_prefix("remote:").unwrap_or(line).trim();
+        if line.is_empty() || line.chars().all(|c| c == '=' || c == '-') {
+            continue;
+        }
+        if line.starts_with("Cloning into") || line.starts_with("clone failed") {
+            continue;
+        }
+        meaningful.push(line.to_string());
+    }
+    let lead = meaningful
+        .iter()
+        .position(|line| line.contains("ERROR") || line.contains("fatal:"));
+    let summary = match lead {
+        Some(index) => meaningful[index..].join(" "),
+        None => meaningful.join(" "),
+    };
+    let mut summary = summary.trim().to_string();
+    if summary.len() > 240 {
+        let mut cut = 240;
+        while !summary.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        summary.truncate(cut);
+        summary.push('\u{2026}');
+    }
+    if summary.is_empty() {
+        raw.trim().to_string()
+    } else {
+        summary
+    }
+}
+
 pub fn clone_directory_name(url: &str) -> String {
     let tail = url
         .trim()
@@ -258,15 +365,87 @@ pub fn clone_repo(url: &str, dest: &Path) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let output = Command::new("git")
+    // A just-created repository 404s while the host provisions it
+    // (GitLab reliably, GitHub occasionally). Not-found clones retry
+    // optimistically with exponential backoff, up to ~10s in total;
+    // real not-founds surface after the last attempt. Runs on
+    // blocking pools, so the sleeps stall no UI.
+    let mut delay = std::time::Duration::from_millis(500);
+    let mut waited = std::time::Duration::ZERO;
+    let budget = std::time::Duration::from_secs(10);
+    loop {
+        match clone_once(url, dest) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let transient = error.contains("not found")
+                    || error.contains("could not be found")
+                    || error.contains("could not read");
+                if !transient || waited >= budget {
+                    return Err(error);
+                }
+                std::thread::sleep(delay);
+                waited += delay;
+                delay = (delay * 2).min(budget - waited.min(budget));
+                if delay.is_zero() {
+                    delay = std::time::Duration::from_millis(500);
+                }
+            }
+        }
+    }
+}
+
+/// Append one debug line for git auth troubleshooting:
+/// $data/zedb/git-debug.log. Cheap, best-effort, no secrets.
+pub fn git_debug(line: &str) {
+    let Some(dir) = dirs::data_local_dir().map(|dir| dir.join("zedb")) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("git-debug.log"))
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+fn clone_once(url: &str, dest: &Path) -> Result<(), String> {
+    let envs = auth_envs(url);
+    git_debug(&format!(
+        "clone_once url={url} env_keys={:?} broker={:?}",
+        envs.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(),
+        AUTH_BROKER.get(),
+    ));
+    let mut command = Command::new("git");
+    if !envs.is_empty() {
+        // See run_git_env: the broker must outrank osxkeychain.
+        command.args(["-c", "credential.helper="]);
+    }
+    let output = command
         .arg("clone")
         .arg(url)
         .arg(dest)
+        .envs(
+            envs.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
         .output()
         .map_err(|error| format!("could not run git: {error}"))?;
+    git_debug(&format!(
+        "clone_once status={:?} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    ));
     if output.status.success() {
         Ok(())
     } else {
+        // A failed attempt may leave a partial directory behind;
+        // clear it so the retry starts clean.
+        if dest.exists() {
+            let _ = std::fs::remove_dir_all(dest);
+        }
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
 }
@@ -305,6 +484,37 @@ fn parse_porcelain_v2(text: &str) -> GitStatus {
         branch,
         dirty,
         ahead_behind,
+    }
+}
+
+#[cfg(test)]
+mod tests_auth {
+    use super::*;
+
+    #[test]
+    fn broker_envs_only_for_https_known_hosts() {
+        set_auth_broker(Some(std::path::PathBuf::from("/usr/local/bin/zedb")));
+        assert_eq!(auth_envs("git@github.com:me/repo.git"), Vec::new());
+        assert_eq!(auth_envs("https://example.com/me/repo.git"), Vec::new());
+        let envs = auth_envs("https://gitlab.com/me/repo.git");
+        assert!(envs
+            .iter()
+            .any(|(key, value)| key == "ZEDB_GIT_HOST" && value == "gitlab.com"));
+        assert!(envs.iter().any(|(key, _)| key == "GIT_ASKPASS"));
+    }
+}
+
+#[cfg(test)]
+mod tests_git_error {
+    use super::summarize_git_error;
+
+    #[test]
+    fn strips_remote_banner_noise() {
+        let raw = "Cloning into '/tmp/x'...\nremote:\nremote: ========================\nremote:\nremote: ERROR: The project you were looking for could not be found or you don't have permission to view it.\nremote:\nfatal: Could not read from remote repository.";
+        let summary = summarize_git_error(raw);
+        assert!(summary.starts_with("ERROR: The project"));
+        assert!(!summary.contains("===="));
+        assert!(!summary.contains("Cloning into"));
     }
 }
 

@@ -314,6 +314,7 @@ impl Workspace {
         let tab_id = tab.id;
         tab.outcome = QueryOutcome::Running;
         tab.explain = None;
+        tab.estimate = None;
         tab.advisor = None;
         tab.advise_pending = false;
         tab.advisor_generation += 1;

@@ -95,6 +95,30 @@ impl FleetAction {
     }
 }
 
+/// The repo picker's state machine, opened from the folder button
+/// when no repo path is set. The elevated token lives only here, in
+/// memory, and drops with the picker.
+pub enum RepoPicker {
+    /// Choose a source: a typed/browsed local path or a git host.
+    Menu { path: Entity<TextInput> },
+    /// Waiting for the user to approve the elevated device code.
+    Authorizing { user_code: String },
+    /// Talking to the API.
+    Loading(String),
+    /// Pick one of the user's repos, or create a new one.
+    Repos {
+        provider: crate::github::Provider,
+        token: String,
+        repos: Vec<crate::github::RepoInfo>,
+        create_name: Entity<TextInput>,
+    },
+    /// The chosen directory is empty: offer to initialize it.
+    ConfirmInit {
+        path: std::path::PathBuf,
+        source: String,
+    },
+}
+
 pub struct FleetState {
     pub repo_path: Entity<TextInput>,
     pub repo: Option<Arc<MigrationRepo>>,
@@ -110,15 +134,22 @@ pub struct FleetState {
     pub drift: HashMap<String, DriftInfo>,
     pub drift_loading: HashSet<String>,
     pub drift_error: Option<String>,
+    pub repo_picker: Option<RepoPicker>,
+    pub repo_picker_generation: u64,
+    /// Initialize an empty checkout without the confirm dialog once:
+    /// set when the user explicitly created a new repo to be one.
+    pub auto_init_once: bool,
+    /// While a verify pass fetches its ClickHouse harness: download
+    /// progress, then macOS verifying the fresh binary.
+    pub harness_phase: Option<zedb_ch::pin::PinPhase>,
+    /// How many databases the running verify pass covers, for the
+    /// button's progress tooltip.
+    pub verify_total: usize,
     /// Explicit per-session consent to mutate through this connection;
     /// reset whenever the connection changes.
     pub write_unlocked: bool,
     /// Cluster names discovered from system.clusters on refresh.
     pub clusters: Vec<String>,
-    /// The ${cluster} value for fleet operations; None means declustered.
-    pub selected_cluster: Option<String>,
-    /// The cluster dropdown is open.
-    pub cluster_open: bool,
     pub pending_action: Option<FleetAction>,
     pub ack_structural: bool,
     pub confirm_input: Entity<TextInput>,
@@ -144,7 +175,7 @@ pub struct FleetState {
 impl FleetState {
     pub fn new(
         initial_path: &str,
-        initial_cluster: &str,
+        _initial_cluster: &str,
         window: &mut gpui::Window,
         cx: &mut Context<Workspace>,
     ) -> Self {
@@ -168,10 +199,13 @@ impl FleetState {
             drift: HashMap::new(),
             drift_loading: HashSet::new(),
             drift_error: None,
+            repo_picker: None,
+            repo_picker_generation: 0,
+            auto_init_once: false,
+            harness_phase: None,
+            verify_total: 0,
             write_unlocked: false,
             clusters: Vec::new(),
-            selected_cluster: (!initial_cluster.is_empty()).then(|| initial_cluster.to_string()),
-            cluster_open: false,
             pending_action: None,
             ack_structural: false,
             confirm_input,
@@ -259,6 +293,13 @@ fn fleet_icon_button(
         .hover(|button| button.bg(theme::hover()).cursor_pointer())
         .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tooltip).build(window, cx))
         .on_click(on_click)
+}
+
+impl Workspace {
+    /// Whether the agent asked to point at this control right now.
+    pub(crate) fn agent_highlight(&self, control: &str) -> bool {
+        self.control_highlight.as_deref() == Some(control)
+    }
 }
 
 fn action_button(

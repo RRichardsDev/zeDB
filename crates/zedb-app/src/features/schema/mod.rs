@@ -8,6 +8,7 @@ mod view_inspector;
 mod view_parts;
 #[path = "view/relationships.rs"]
 mod view_relationships;
+mod workload;
 
 pub(crate) use model::{
     database_nodes_from_cache, schema_object_from_cache, DatabaseNode, ObjectInspectorTab,
