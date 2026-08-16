@@ -20,6 +20,10 @@ GitHub release notes.
   refused.
 - Switching nodes restarts any active tails on the new node instead of
   keeping the previous node's rows and cursor on screen.
+- Fixed reads silently running on the wrong node: the native connection
+  pool keyed connections by host alone, so two nodes reached through
+  different ports on the same host (a docker dev cluster, port-forwards)
+  shared one socket and one node's queries answered the other's.
 
 ## v0.1.30 - 2026-08-16
 

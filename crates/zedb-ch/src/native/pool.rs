@@ -32,9 +32,15 @@ fn disabled() -> bool {
 
 /// The connection identity a pooled socket serves. Everything that shapes
 /// the session is part of the key, so a settings or credentials change
-/// gets its own connection.
+/// gets its own connection. The key carries the full URL, not just the
+/// host: two nodes of one cluster reached through different ports on the
+/// same host must never share a socket, or one node's reads silently
+/// execute on the other.
 fn pool_key(cfg: &ChConfig) -> Option<String> {
-    let host = host_of(&cfg.url)?;
+    let endpoint = cfg.url.trim();
+    if endpoint.is_empty() {
+        return None;
+    }
     let settings: Vec<String> = cfg
         .driver
         .settings
@@ -42,7 +48,7 @@ fn pool_key(cfg: &ChConfig) -> Option<String> {
         .map(|setting| format!("{}={}", setting.name.trim(), setting.value.trim()))
         .collect();
     Some(format!(
-        "{host}|{}|{}|{}|{}|{}",
+        "{endpoint}|{}|{}|{}|{}|{}",
         cfg.user,
         cfg.password.as_deref().unwrap_or(""),
         cfg.database.as_deref().unwrap_or(""),
@@ -156,6 +162,22 @@ mod tests {
         assert!(!is_read_statement("ALTER TABLE t DROP COLUMN c"));
         assert!(!is_read_statement("SET readonly = 0"));
         assert!(!is_read_statement(""));
+    }
+
+    #[test]
+    fn pool_key_separates_nodes_on_the_same_host() {
+        let node = |url: &str| crate::ChConfig {
+            url: url.into(),
+            user: "zedb".into(),
+            password: None,
+            database: None,
+            read_only: false,
+            driver: Default::default(),
+        };
+        let one = pool_key(&node("http://localhost:8123")).unwrap();
+        let two = pool_key(&node("http://localhost:8124")).unwrap();
+        assert_ne!(one, two);
+        assert!(pool_key(&node("  ")).is_none());
     }
 
     #[test]
