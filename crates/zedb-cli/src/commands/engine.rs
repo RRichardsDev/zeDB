@@ -25,6 +25,7 @@ pub fn pin(
                     database: None,
                     read_only: true,
                     driver: Default::default(),
+                    native_port: None,
                 }))
                 .map_err(|error| error.to_string())?;
             println!("server runs ClickHouse {discovered}");

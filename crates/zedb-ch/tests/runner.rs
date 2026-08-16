@@ -37,6 +37,7 @@ fn options(server: &EphemeralServer, write: bool) -> RunnerOptions {
             database: None,
             read_only: false,
             driver: Default::default(),
+            native_port: None,
         },
         admin: None,
         cluster: None,

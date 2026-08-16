@@ -101,6 +101,13 @@ impl NativeClient {
                 .filter(|shifted| *shifted != 0 && *shifted != port)
         };
         let mut candidates: Vec<(NativeEndpoint, u16)> = Vec::new();
+        if let Some(port) = cfg.native_port {
+            // An explicitly configured port is configuration, not a
+            // guess: it goes first, on both transports, and discovery
+            // only runs behind it.
+            candidates.push((NativeEndpoint::Tls, port));
+            candidates.push((NativeEndpoint::Plain, port));
+        }
         for port in [shifted(secure_port), Some(secure_port)]
             .into_iter()
             .flatten()
@@ -113,6 +120,7 @@ impl NativeClient {
         {
             candidates.push((NativeEndpoint::Plain, port));
         }
+        candidates.dedup();
         let mut failures = Vec::new();
         let mut chosen = None;
         for (endpoint, port) in candidates {

@@ -9,6 +9,10 @@ GitHub release notes.
 
 ## Unreleased
 
+- Connection settings can declare an explicit native (TCP) port per
+  cluster node. An explicit port is tried first; discovery (advertised
+  port, then the HTTP remap offset) remains the fallback, and the
+  server-identity check applies to every candidate either way.
 - Query history now shows only the current connection's runs; saved
   queries stay shared across connections on purpose.
 - Open tabs are connection-scoped: each connection shows its own tabs

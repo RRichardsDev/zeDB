@@ -129,6 +129,7 @@ impl EphemeralServer {
             database: None,
             read_only,
             driver: Default::default(),
+            native_port: None,
         })
     }
 
@@ -342,6 +343,7 @@ async fn query_roundtrip_type_zoo() {
         database: None,
         read_only: true,
         driver: Default::default(),
+        native_port: None,
     });
     assert!(
         invalid.test_connection().await.is_err(),

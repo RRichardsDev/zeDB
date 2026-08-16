@@ -84,10 +84,12 @@ mod tests {
                 ConnectionNode {
                     name: "Node 1".into(),
                     endpoint: "http://ch-1.example:8123".into(),
+                    native_port: None,
                 },
                 ConnectionNode {
                     name: "Node 2".into(),
                     endpoint: "http://ch-2.example:8123".into(),
+                    native_port: None,
                 },
             ],
             user: "default".into(),

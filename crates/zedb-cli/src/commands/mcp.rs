@@ -20,6 +20,7 @@ pub fn serve(
         database: None,
         read_only: true,
         driver: Default::default(),
+        native_port: None,
     });
     let mut mcp = zedb_ch::mcp::McpServer::new(repo, config, Default::default());
     if let Some(name) = cache_connection {

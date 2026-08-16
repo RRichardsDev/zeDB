@@ -48,7 +48,8 @@ fn pool_key(cfg: &ChConfig) -> Option<String> {
         .map(|setting| format!("{}={}", setting.name.trim(), setting.value.trim()))
         .collect();
     Some(format!(
-        "{endpoint}|{}|{}|{}|{}|{}",
+        "{endpoint}|{:?}|{}|{}|{}|{}|{}",
+        cfg.native_port,
         cfg.user,
         cfg.password.as_deref().unwrap_or(""),
         cfg.database.as_deref().unwrap_or(""),
@@ -173,6 +174,7 @@ mod tests {
             database: None,
             read_only: false,
             driver: Default::default(),
+            native_port: None,
         };
         let one = pool_key(&node("http://localhost:8123")).unwrap();
         let two = pool_key(&node("http://localhost:8124")).unwrap();

@@ -124,6 +124,7 @@ impl EphemeralServer {
             database: None,
             read_only,
             driver: Default::default(),
+            native_port: None,
         }
     }
 
@@ -282,6 +283,7 @@ async fn native_stream_cursor_resumes_and_disconnect_cancels() {
         database: None,
         read_only: false,
         driver: Default::default(),
+        native_port: None,
     };
     let http = ChClient::new(cfg.clone());
     let table = format!("default.zedb_stream_test_{}", std::process::id());

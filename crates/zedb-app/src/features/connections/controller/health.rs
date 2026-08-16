@@ -145,6 +145,7 @@ impl Workspace {
         connected.active_node = node.node_index;
         connected.active_endpoint = node.endpoint.clone();
         connected.client_config.url = node.endpoint;
+        connected.client_config.native_port = node.native_port;
         // Picking a specific node returns apply scope to that node.
         connected.apply_cluster = None;
         // Same shard (or unknown topology): switching is invisible for

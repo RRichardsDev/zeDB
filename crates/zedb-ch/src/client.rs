@@ -30,6 +30,11 @@ pub struct ChConfig {
     pub read_only: bool,
     /// Per-cluster driver knobs (timeouts, extra ClickHouse settings).
     pub driver: DriverConfig,
+    /// Explicit native (TCP) port for this endpoint, when the user
+    /// configured one. Trusted first by the native connect; discovery
+    /// heuristics remain the fallback. The identity check applies
+    /// either way.
+    pub native_port: Option<u16>,
 }
 
 pub struct ChClient {

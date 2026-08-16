@@ -58,6 +58,8 @@ pub(crate) struct DriverSettingForm {
 pub(crate) struct NodeForm {
     pub(crate) name: Entity<TextInput>,
     pub(crate) endpoint: Entity<TextInput>,
+    /// Optional explicit native (TCP) port; empty means discovery.
+    pub(crate) native_port: Entity<TextInput>,
 }
 
 #[derive(Clone)]
@@ -81,6 +83,7 @@ pub(crate) struct EndpointHealth {
     pub(crate) node_index: usize,
     pub(crate) name: String,
     pub(crate) endpoint: String,
+    pub(crate) native_port: Option<u16>,
     pub(crate) reachable: bool,
     pub(crate) memberships: Vec<ClusterMembership>,
 }

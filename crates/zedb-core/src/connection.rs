@@ -65,6 +65,10 @@ pub struct DriverSetting {
 pub struct ConnectionNode {
     pub name: String,
     pub endpoint: String,
+    /// Explicit native (TCP) port for this node; `None` leaves the
+    /// native transport to its discovery heuristics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_port: Option<u16>,
 }
 
 fn deserialize_nodes<'de, D>(deserializer: D) -> Result<Vec<ConnectionNode>, D::Error>
@@ -97,6 +101,7 @@ where
             NodeOrEndpoint::Endpoint(endpoint) => ConnectionNode {
                 name: format!("Node {}", index + 1),
                 endpoint,
+                native_port: None,
             },
         })
         .collect())
@@ -186,6 +191,26 @@ mod tests {
 
         let serialized = serde_json::to_string(&connection).unwrap();
         assert!(serialized.contains("Replica A"));
+    }
+
+    #[test]
+    fn native_port_round_trips_and_legacy_defaults_none() {
+        let json = r#"{
+            "name": "local",
+            "nodes": [
+                {"name": "A", "endpoint": "http://h:8123", "native_port": 9001},
+                {"name": "B", "endpoint": "http://h:8124"}
+            ],
+            "user": "zedb"
+        }"#;
+        let connection: ConnectionConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(connection.nodes[0].native_port, Some(9001));
+        assert_eq!(connection.nodes[1].native_port, None);
+
+        let serialized = serde_json::to_string(&connection).unwrap();
+        assert!(serialized.contains("9001"));
+        // Unset ports stay out of the file entirely.
+        assert_eq!(serialized.matches("native_port").count(), 1);
     }
 
     #[test]

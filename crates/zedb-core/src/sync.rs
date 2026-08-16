@@ -285,6 +285,7 @@ mod tests {
             nodes: vec![ConnectionNode {
                 name: "Node 1".into(),
                 endpoint: "http://ch-1.example:8123".into(),
+                native_port: None,
             }],
             user: "default".into(),
             database: None,

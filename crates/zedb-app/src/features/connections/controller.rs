@@ -22,6 +22,7 @@ impl Workspace {
             nodes: vec![NodeForm {
                 name: Self::input("Node 1", "Node 1", false, cx),
                 endpoint: Self::input("http://localhost:8123", "http://host:8123", false, cx),
+                native_port: Self::input("", "tcp auto", false, cx),
             }],
             user: Self::input("default", "default", false, cx),
             database: Self::input("", "optional", false, cx),
@@ -51,6 +52,14 @@ impl Workspace {
                 .map(|node| NodeForm {
                     name: Self::input(node.name, "Node name", false, cx),
                     endpoint: Self::input(node.endpoint, "http://host:8123", false, cx),
+                    native_port: Self::input(
+                        node.native_port
+                            .map(|port| port.to_string())
+                            .unwrap_or_default(),
+                        "tcp auto",
+                        false,
+                        cx,
+                    ),
                 })
                 .collect(),
             user: Self::input(connection.user, "default", false, cx),
@@ -287,6 +296,7 @@ impl Workspace {
         let node = NodeForm {
             name: Self::input(format!("Node {next_number}"), "Node name", false, cx),
             endpoint: Self::input("", "http://host:8123", false, cx),
+            native_port: Self::input("", "tcp auto", false, cx),
         };
         if let Some(form) = &mut self.connection.form {
             form.nodes.push(node);
@@ -313,14 +323,33 @@ impl Workspace {
         let name = value(&form.name);
         let user = value(&form.user);
         let database = value(&form.database);
+        let mut bad_port = None;
         let nodes = form
             .nodes
             .iter()
-            .map(|node| ConnectionNode {
-                name: value(&node.name),
-                endpoint: value(&node.endpoint),
+            .map(|node| {
+                let raw_port = value(&node.native_port);
+                let native_port = if raw_port.is_empty() {
+                    None
+                } else {
+                    match raw_port.parse::<u16>() {
+                        Ok(port) if port != 0 => Some(port),
+                        _ => {
+                            bad_port = Some(raw_port);
+                            None
+                        }
+                    }
+                };
+                ConnectionNode {
+                    name: value(&node.name),
+                    endpoint: value(&node.endpoint),
+                    native_port,
+                }
             })
             .collect::<Vec<_>>();
+        if let Some(raw) = bad_port {
+            return Err(format!("Native port {raw:?} is not a port number"));
+        }
 
         if name.is_empty()
             || user.is_empty()

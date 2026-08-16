@@ -232,6 +232,7 @@ impl ConnectionArgs {
                 database: None,
                 read_only: false,
                 driver: Default::default(),
+                native_port: None,
             },
             admin: self.admin_user.as_ref().map(|user| zedb_ch::ChConfig {
                 url: self.server.clone(),
@@ -240,6 +241,7 @@ impl ConnectionArgs {
                 database: None,
                 read_only: false,
                 driver: Default::default(),
+                native_port: None,
             }),
             cluster: self.cluster.clone(),
             no_cluster: self.no_cluster,

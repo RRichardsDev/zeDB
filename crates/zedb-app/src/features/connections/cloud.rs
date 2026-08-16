@@ -303,6 +303,7 @@ impl Workspace {
             nodes: vec![NodeForm {
                 name: Self::input(name, "Node 1", false, cx),
                 endpoint: Self::input(url, "https://host:8443", false, cx),
+                native_port: Self::input("", "tcp auto", false, cx),
             }],
             user: Self::input("default", "default", false, cx),
             database: Self::input("", "optional", false, cx),

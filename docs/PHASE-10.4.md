@@ -1,7 +1,7 @@
 # Phase 10.4: explicit native port per node
 
-Status: PLANNED. From `docs/IRL-ISSUES.md`, raised during the 10.1
-node-2 verification.
+Status: COMPLETE (2026-08-16). From `docs/IRL-ISSUES.md`, raised during
+the 10.1 node-2 verification.
 
 Native (TCP) port discovery is advertised-port plus the HTTP remap
 offset, identity-checked. Good heuristics, still heuristics: asymmetric

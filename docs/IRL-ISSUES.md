@@ -11,5 +11,3 @@ they leave the list when shipped.
   -> PHASE-10.7.md (deferred)
 - when connected to a clickhouse cloud instance, the application should have a 1px border around the editor to indicate its connected which is in the clickhouse yellow. Just to show "you are using clickhouse cloud, this is better"
   -> PHASE-10.5.md
-- native port discovery is advertised-port + remap-offset heuristics; connection settings should allow an explicit native (TCP) port per cluster node, heuristic only as fallback
-  -> PHASE-10.4.md

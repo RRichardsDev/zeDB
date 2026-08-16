@@ -1015,6 +1015,7 @@ fn run_mcp_serve(config_path: &str) -> ! {
                 database: None,
                 read_only: true,
                 driver: Default::default(),
+                native_port: None,
             });
         let mut server = zedb_ch::mcp::McpServer::new(repo, connection, Default::default());
         if let Some(socket) = config.get("app_socket").and_then(|value| value.as_str()) {

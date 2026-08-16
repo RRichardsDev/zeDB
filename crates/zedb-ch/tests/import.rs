@@ -92,6 +92,7 @@ async fn tracking_rows_import_and_preserve_state() {
         database: None,
         read_only: false,
         driver: Default::default(),
+        native_port: None,
     });
 
     // An ancestor-shaped tracking table with history: demo_a upgraded
@@ -128,6 +129,7 @@ async fn tracking_rows_import_and_preserve_state() {
                 database: None,
                 read_only: false,
                 driver: Default::default(),
+                native_port: None,
             },
             admin: None,
             cluster: None,

@@ -33,6 +33,7 @@ impl Workspace {
                     database: database.clone(),
                     read_only,
                     driver: driver.clone(),
+                    native_port: None,
                 });
                 let reachable = client.test_connection().await.is_ok();
                 let memberships = if reachable {
@@ -44,6 +45,7 @@ impl Workspace {
                     node_index,
                     name: node.name,
                     endpoint: node.endpoint,
+                    native_port: node.native_port,
                     reachable,
                     memberships,
                 });
@@ -101,6 +103,7 @@ impl Workspace {
                         database: connection.database.clone(),
                         read_only: connection.read_only,
                         driver: connection.driver.clone(),
+                        native_port: active_node.native_port,
                     },
                     apply_cluster: None,
                 });

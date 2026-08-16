@@ -21,6 +21,9 @@ impl Workspace {
                     .gap_2()
                     .child(div().w(px(150.)).flex_none().child(node.name.clone()))
                     .child(div().flex_1().child(node.endpoint.clone()))
+                    // Explicit native (TCP) port; empty leaves discovery
+                    // (advertised port, then the remap offset) in charge.
+                    .child(div().w(px(90.)).flex_none().child(node.native_port.clone()))
                     .when(endpoint_count > 1, |row| {
                         row.child(
                             div()

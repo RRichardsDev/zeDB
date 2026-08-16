@@ -81,6 +81,7 @@ fn config(url: &str, user: &str, password: Option<&str>) -> ChConfig {
         database: None,
         read_only: false,
         driver: Default::default(),
+        native_port: None,
     }
 }
 
