@@ -129,7 +129,37 @@ impl Workspace {
                                                 .text_color(theme::text_dim())
                                                 .child("CLUSTER NODES"),
                                         )
-                                        .child(
+                                        .child(if cloud_locked {
+                                            // A Cloud service's topology
+                                            // comes from the control
+                                            // plane: adding a node here
+                                            // means adding another
+                                            // service, so go back to the
+                                            // Cloud panel.
+                                            div()
+                                                .id("add-endpoint")
+                                                .px_2()
+                                                .py_1()
+                                                .rounded(px(3.))
+                                                .border_1()
+                                                .border_color(theme::border())
+                                                .child("+ Add node")
+                                                .hover(|button| {
+                                                    button.bg(theme::bg_sidebar()).cursor_pointer()
+                                                })
+                                                .tooltip(|window, cx| {
+                                                    gpui_component::tooltip::Tooltip::new(
+                                                        "Cloud services manage their own nodes; \
+                                                         add another service from the Cloud panel",
+                                                    )
+                                                    .build(window, cx)
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.cancel_form(cx);
+                                                    this.cloud_open(cx);
+                                                }))
+                                                .into_any_element()
+                                        } else {
                                             div()
                                                 .id("add-endpoint")
                                                 .px_2()
@@ -143,8 +173,9 @@ impl Workspace {
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.add_endpoint(cx)
-                                                })),
-                                        ),
+                                                }))
+                                                .into_any_element()
+                                        }),
                                 )
                                 .children(endpoint_rows),
                         )
