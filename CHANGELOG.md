@@ -7,98 +7,98 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.31 - 2026-08-16
 
-- The connection summary page becomes a Cloud dashboard for linked
-  connections: Overview (per-compute state, version, tier, replicas
-  and memory, idle timeout, created date, primary/read-only badges),
-  Cost (the last 30 days of credits as daily bars, warehouse and
-  organization totals, category and per-entity breakdowns), Backups
-  (status, size, duration), and Metrics (the service's filtered
-  Prometheus set), fetched read-only with the org API key or the
-  browser sign-in.
-- Ops cluster scope now works on ClickHouse Cloud: single-host
-  clusters are skipped by shape instead of by the name "default",
-  which is exactly Cloud's real cluster name.
-- The workload advisor measures every replica (clusterAllReplicas)
-  when a real cluster exists, and the tab states its scope ("all
-  replicas of X" or "this node only") instead of implying totals.
-- The ops view understands SharedMergeTree: the health strip says
-  coordination is Cloud-managed instead of fabricating a green
-  "replication healthy", the Replication tab explains what applies,
-  object-storage disks show stored size instead of a meaningless
-  percent-full bar, and the Ingestion tab names ClickPipes.
-- Schema regen carries Shared*MergeTree engine definitions the same
-  way it always carried Replicated*, and replay tolerates Cloud's
-  clause-less SharedMergeTree forms.
-- A deleted Cloud service is marked deleted in the sidebar and
-  explained on connect, instead of failing as a plain timeout;
-  service states also refresh gently in the background (every two
-  minutes) so "running" cannot go stale while you watch.
-- KILL QUERY on a read-only Cloud connection explains the Cloud
-  posture and how to get a writable session.
-- zeDB now understands ClickHouse Cloud warehouses: the panel groups
-  compute under its warehouse, a connection built from one calls its
-  members compute (not nodes) and defaults to the warehouse's name,
-  only compute sharing the warehouse can join a connection (different
-  warehouse means different data), the sidebar says "N compute,
-  shared data", and ON CLUSTER can never reach a Cloud service: the
-  warehouse shares one catalog, so schema changes run once.
-- Sign in with ClickHouse Cloud from the Cloud panel: approve a code
-  in the browser and every organization you belong to lists its
-  services with live state, no API key needed. The sign-in is
-  read-only; an API key still wakes services and manages the org, and
-  the Start button says so instead of failing when only the sign-in
-  is present.
-- Adding a connection from a Cloud service now keeps the native TCP
-  port the control plane advertises, so instant tails skip port
-  discovery.
-- With an API key linked, the connection form can provision the
-  service's database password itself, behind an explicit confirm that
-  says it rotates the existing password; the result goes to the macOS
-  Keychain without ever being displayed.
-- The Cloud connection form explains the read-only default instead of
-  silently gating KILL QUERY and measured advisories.
-- A Cloud connection whose organization has no API key yet offers key
-  entry right in the form, with a link to the console page where keys
-  are created; linking it unlocks provisioning there and waking in
-  the Cloud panel.
+The ClickHouse Cloud release: sign in from the app, see your
+warehouses truthfully, and manage the whole connection from one page.
+
+### The Cloud front door
+
+- Sign in with ClickHouse Cloud: approve a code in the browser and
+  every organization you belong to lists its services with live
+  state, no API key needed. The sign-in is read-only; an API key
+  remains the power credential for waking services and managing the
+  org, and the panel says which is present and what each enables.
+- The sidebar's + opens a two-door menu: Self-hosted cluster, or
+  ClickHouse Cloud (the ClickHouse mark with a cloud glyph).
+- Connections built from a Cloud service arrive complete: endpoint,
+  native TCP port (instant tails skip discovery), locked
+  control-plane fields, and a one-sentence explanation of the
+  read-only default. With an API key, the form can provision the
+  database password itself behind an explicit rotation confirm; the
+  result goes to the Keychain without ever being displayed. Orgs
+  without a key get inline key entry with a deep link to the
+  console's API keys page.
 - The editor area wears a thin ClickHouse-yellow border while the
   active connection is a linked Cloud service.
-- The sidebar's + opens a two-door menu, Self-hosted cluster or
-  ClickHouse Cloud (the ClickHouse mark with a cloud glyph); the
-  separate Cloud header button is gone.
-- Connection settings can declare an explicit native (TCP) port per
-  cluster node. An explicit port is tried first; discovery (advertised
-  port, then the HTTP remap offset) remains the fallback, and the
-  server-identity check applies to every candidate either way.
-- Query history now shows only the current connection's runs; saved
-  queries stay shared across connections on purpose.
-- Open tabs are connection-scoped: each connection shows its own tabs
-  (plus never-run scratch tabs), and switching back restarts any tails
-  those tabs were running instead of leaving them frozen.
-- Fleet view: locked and clean condenses to a bare green tick; unlocked
-  spells out a green "Up to date" beside the actions.
-- Any query tab can be closed, the last one included; an empty strip
-  opens a fresh scratch tab.
-- A successful regen closes itself and reruns the chain check in the
-  background instead of leaving a stale failure on the button.
+
+### Warehouses, understood
+
+- The panel groups compute under its warehouse; a connection built
+  from one calls its members compute (not nodes), defaults its name
+  to the warehouse relationship, and only compute sharing the
+  warehouse can join it: a different warehouse is different data.
+- ON CLUSTER can never reach a Cloud service: the warehouse shares
+  one catalog, so schema changes run once. The node selector,
+  apply-cluster setting, and fleet execution all enforce it.
+- Provisioning targets the warehouse's primary service (the only one
+  the control plane rotates), and waking uses the awake command an
+  idled service actually requires.
+
+### A Cloud dashboard on the connection page
+
+- The connection summary page becomes the one stop for a linked
+  connection's Cloud objects: Overview (state, version, tier,
+  replicas and memory, idle timeout, created, primary/read-only),
+  Cost (30 days of credits as daily bars with warehouse and
+  organization totals, category and entity breakdowns), Backups
+  (status, size, duration), and Metrics (the service's filtered
+  Prometheus set). Read-only, via the API key or the sign-in.
+
+### Cloud-truthful views
+
+- Ops cluster scope works on Cloud: single-host clusters are skipped
+  by shape, never by the name "default", which is exactly Cloud's
+  real cluster name.
+- The workload advisor measures every replica (clusterAllReplicas)
+  when a real cluster exists and states its scope either way.
+- The ops view understands SharedMergeTree: the health strip reports
+  Cloud-managed coordination instead of a fabricated green,
+  object-storage disks show stored size instead of a meaningless
+  percent-full bar, and the Ingestion tab names ClickPipes.
+- Schema regen carries Shared*MergeTree engines the way it always
+  carried Replicated*, and replay tolerates Cloud's clause-less
+  SharedMergeTree forms.
+- A deleted Cloud service is marked deleted and explained instead of
+  timing out namelessly; service states refresh gently in the
+  background so "running" cannot go stale; KILL QUERY on read-only
+  Cloud explains the posture and the fix.
+
+### Instant tails and connections
 
 - Pausing and resuming an instant (STREAM) tail no longer loses rows
-  inserted while paused; the tail resumes from the last seen key and
-  replays what it missed.
-- A poll firing while the instant stream connects can no longer deliver
-  a row the stream then repeats.
-- Instant updates now work through remapped ports (docker publishes,
-  port-forwards): native connect tries the same remap shift the HTTP
-  port uses, and the server-identity check keeps cross-node sockets
-  refused.
-- Switching nodes restarts any active tails on the new node instead of
-  keeping the previous node's rows and cursor on screen.
-- Fixed reads silently running on the wrong node: the native connection
-  pool keyed connections by host alone, so two nodes reached through
-  different ports on the same host (a docker dev cluster, port-forwards)
-  shared one socket and one node's queries answered the other's.
+  inserted while paused, and a poll firing during stream connect can
+  no longer duplicate a row.
+- Instant updates work through remapped ports (docker publishes,
+  port-forwards), and connection settings can declare an explicit
+  native TCP port per node; the server-identity check applies to
+  every candidate.
+- Fixed reads silently running on the wrong node: the native pool
+  keyed connections by host alone, so two nodes reached through
+  different ports on one host shared a socket.
+- Switching nodes restarts active tails on the new node instead of
+  keeping the previous node's rows on screen.
+
+### Workspace
+
+- Open tabs and query history are connection-scoped; switching back
+  restarts any tails those tabs were running. Saved queries stay
+  shared on purpose.
+- Any query tab can be closed, the last one included; an empty strip
+  opens a fresh scratch tab.
+- Fleet view: locked and clean condenses to a bare green tick;
+  unlocked spells out a green "Up to date". A successful regen closes
+  itself and reruns the chain check in the background.
 
 ## v0.1.30 - 2026-08-16
 
