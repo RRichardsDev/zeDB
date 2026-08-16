@@ -60,12 +60,13 @@ impl Workspace {
         };
         let config = connected.client_config.clone();
         let connection_name = connected.name.clone();
+        let experimental_streaming = self.preferences.experimental_streaming_queries;
         let Some(state) = self
             .query
             .tabs
-            .iter()
+            .iter_mut()
             .find(|tab| tab.id == tab_id)
-            .and_then(|tab| tab.tail.as_ref())
+            .and_then(|tab| tab.tail.as_mut())
         else {
             return;
         };
@@ -74,13 +75,20 @@ impl Workspace {
         }
         let generation = state.generation;
         let body = state.query.body.clone();
-        let stream_sql = self
-            .preferences
-            .experimental_streaming_queries
+        let stream_sql = experimental_streaming
             .then(|| tail::stream_sql(&state.query, state.last.as_deref()))
             .flatten()
             .filter(|_| !state.stream_rejected);
         let stream_requested = stream_sql.is_some();
+        if stream_requested {
+            // The stream's replay boundary is the last seen key as of now.
+            // Claim the push slot immediately so the poll watchdog cannot
+            // deliver rows past that boundary while the stream connects;
+            // the replay would repeat them. The completion arms below
+            // settle the final mode, including back to Poll on failure.
+            state.push = TailPush::Stream;
+            state.stream_connecting = true;
+        }
         self.query.next_stream_epoch += 1;
         let epoch = self.query.next_stream_epoch;
         let view = format!("zedb_tail_{epoch}");
@@ -212,6 +220,7 @@ impl Workspace {
                     }
                     return;
                 };
+                state.stream_connecting = false;
                 match outcome {
                     Ok(Ok(Instant::Stream { receiver, abort })) => {
                         state.push = TailPush::Stream;
@@ -261,6 +270,7 @@ impl Workspace {
                         );
                     }
                     Ok(Err(error)) => {
+                        state.push = TailPush::Poll;
                         state.native_available = Some(false);
                         this.flash_warning(
                             format!("Couldn't connect to the native port: {error}"),
@@ -268,6 +278,7 @@ impl Workspace {
                         );
                     }
                     Err(error) => {
+                        state.push = TailPush::Poll;
                         state.native_available = Some(false);
                         this.flash_warning(format!("Instant updates failed: {error}"), cx);
                     }

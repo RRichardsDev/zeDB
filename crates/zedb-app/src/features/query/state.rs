@@ -155,6 +155,7 @@ pub(crate) struct TailState {
     pub(crate) native_available: Option<bool>,
     pub(crate) push: TailPush,
     pub(crate) stream: Option<TailStream>,
+    pub(crate) stream_connecting: bool,
     pub(crate) watch: Option<TailWatch>,
     pub(crate) stream_rejected: bool,
     pub(crate) generation: u64,

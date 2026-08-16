@@ -260,7 +260,10 @@ impl Workspace {
                     if let Some(stream) = state.stream.take() {
                         stream.abort.abort();
                     }
-                } else if state.stream.is_none() {
+                } else if state.stream.is_none() && !state.stream_connecting {
+                    // A pause during the connect window leaves the stream
+                    // task in flight; it delivers when it lands, so only a
+                    // truly closed stream reopens here.
                     state.push = TailPush::Poll;
                     resume_stream = true;
                 }

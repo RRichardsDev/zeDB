@@ -12,6 +12,8 @@ GitHub release notes.
 - Pausing and resuming an instant (STREAM) tail no longer loses rows
   inserted while paused; the tail resumes from the last seen key and
   replays what it missed.
+- A poll firing while the instant stream connects can no longer deliver
+  a row the stream then repeats.
 
 ## v0.1.30 - 2026-08-16
 

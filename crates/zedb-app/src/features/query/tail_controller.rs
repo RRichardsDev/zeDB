@@ -69,6 +69,7 @@ impl Workspace {
                         native_available: None,
                         push: TailPush::Poll,
                         stream: None,
+                        stream_connecting: false,
                         watch: None,
                         stream_rejected: false,
                         generation,
