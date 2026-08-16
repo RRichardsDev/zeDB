@@ -66,6 +66,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, action: &SetApplyCluster, _, cx| {
                 this.set_apply_cluster(action.cluster.clone(), cx)
             }))
+            .on_action(cx.listener(|this, _: &AddLocalConnection, _, cx| this.start_add(cx)))
+            .on_action(cx.listener(|this, _: &AddCloudConnection, _, cx| this.cloud_open(cx)))
             .on_action(cx.listener(|this, action: &DuplicateConnection, _, cx| {
                 this.duplicate_connection(action.index, cx)
             }))

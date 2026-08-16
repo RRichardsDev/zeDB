@@ -57,8 +57,9 @@ GitHub release notes.
   the Cloud panel.
 - The editor area wears a thin ClickHouse-yellow border while the
   active connection is a linked Cloud service.
-- The Cloud button in the connections header wears the ClickHouse mark
-  in brand yellow.
+- The Cloud button wears a cloud glyph in brand yellow, and the
+  sidebar's + opens a two-door menu: Self-hosted cluster or
+  ClickHouse Cloud.
 - Connection settings can declare an explicit native (TCP) port per
   cluster node. An explicit port is tried first; discovery (advertised
   port, then the HTTP remap offset) remains the fallback, and the

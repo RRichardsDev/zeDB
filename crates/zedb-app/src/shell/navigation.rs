@@ -214,13 +214,13 @@ impl Workspace {
                                             .flex()
                                             .items_center()
                                             .gap_1()
-                                            // The ClickHouse mark, in its own
-                                            // brand yellow, names whose cloud
-                                            // this is.
+                                            // A cloud glyph in the brand
+                                            // yellow: the shape says what
+                                            // it is, the color says whose.
                                             .child(
                                                 svg()
-                                                    .path("icons/clickhouse.svg")
-                                                    .size(px(11.))
+                                                    .path("icons/cloud.svg")
+                                                    .size(px(12.))
                                                     .text_color(rgb(0xFFCC01)),
                                             )
                                             .child("Cloud")
@@ -250,16 +250,31 @@ impl Workspace {
                                     .child(
                                         div()
                                             .id("add-connection")
-                                            .px_2()
-                                            .py_1()
                                             .rounded(px(3.))
                                             .text_color(theme::text())
-                                            .child("+")
                                             .hover(|button| {
                                                 button.bg(theme::hover()).cursor_pointer()
                                             })
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| this.start_add(cx)),
+                                            // Two doors, one +: the
+                                            // manual form and the
+                                            // Cloud panel.
+                                            .child(
+                                                Button::new("add-connection-menu")
+                                                    .label("+")
+                                                    .compact()
+                                                    .dropdown_menu(
+                                                        move |menu: PopupMenu, _, _| {
+                                                            menu.min_w(px(190.))
+                                                                .menu(
+                                                                    "Self-hosted cluster",
+                                                                    Box::new(AddLocalConnection),
+                                                                )
+                                                                .menu(
+                                                                    "ClickHouse Cloud",
+                                                                    Box::new(AddCloudConnection),
+                                                                )
+                                                        },
+                                                    ),
                                             ),
                                     ),
                             ),

@@ -161,6 +161,7 @@ impl AssetSource for Assets {
             "icons/edit.svg" => Some(include_bytes!("../assets/icons/edit.svg")),
             "icons/copy.svg" => Some(include_bytes!("../assets/icons/copy.svg")),
             "icons/clickhouse.svg" => Some(include_bytes!("../assets/icons/clickhouse.svg")),
+            "icons/cloud.svg" => Some(include_bytes!("../assets/icons/cloud.svg")),
             "icons/provider-aws.svg" => Some(include_bytes!("../assets/icons/provider-aws.svg")),
             "icons/provider-gcp.svg" => Some(include_bytes!("../assets/icons/provider-gcp.svg")),
             "icons/provider-azure.svg" => {
@@ -233,6 +234,15 @@ struct SelectNode {
 struct SetApplyCluster {
     cluster: Option<String>,
 }
+
+/// The + menu's two doors: the manual form and the Cloud panel.
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct AddLocalConnection;
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
+struct AddCloudConnection;
 
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json, no_register)]
