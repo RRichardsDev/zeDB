@@ -103,6 +103,10 @@ impl Workspace {
                                 "Regen: current-state matches the chain; nothing to write",
                                 cx,
                             );
+                            // A successful regen invalidates the failed
+                            // chain check that prompted it; re-verify
+                            // without opening the checks UI.
+                            this.codegen_run_checks_silent(cx);
                         } else {
                             this.regen_status = Some(false);
                         }
@@ -139,6 +143,7 @@ impl Workspace {
                 self.regen = None;
                 // The written tree is exactly the chain replay.
                 self.regen_status = Some(true);
+                self.codegen_run_checks_silent(cx);
             }
             Err(error) => {
                 if let Some(regen) = &mut self.regen {

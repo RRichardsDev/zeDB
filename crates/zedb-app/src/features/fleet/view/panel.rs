@@ -395,7 +395,10 @@ impl Workspace {
                     .rows
                     .iter()
                     .any(|row| row.excluded.is_none() && !row.pending.is_empty());
-                if status_known && !any_pending {
+                if status_known && !any_pending && !unlocked {
+                    // The tick means "clean and locked": nothing pending
+                    // and nothing can change it. Unlocked shows the
+                    // state as plain text below instead.
                     controls.child(
                         div()
                             .px_3()
@@ -408,6 +411,17 @@ impl Workspace {
                             .items_center()
                             .gap_1p5()
                             .child("\u{2713}")
+                            .child("Up to date"),
+                    )
+                } else if status_known && !any_pending {
+                    controls.child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(theme::border())
+                            .text_color(theme::text_dim())
                             .child("Up to date"),
                     )
                 } else if unlocked && any_pending {

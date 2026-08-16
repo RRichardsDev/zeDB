@@ -1,6 +1,6 @@
 # Phase 10.2: fleet lock and regen flow
 
-Status: PLANNED. Groups the fleet-view items from `docs/IRL-ISSUES.md`.
+Status: COMPLETE (2026-08-16). Groups the fleet-view items from `docs/IRL-ISSUES.md`.
 
 Small, high-touch polish on the migration fleet view, the daily-driver
 surface.

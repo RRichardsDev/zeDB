@@ -9,6 +9,11 @@ GitHub release notes.
 
 ## Unreleased
 
+- Fleet view: the green "Up to date" tick now appears only while writes
+  are locked; unlocked shows the state as plain text beside the actions.
+- A successful regen closes itself and reruns the chain check in the
+  background instead of leaving a stale failure on the button.
+
 - Pausing and resuming an instant (STREAM) tail no longer loses rows
   inserted while paused; the tail resumes from the last seen key and
   replays what it missed.
