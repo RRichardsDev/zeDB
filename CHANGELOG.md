@@ -14,6 +14,10 @@ GitHub release notes.
   replays what it missed.
 - A poll firing while the instant stream connects can no longer deliver
   a row the stream then repeats.
+- Instant updates now work through remapped ports (docker publishes,
+  port-forwards): native connect tries the same remap shift the HTTP
+  port uses, and the server-identity check keeps cross-node sockets
+  refused.
 
 ## v0.1.30 - 2026-08-16
 

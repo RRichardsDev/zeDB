@@ -19,25 +19,46 @@ pub(super) fn tls_connector() -> Result<tokio_rustls::TlsConnector> {
 /// `(tcp_port_secure, tcp_port)`. Either is `None` when unset or when the
 /// server predates `getServerPort`; callers fall back to 9440/9000.
 pub(super) async fn discovered_native_ports(http: &crate::ChClient) -> (Option<u16>, Option<u16>) {
-    let port = |result: Result<QueryResult>| {
-        result
-            .ok()
-            .and_then(|result| result.rows.into_iter().next())
-            .and_then(|row| row.into_iter().next())
-            .and_then(|value| match value {
-                Value::UInt(port) => u16::try_from(port).ok(),
-                Value::Int(port) => u16::try_from(port).ok(),
-                _ => None,
-            })
-    };
     // Two statements: getServerPort throws for a port that isn't
     // configured, and a secure-only or plain-only server is normal.
-    let secure = port(
+    let secure = first_port(
         http.query_http("SELECT getServerPort('tcp_port_secure')")
             .await,
     );
-    let plain = port(http.query_http("SELECT getServerPort('tcp_port')").await);
+    let plain = first_port(http.query_http("SELECT getServerPort('tcp_port')").await);
     (secure, plain)
+}
+
+/// How far the port we reach the server's HTTP interface on sits from the
+/// port the server believes it serves. Port remapping (docker publishes,
+/// kubectl port-forwards) usually shifts every published port by the same
+/// amount, so the native connect tries the shifted ports before the
+/// advertised ones; the server-identity check validates whichever answers.
+pub(super) async fn discovered_http_offset(http: &crate::ChClient, url: &str) -> i32 {
+    let Some(reached) = port_of(url) else {
+        return 0;
+    };
+    let setting = if url.trim_start().starts_with("https") {
+        "SELECT getServerPort('https_port')"
+    } else {
+        "SELECT getServerPort('http_port')"
+    };
+    match first_port(http.query_http(setting).await) {
+        Some(advertised) => i32::from(reached) - i32::from(advertised),
+        None => 0,
+    }
+}
+
+fn first_port(result: Result<QueryResult>) -> Option<u16> {
+    result
+        .ok()
+        .and_then(|result| result.rows.into_iter().next())
+        .and_then(|row| row.into_iter().next())
+        .and_then(|value| match value {
+            Value::UInt(port) => u16::try_from(port).ok(),
+            Value::Int(port) => u16::try_from(port).ok(),
+            _ => None,
+        })
 }
 
 /// The host of a ClickHouse HTTP URL (`http(s)://host:port/...` -> `host`).
@@ -56,6 +77,22 @@ pub fn host_of(url: &str) -> Option<String> {
         .map(|(host, _)| host)
         .unwrap_or(host_port);
     (!host.is_empty()).then(|| host.to_string())
+}
+
+/// The explicit port of a ClickHouse HTTP URL, if one is written.
+pub fn port_of(url: &str) -> Option<u16> {
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    let host_port = authority
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(authority);
+    host_port
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse().ok())
 }
 
 /// A `SET` right-hand side: numeric values go bare, anything else quoted.

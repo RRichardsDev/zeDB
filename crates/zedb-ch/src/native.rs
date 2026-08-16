@@ -26,8 +26,8 @@ pub use codec::host_of;
 #[cfg(test)]
 use codec::map_value;
 use codec::{
-    append_block_rows, block_columns, discovered_native_ports, map_err, setting_literal,
-    tls_connector,
+    append_block_rows, block_columns, discovered_http_offset, discovered_native_ports, map_err,
+    setting_literal, tls_connector,
 };
 pub use pool::{connect_pooled, evict, is_read_statement, pooled};
 
@@ -80,52 +80,84 @@ impl NativeClient {
         };
 
         let http = crate::ChClient::new(cfg.clone());
-        let (secure_port, plain_port) = discovered_native_ports(&http).await;
-        let secure_port = secure_port.unwrap_or(9440);
-        let plain_port = plain_port.unwrap_or(9000);
-        let client = match Self::connect_tls(&host, secure_port, options.clone()).await {
-            Ok((inner, transport)) => NativeClient {
-                inner,
-                transport,
-                endpoint: NativeEndpoint::Tls,
-            },
-            Err(tls_error) => match Self::connect_plain(&host, plain_port, options).await {
-                Ok((inner, transport)) => NativeClient {
-                    inner,
-                    transport,
-                    endpoint: NativeEndpoint::Plain,
-                },
-                Err(plain_error) => {
-                    return Err(ChError::NativeTransport(format!(
-                        "no native port on {host}: {secure_port}: {tls_error}; \
-                             {plain_port}: {plain_error}"
-                    )))
-                }
-            },
-        };
         // The native port may be a guess, and another ClickHouse may be
         // listening there (port-forwards, side-by-side clusters, a stray
-        // clickhouse-local). Prove the socket belongs to the same server
-        // as the HTTP endpoint before handing it out.
+        // clickhouse-local). Every candidate below must prove it belongs
+        // to the same server as the HTTP endpoint before being handed out.
         let http_uuid = http.server_uuid_http().await.map_err(|error| {
             ChError::NativeTransport(format!("could not verify server identity: {error}"))
         })?;
-        let native_uuid = client
-            .query("SELECT serverUUID()")
-            .await?
-            .rows
-            .first()
-            .and_then(|row| row.first())
-            .map(ToString::to_string);
-        if native_uuid.as_deref() != Some(http_uuid.as_str()) {
-            return Err(ChError::NativeTransport(format!(
-                "native port {} answers as a different server than the HTTP endpoint",
-                match client.endpoint {
-                    NativeEndpoint::Tls => secure_port,
-                    NativeEndpoint::Plain => plain_port,
-                }
-            )));
+        let (secure_port, plain_port) = discovered_native_ports(&http).await;
+        let secure_port = secure_port.unwrap_or(9440);
+        let plain_port = plain_port.unwrap_or(9000);
+        // The server advertises its own ports, but a remapped deployment
+        // (docker publish, port-forward) reaches them elsewhere. The HTTP
+        // remap offset is measurable, so shifted candidates go first; the
+        // identity check decides what actually answered.
+        let offset = discovered_http_offset(&http, &cfg.url).await;
+        let shifted = |port: u16| {
+            u16::try_from(i32::from(port) + offset)
+                .ok()
+                .filter(|shifted| *shifted != 0 && *shifted != port)
+        };
+        let mut candidates: Vec<(NativeEndpoint, u16)> = Vec::new();
+        for port in [shifted(secure_port), Some(secure_port)]
+            .into_iter()
+            .flatten()
+        {
+            candidates.push((NativeEndpoint::Tls, port));
         }
+        for port in [shifted(plain_port), Some(plain_port)]
+            .into_iter()
+            .flatten()
+        {
+            candidates.push((NativeEndpoint::Plain, port));
+        }
+        let mut failures = Vec::new();
+        let mut chosen = None;
+        for (endpoint, port) in candidates {
+            let connected = match endpoint {
+                NativeEndpoint::Tls => Self::connect_tls(&host, port, options.clone()).await,
+                NativeEndpoint::Plain => Self::connect_plain(&host, port, options.clone()).await,
+            };
+            let (inner, transport) = match connected {
+                Ok(connected) => connected,
+                Err(error) => {
+                    failures.push(format!("{port}: {error}"));
+                    continue;
+                }
+            };
+            let client = NativeClient {
+                inner,
+                transport,
+                endpoint,
+            };
+            let native_uuid = match client.query("SELECT serverUUID()").await {
+                Ok(result) => result
+                    .rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .map(ToString::to_string),
+                Err(error) => {
+                    failures.push(format!("{port}: {error}"));
+                    continue;
+                }
+            };
+            if native_uuid.as_deref() != Some(http_uuid.as_str()) {
+                failures.push(format!(
+                    "{port}: answers as a different server than the HTTP endpoint"
+                ));
+                continue;
+            }
+            chosen = Some(client);
+            break;
+        }
+        let Some(client) = chosen else {
+            return Err(ChError::NativeTransport(format!(
+                "no native port on {host}: {}",
+                failures.join("; ")
+            )));
+        };
         client.apply_session_settings(cfg).await?;
         Ok(client)
     }
