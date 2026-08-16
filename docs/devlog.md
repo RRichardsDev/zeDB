@@ -1006,3 +1006,47 @@ Comment-only sweep, so these are untouched and want their own patches:
   twice in a row.
 - `ui/theme.rs:113` light `table_tint` is purple, near `filter_tint`,
   while dark is orange-red. Possibly deliberate, looks like a paste.
+
+## The parallel-test interference, hunted further (2026-08-16)
+
+Follow-up to "zedb-ch integration tests interfere when run in parallel".
+Two real defects fell out of this session's hunt, both fixed:
+
+- `tests/native.rs` and `tests/roundtrip.rs` carried private copies of the
+  ephemeral spawner without `CLICKHOUSE_WATCHDOG_ENABLE=0`, so killing a
+  test run reaped only the watchdog and orphaned the real server. Some
+  orphans were nearly three days old and answered later runs' queries.
+  With the env var added, an interrupted run leaves zero servers behind.
+- The port allocator's bind-and-release probe raced other processes. It is
+  now a pid-ranged sequential allocator that bind-tests each candidate
+  under a mutex, and `EphemeralServer::start` proves the server it pinged
+  is its own by reading `system.disks` and matching the temp root.
+
+Neither fixed the flake. With `ZEDB_TRACKING_DEBUG=1` instrumentation
+(spawn lines with ports and roots; on any empty tracking read, a dump of
+the whole tracking table plus the answering server's data path and the
+client's configured URL), three strikes told three stories:
+
+- Reads from clients pinned to their own server's port were answered by a
+  different test's server (data path from another temp root), twice, on
+  distinct ports.
+- Then a run where the client URL, answering server, and table dump were
+  all consistent and correct, yet the filtered
+  `SELECT ... WHERE db = '...'` returned empty while the unfiltered dump
+  of the same table in the same diagnostic showed the rows.
+- Then a run where `system.tables WHERE database = 'demo_drifted'` came
+  back empty immediately after a successful ALTER and CREATE on that
+  database over the same client.
+
+The common signature is a filtered SELECT transiently returning an empty
+or foreign result while the data provably exists. With unique ports,
+identity-checked startup, and no shared state, the remaining suspects are
+request/response pairing on reused HTTP connections or a server-side
+anomaly in the pinned build under concurrent DDL load. Both need a
+dedicated session with packet-level capture to settle.
+
+Disposition: the three server-backed tests in `tests/runner.rs` now take a
+shared tokio mutex, serializing them within the binary. Twelve consecutive
+parallel-suite runs passed with the mutex where roughly one in three
+struck without it. The instrumentation stays, gated behind
+`ZEDB_TRACKING_DEBUG`, so the next hunt starts warm.

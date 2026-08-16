@@ -82,22 +82,49 @@ impl Runner<'_> {
         );
         let result = match self.client.query(&sql).await {
             Ok(result) => result,
-            // A missing tracking table or database (code 60 / 81:
-            // a server where nothing was ever applied, e.g. a fresh
-            // Cloud service) means exactly that: nothing applied.
+            // A missing tracking table or database (code 60 / 81: a
+            // server where nothing was ever applied, e.g. a fresh
+            // Cloud service) means exactly that: nothing applied. The
+            // error must NAME the tracking store: anything else (a
+            // transient failure that merely resembles these codes)
+            // surfaces instead of silently reading as empty history.
             Err(error)
                 if {
                     let text = error.to_string();
-                    text.contains("UNKNOWN_TABLE")
+                    let missing_kind = text.contains("UNKNOWN_TABLE")
                         || text.contains("UNKNOWN_DATABASE")
                         || text.contains("(code 60)")
-                        || text.contains("(code 81)")
+                        || text.contains("(code 81)");
+                    missing_kind && text.contains(&self.repo.config.tracking.database)
                 } =>
             {
                 return Ok(Vec::new());
             }
             Err(error) => return Err(RunnerError::Server(error.to_string())),
         };
+        if result.rows.is_empty() && std::env::var_os("ZEDB_TRACKING_DEBUG").is_some() {
+            // Diagnostic for the flaky empty-read: what does this
+            // server actually hold, and which server is it?
+            let total = self
+                .client
+                .query(&format!(
+                    "SELECT repo, db, migration, action, status FROM {} ORDER BY recorded_at LIMIT 12",
+                    self.tracking_table()
+                ))
+                .await
+                .map(|r| format!("{:?}", r.rows))
+                .unwrap_or_else(|e| format!("err: {e}"));
+            let path = self
+                .client
+                .query("SELECT path FROM system.disks WHERE name='default'")
+                .await
+                .map(|r| format!("{:?}", r.rows))
+                .unwrap_or_else(|e| format!("err: {e}"));
+            eprintln!(
+                "[tracking-debug] empty last_states for db={database} client_url={} table_total={total} server_path={path}",
+                self.options.server.url
+            );
+        }
         Ok(result
             .rows
             .iter()

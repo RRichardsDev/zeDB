@@ -86,19 +86,33 @@ pub struct EphemeralServer {
     _dir: tempfile::TempDir,
 }
 
-/// Ports already handed out by this process. Probed ports are
-/// released before the server binds them, so without this two
-/// concurrent tests in one binary can draw the same port; the loser
-/// then pings the winner's server and mistakes it for its own.
-static TAKEN_PORTS: std::sync::Mutex<Option<std::collections::HashSet<u16>>> =
-    std::sync::Mutex::new(None);
+/// Port allocation that cannot race: candidates come from a
+/// pid-scoped range OUTSIDE the kernel's ephemeral range (macOS hands
+/// bind(0) results and outgoing source ports from 49152+), so no
+/// other process's kernel-assigned port can ever equal ours, and each
+/// candidate is verified by binding the exact port we will use. The
+/// old bind(0)-probe-release scheme let two servers co-bind one port
+/// via address reuse, with the kernel splitting connections between
+/// them: tests silently interleaved across each other's servers.
+static NEXT_PORT: std::sync::Mutex<u16> = std::sync::Mutex::new(0);
 
 fn free_port() -> std::io::Result<u16> {
+    // 20000..48000, offset per process so sibling test binaries draw
+    // from disjoint neighborhoods.
+    let base = 20000 + (std::process::id() % 560) as u16 * 50;
+    let mut next = NEXT_PORT.lock().expect("port allocator");
+    if *next == 0 {
+        *next = base;
+    }
     loop {
-        let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
-        let mut taken = TAKEN_PORTS.lock().expect("port registry");
-        if taken.get_or_insert_with(Default::default).insert(port) {
-            return Ok(port);
+        let candidate = *next;
+        *next = if candidate >= 47999 {
+            20000
+        } else {
+            candidate + 1
+        };
+        if TcpListener::bind(("127.0.0.1", candidate)).is_ok() {
+            return Ok(candidate);
         }
     }
 }
@@ -169,6 +183,12 @@ impl EphemeralServer {
             .spawn()?;
 
         let root_path = root.to_path_buf();
+        if std::env::var_os("ZEDB_TRACKING_DEBUG").is_some() {
+            eprintln!(
+                "[ephemeral] spawned tcp={tcp} http={http} root={}",
+                root_path.display()
+            );
+        }
         let server = Self {
             process,
             http_url: format!("http://127.0.0.1:{http}"),
@@ -180,7 +200,10 @@ impl EphemeralServer {
             // The data path is unique per instance; confirm it is ours.
             Ok(()) => match server.confirm_identity(&root_path) {
                 Ok(()) => Ok(server),
-                Err(error) => Err(error),
+                Err(error) => {
+                    eprintln!("[ephemeral] identity check failed: {error}");
+                    Err(error)
+                }
             },
             Err(error) => Err(error),
         })
