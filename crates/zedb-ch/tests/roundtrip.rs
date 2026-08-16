@@ -101,6 +101,10 @@ impl EphemeralServer {
             .arg("server")
             .arg("--config-file")
             .arg(&config_xml)
+            // Without this ClickHouse forks a watchdog parent; killing
+            // the spawned pid on Drop would orphan the real server (it
+            // did, for days: leaked servers poisoned every test run).
+            .env("CLICKHOUSE_WATCHDOG_ENABLE", "0")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()

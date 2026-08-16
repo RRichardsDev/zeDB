@@ -1,20 +1,23 @@
-## 2026-08-16: flaky test on record
+## 2026-08-16: the flaky-suite saga, solved
 
-`verify_detects_drift_at_chain_position` (zedb-ch tests/runner.rs) is
-flaky: it failed once in a full-workspace run and once during a
-bisect, then passed 4/4 consecutive runs at the same commit, and a
-bisect blamed a commit that only touches git credential plumbing.
-Suspected ephemeral-server contention under parallel test load (the
-"missing: ${db}.events" finding reads like the live query hit a
-server that never ran the fixture chain). Note: the test silently
-skips without a cached ClickHouse binary, so runs after a cache wipe
-prove nothing. Worth hardening EphemeralServer port allocation or
-serializing the server-backed suites.
-
-# Devlog
-
-Findings worth remembering, especially GPUI gaps and gotchas that could
-become upstream contributions. Newest at the bottom.
+Server-backed tests had been flaky for days ("missing: ${db}.events",
+"table already exists", "no databases discovered", a lifecycle test
+hung for 44 hours). Root cause: tests/native.rs and tests/roundtrip.rs
+carried private copies of EphemeralServer WITHOUT
+CLICKHOUSE_WATCHDOG_ENABLE=0, so killing the spawned pid on Drop
+killed only the watchdog and orphaned the real server: one leak per
+test, accumulating for days (some orphans reached 2d17h old) and
+squatting on ports. New ephemeral servers then lost bind races to the
+orphans, and wait_ready's /ping happily accepted the wrong server's
+answer, so tests silently ran against strangers. Fixes: the watchdog
+env in both test copies (leak closed, verified zero orphans), plus
+hardening in ephemeral.rs: a process-wide port registry (no
+same-binary double-draws), three start attempts, and an identity
+check after ping (the default disk path must live in our tempdir), so
+a cross-process clash is now a detected retry instead of silent
+cross-talk. Reminder that also hid all this: the drift tests skip
+silently without a cached ClickHouse binary, so suite runs after a
+cache wipe prove nothing.
 
 ## M0 (2026-08-05)
 

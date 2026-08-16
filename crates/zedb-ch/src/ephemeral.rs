@@ -13,6 +13,8 @@ pub enum EphemeralError {
     Io(#[from] std::io::Error),
     #[error("server did not answer /ping within {0:?}; log tail:\n{1}")]
     NotReady(Duration, String),
+    #[error("{0}")]
+    Startup(String),
 }
 
 const SERVER_CONFIG: &str = r#"<clickhouse>
@@ -84,8 +86,21 @@ pub struct EphemeralServer {
     _dir: tempfile::TempDir,
 }
 
+/// Ports already handed out by this process. Probed ports are
+/// released before the server binds them, so without this two
+/// concurrent tests in one binary can draw the same port; the loser
+/// then pings the winner's server and mistakes it for its own.
+static TAKEN_PORTS: std::sync::Mutex<Option<std::collections::HashSet<u16>>> =
+    std::sync::Mutex::new(None);
+
 fn free_port() -> std::io::Result<u16> {
-    Ok(TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
+    loop {
+        let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
+        let mut taken = TAKEN_PORTS.lock().expect("port registry");
+        if taken.get_or_insert_with(Default::default).insert(port) {
+            return Ok(port);
+        }
+    }
 }
 
 impl EphemeralServer {
@@ -93,21 +108,27 @@ impl EphemeralServer {
     /// Retries once on a port clash (free ports are probed, then released,
     /// so another process can race for them).
     pub fn start(binary: &Path) -> Result<Self, EphemeralError> {
-        let first = Self::start_once(binary, None)?;
-        match first {
-            Ok(server) => Ok(server),
-            Err(_) => Self::start_once(binary, None)?,
+        let mut last = Self::start_once(binary, None)?;
+        for _ in 0..2 {
+            match last {
+                Ok(server) => return Ok(server),
+                Err(_) => last = Self::start_once(binary, None)?,
+            }
         }
+        last
     }
 
     /// Start a single-node *clustered* server (embedded Keeper, real
     /// distributed DDL) whose cluster is named `cluster`.
     pub fn start_clustered(binary: &Path, cluster: &str) -> Result<Self, EphemeralError> {
-        let first = Self::start_once(binary, Some(cluster))?;
-        match first {
-            Ok(server) => Ok(server),
-            Err(_) => Self::start_once(binary, Some(cluster))?,
+        let mut last = Self::start_once(binary, Some(cluster))?;
+        for _ in 0..2 {
+            match last {
+                Ok(server) => return Ok(server),
+                Err(_) => last = Self::start_once(binary, Some(cluster))?,
+            }
         }
+        last
     }
 
     fn start_once(
@@ -147,15 +168,37 @@ impl EphemeralServer {
             .stderr(log)
             .spawn()?;
 
+        let root_path = root.to_path_buf();
         let server = Self {
             process,
             http_url: format!("http://127.0.0.1:{http}"),
             _dir: dir,
         };
         Ok(match server.wait_ready(Duration::from_secs(30)) {
-            Ok(()) => Ok(server),
+            // Answering /ping is not enough: across test binaries a
+            // port clash can leave us pinging someone else's server.
+            // The data path is unique per instance; confirm it is ours.
+            Ok(()) => match server.confirm_identity(&root_path) {
+                Ok(()) => Ok(server),
+                Err(error) => Err(error),
+            },
             Err(error) => Err(error),
         })
+    }
+
+    /// The server on our port must be the one we spawned: its default
+    /// disk path lives inside our temp directory.
+    fn confirm_identity(&self, root: &Path) -> Result<(), EphemeralError> {
+        let query = "SELECT+path+FROM+system.disks+WHERE+name%3D%27default%27";
+        let response =
+            ureq_get(&format!("{}/?query={query}", self.http_url)).map_err(EphemeralError::Io)?;
+        if response.contains(&root.to_string_lossy().to_string()) {
+            Ok(())
+        } else {
+            Err(EphemeralError::Startup(
+                "port clash: answered by a different server instance".into(),
+            ))
+        }
     }
 
     fn wait_ready(&self, timeout: Duration) -> Result<(), EphemeralError> {
