@@ -22,7 +22,11 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().w(px(150.)).flex_none().child(node.name.clone()))
+                    .child(div().w(px(150.)).flex_none().child(if cloud_locked {
+                        Self::locked_value(node.name.read(cx).text()).into_any_element()
+                    } else {
+                        node.name.clone().into_any_element()
+                    }))
                     .child(div().flex_1().child(if cloud_locked {
                         Self::locked_value(node.endpoint.read(cx).text()).into_any_element()
                     } else {
@@ -89,12 +93,7 @@ impl Workspace {
                                         .flex()
                                         .items_center()
                                         .gap_2()
-                                        .child(div().flex_1().child(if cloud_locked {
-                                            Self::locked_value(form.name.read(cx).text())
-                                                .into_any_element()
-                                        } else {
-                                            form.name.clone().into_any_element()
-                                        }))
+                                        .child(div().flex_1().child(form.name.clone()))
                                         .child(
                                             div()
                                                 .id("cycle-tier")
