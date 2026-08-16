@@ -26,6 +26,19 @@ impl Workspace {
     /// endpoint, port), where a local edit would only break the link.
     pub(crate) fn locked_value(value: String) -> impl IntoElement {
         let full = value.clone();
+        // Long values (Cloud endpoint URLs) show their identifying
+        // start and ending port around a middle ellipsis; the tooltip
+        // has the whole thing.
+        let value = if value.chars().count() > 44 {
+            let head: String = value.chars().take(24).collect();
+            let tail: String = {
+                let chars: Vec<char> = value.chars().collect();
+                chars[chars.len() - 12..].iter().collect()
+            };
+            format!("{head}\u{2026}{tail}")
+        } else {
+            value
+        };
         div()
             .id(gpui::SharedString::from(format!("locked-{value}")))
             .h(px(34.))
