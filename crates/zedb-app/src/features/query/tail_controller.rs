@@ -68,7 +68,6 @@ impl Workspace {
                         cap,
                         native_available: None,
                         push: TailPush::Poll,
-                        stream_cursor: None,
                         stream: None,
                         watch: None,
                         stream_rejected: false,

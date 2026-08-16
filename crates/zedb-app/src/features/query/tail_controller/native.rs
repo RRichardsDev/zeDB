@@ -77,7 +77,7 @@ impl Workspace {
         let stream_sql = self
             .preferences
             .experimental_streaming_queries
-            .then(|| tail::stream_sql(&state.query, state.stream_cursor, state.last.as_deref()))
+            .then(|| tail::stream_sql(&state.query, state.last.as_deref()))
             .flatten()
             .filter(|_| !state.stream_rejected);
         let stream_requested = stream_sql.is_some();

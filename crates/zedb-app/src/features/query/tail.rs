@@ -23,28 +23,6 @@ pub const TAIL_INTERVAL_MS: u64 = 1_500;
 /// persistent native (TCP) connection instead of a fresh HTTP request.
 pub const TAIL_INTERVAL_FAST_MS: u64 = 400;
 
-/// Private result-column aliases carried by a direct streaming query. The app
-/// removes both columns before sending rows to the result grid.
-pub const STREAM_BLOCK_COLUMN: &str = "__zedb_stream_block_number";
-pub const STREAM_OFFSET_COLUMN: &str = "__zedb_stream_block_offset";
-
-/// A resumable ClickHouse streaming position. The 26.6 MergeTree stream uses
-/// one `all` cursor containing the last persisted insert block and row offset.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StreamCursor {
-    pub block_number: u64,
-    pub block_offset: u64,
-}
-
-impl StreamCursor {
-    fn sql(self) -> String {
-        format!(
-            "{{'all': {{'block_number': {}, 'block_offset': {}}}}}",
-            self.block_number, self.block_offset
-        )
-    }
-}
-
 /// A tail's editable definition. `body` is the user's query with its
 /// top-level `ORDER BY` / `LIMIT` stripped, kept verbatim (columns, WHERE,
 /// JOINs, GROUP BY, functions, ... all preserved). The tail wraps `body` as
@@ -106,14 +84,14 @@ pub fn poll_sql(query: &TailQuery, last: &str, limit: usize) -> String {
 /// existing top-level filter or aggregation. Unsupported edited queries return
 /// `None` and use native fast polling instead.
 ///
-/// Before ClickHouse has emitted a cursor, `last` preserves the existing
-/// monotonic-key boundary. Once a cursor exists it is the primary resume point;
-/// the app still deduplicates by key when applying rows.
-pub fn stream_sql(
-    query: &TailQuery,
-    cursor: Option<StreamCursor>,
-    last: Option<&str>,
-) -> Option<String> {
+/// Every open, first or reopen, bounds the stream by the last seen monotonic
+/// key: the server replays existing rows past the boundary before going
+/// live, which is what closes the gap across a pause or reconnect. The
+/// `_block_number`-based resume cursor the server offers is deliberately not
+/// used across opens; block numbers are rewritten by background part merges,
+/// and a saved cursor silently skips whatever merged while the stream was
+/// closed (verified against 26.6.2.160).
+pub fn stream_sql(query: &TailQuery, last: Option<&str>) -> Option<String> {
     let body = query.body.trim();
     let clauses = top_clauses(body);
     let select = clauses.get("SELECT")?;
@@ -135,28 +113,14 @@ pub fn stream_sql(
         return None;
     }
 
-    let cursor_sql = cursor.map(StreamCursor::sql).unwrap_or_else(|| "{}".into());
-    let boundary = match (cursor, last) {
-        (None, Some(last)) => format!("\nWHERE {} > {last}", quote_ident(&query.key)),
-        _ => String::new(),
-    };
+    let boundary = last
+        .map(|last| format!("\nWHERE {} > {last}", quote_ident(&query.key)))
+        .unwrap_or_default();
     Some(format!(
-        "SELECT _block_number AS {block}, _block_offset AS {offset}, {projection}\n\
-         FROM {source} STREAM CURSOR {cursor_sql}{boundary}\n\
-         SETTINGS enable_streaming_queries = 1",
-        block = STREAM_BLOCK_COLUMN,
-        offset = STREAM_OFFSET_COLUMN,
+        "SELECT {projection}\n\
+         FROM {source} STREAM CURSOR {{}}{boundary}\n\
+         SETTINGS enable_streaming_queries = 1"
     ))
-}
-
-/// Read the two private cursor columns at the front of a streamed row.
-pub fn stream_cursor(row: &[Value]) -> Option<StreamCursor> {
-    let number = row.first().and_then(unsigned_value)?;
-    let offset = row.get(1).and_then(unsigned_value)?;
-    Some(StreamCursor {
-        block_number: number,
-        block_offset: offset,
-    })
 }
 
 /// Version gate for ClickHouse's real streaming-query implementation. Older
@@ -167,14 +131,6 @@ pub fn supports_streaming_version(version: &str) -> bool {
         .split('.')
         .filter_map(|part| part.parse::<u64>().ok());
     matches!((parts.next(), parts.next()), (Some(major), Some(minor)) if (major, minor) >= (26, 6))
-}
-
-fn unsigned_value(value: &Value) -> Option<u64> {
-    match value {
-        Value::UInt(value) => Some(*value),
-        Value::Int(value) => u64::try_from(*value).ok(),
-        _ => None,
-    }
 }
 
 /// A backtick-aware `db.table` check. Anything involving aliases, joins,
@@ -401,31 +357,21 @@ mod tests {
     }
 
     #[test]
-    fn builds_stream_query_with_key_fallback_then_cursor_resume() {
+    fn builds_stream_query_bounded_by_the_last_seen_key() {
         assert_eq!(
-            stream_sql(&query(), None, Some("'2026-01-01 00:00:00'")),
+            stream_sql(&query(), Some("'2026-01-01 00:00:00'")),
             Some(
-                "SELECT _block_number AS __zedb_stream_block_number, _block_offset AS \
-                 __zedb_stream_block_offset, *\nFROM `logs`.`events` STREAM CURSOR {}\n\
+                "SELECT *\nFROM `logs`.`events` STREAM CURSOR {}\n\
                  WHERE `at` > '2026-01-01 00:00:00'\nSETTINGS \
                  enable_streaming_queries = 1"
                     .into()
             )
         );
         assert_eq!(
-            stream_sql(
-                &query(),
-                Some(StreamCursor {
-                    block_number: 7,
-                    block_offset: 19,
-                }),
-                Some("'ignored'"),
-            ),
+            stream_sql(&query(), None),
             Some(
-                "SELECT _block_number AS __zedb_stream_block_number, _block_offset AS \
-                 __zedb_stream_block_offset, *\nFROM `logs`.`events` STREAM CURSOR \
-                 {'all': {'block_number': 7, 'block_offset': 19}}\nSETTINGS \
-                 enable_streaming_queries = 1"
+                "SELECT *\nFROM `logs`.`events` STREAM CURSOR {}\n\
+                 SETTINGS enable_streaming_queries = 1"
                     .into()
             )
         );
@@ -445,20 +391,8 @@ mod tests {
                 key: "id".into(),
                 limit: 500,
             };
-            assert_eq!(stream_sql(&query, None, Some("1")), None, "{body}");
+            assert_eq!(stream_sql(&query, Some("1")), None, "{body}");
         }
-    }
-
-    #[test]
-    fn reads_stream_cursor_columns() {
-        assert_eq!(
-            stream_cursor(&[Value::UInt(3), Value::UInt(9), Value::String("x".into())]),
-            Some(StreamCursor {
-                block_number: 3,
-                block_offset: 9,
-            })
-        );
-        assert_eq!(stream_cursor(&[Value::String("bad".into())]), None);
     }
 
     #[test]

@@ -154,7 +154,6 @@ pub(crate) struct TailState {
     pub(crate) cap: Option<usize>,
     pub(crate) native_available: Option<bool>,
     pub(crate) push: TailPush,
-    pub(crate) stream_cursor: Option<tail::StreamCursor>,
     pub(crate) stream: Option<TailStream>,
     pub(crate) watch: Option<TailWatch>,
     pub(crate) stream_rejected: bool,

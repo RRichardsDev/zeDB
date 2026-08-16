@@ -7,6 +7,12 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Pausing and resuming an instant (STREAM) tail no longer loses rows
+  inserted while paused; the tail resumes from the last seen key and
+  replays what it missed.
+
 ## v0.1.30 - 2026-08-16
 
 Phase 12: zeDB learns ClickHouse Cloud end to end, the fleet view

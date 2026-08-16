@@ -3,9 +3,9 @@ use crate::*;
 use gpui::prelude::*;
 
 impl Workspace {
-    /// Consume rows returned directly by ClickHouse `STREAM CURSOR`. The two
-    /// private leading columns advance the resumable server cursor and are
-    /// removed before rows reach the grid.
+    /// Consume rows returned directly by ClickHouse `STREAM CURSOR`. Rows
+    /// advance the tail's last-seen key, which is also the reopen boundary
+    /// after a pause or reconnect.
     pub(crate) fn start_tail_stream_consumer(
         &mut self,
         tab_id: usize,
@@ -16,7 +16,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |this, cx| {
-            while let Some((mut columns, mut rows)) = receiver.recv().await {
+            while let Some((columns, rows)) = receiver.recv().await {
                 let alive = this
                     .update(cx, |this, cx| {
                         let on_connection =
@@ -39,22 +39,6 @@ impl Workspace {
                         else {
                             return false;
                         };
-                        if columns.len() < 2
-                            || columns[0].name != tail::STREAM_BLOCK_COLUMN
-                            || columns[1].name != tail::STREAM_OFFSET_COLUMN
-                        {
-                            state.error = Some("STREAM did not return a resumable cursor".into());
-                            return false;
-                        }
-                        if let Some(cursor) = rows.last().and_then(|row| tail::stream_cursor(row)) {
-                            state.stream_cursor = Some(cursor);
-                        }
-                        columns.drain(..2);
-                        for row in &mut rows {
-                            if row.len() >= 2 {
-                                row.drain(..2);
-                            }
-                        }
                         let Some(key_index) = columns
                             .iter()
                             .position(|column| column.name == state.query.key)

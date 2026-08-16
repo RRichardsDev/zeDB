@@ -371,7 +371,6 @@ impl Workspace {
                         // it and re-negotiate against the edited query.
                         let stale_stream = state.stream.take();
                         let stale_watch = state.watch.take();
-                        state.stream_cursor = None;
                         state.stream_rejected = false;
                         if stale_stream.is_some() || stale_watch.is_some() {
                             state.push = TailPush::Poll;
