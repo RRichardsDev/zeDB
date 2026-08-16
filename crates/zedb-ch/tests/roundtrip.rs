@@ -252,7 +252,13 @@ async fn query_roundtrip_type_zoo() {
     assert_eq!(row[0], Value::UInt(42));
     assert_eq!(row[1], Value::String("hello".into()));
     assert_eq!(row[2], Value::Float(2.5));
-    assert_eq!(row[3], Value::Bool(true));
+    // ClickHouse Bool is UInt8 underneath; the newest releases report the
+    // underlying type on the wire, older ones the Bool wrapper.
+    assert!(
+        matches!(row[3], Value::Bool(true) | Value::UInt(1)),
+        "{:?}",
+        row[3]
+    );
     assert_eq!(row[4], Value::Int(-7));
     assert_eq!(row[5], Value::String("present".into()));
     assert_eq!(row[6], Value::Null);
