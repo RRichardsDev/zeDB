@@ -173,9 +173,10 @@ impl Workspace {
         .detach();
     }
 
-    /// The dashboard section of the connection summary page; None for
+    /// The dashboard's static part (brand row, tabs, errors); the tab
+    /// bodies scroll separately via `cloud_usage_body`. None for
     /// connections without Cloud linkage.
-    pub(crate) fn cloud_usage_section(
+    pub(crate) fn cloud_usage_header(
         &self,
         connection: &ConnectionConfig,
         cx: &mut Context<Self>,
@@ -237,21 +238,6 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, _, cx| this.cloud_usage_refresh(true, cx))),
             );
 
-        let body = if usage.loading && usage.services.is_empty() {
-            div()
-                .text_sm()
-                .text_color(theme::text_dim())
-                .child("Fetching from the control plane\u{2026}")
-                .into_any_element()
-        } else {
-            match active {
-                UsageTab::Overview => self.cloud_usage_overview(),
-                UsageTab::Cost => self.cloud_usage_cost(),
-                UsageTab::Backups => self.cloud_usage_backups(),
-                UsageTab::Metrics => self.cloud_usage_metrics(),
-            }
-        };
-
         Some(
             div()
                 .flex()
@@ -278,6 +264,38 @@ impl Workspace {
                 .when_some(usage.error.clone(), |section, error| {
                     section.child(div().text_xs().text_color(theme::danger()).child(error))
                 })
+                .into_any_element(),
+        )
+    }
+
+    /// The active tab's body, in its own scroll region below the
+    /// static header.
+    pub(crate) fn cloud_usage_body(
+        &self,
+        connection: &ConnectionConfig,
+    ) -> Option<gpui::AnyElement> {
+        connection.cloud.as_ref()?;
+        let usage = &self.connection.usage;
+        let body = if usage.loading && usage.services.is_empty() {
+            div()
+                .text_sm()
+                .text_color(theme::text_dim())
+                .child("Fetching from the control plane\u{2026}")
+                .into_any_element()
+        } else {
+            match usage.tab() {
+                UsageTab::Overview => self.cloud_usage_overview(),
+                UsageTab::Cost => self.cloud_usage_cost(),
+                UsageTab::Backups => self.cloud_usage_backups(),
+                UsageTab::Metrics => self.cloud_usage_metrics(),
+            }
+        };
+        Some(
+            div()
+                .id("cloud-usage-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
                 .child(body)
                 .into_any_element(),
         )

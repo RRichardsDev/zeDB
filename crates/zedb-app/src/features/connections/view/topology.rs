@@ -47,47 +47,41 @@ impl Workspace {
             })
             .unwrap_or_default();
 
-        // Centering lives on a non-scroll wrapper: a flex scroll
-        // container stretches its child to the viewport height and
-        // clips the overflow before scrolling ever sees it.
-        div()
-            .id("cluster-overview-scroll")
-            .size_full()
-            .overflow_y_scroll()
-            .p_6()
-            .child(
-                div().flex().justify_center().w_full().child(
+        // Everything down to the dashboard tabs stays put; only the
+        // active tab's body scrolls (the last, flex-1 child).
+        div().size_full().p_6().flex().justify_center().child(
+            div()
+                .w(px(680.))
+                .max_w_full()
+                .h_full()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(
                     div()
-                        .w(px(680.))
-                        .max_w_full()
-                        .flex()
-                        .flex_col()
-                        .gap_4()
+                        .text_lg()
+                        .text_color(theme::text())
+                        .child("Cluster connection"),
+                )
+                .when_some(selected, |panel, connection| {
+                    panel
                         .child(
                             div()
-                                .text_lg()
-                                .text_color(theme::text())
-                                .child("Cluster connection"),
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(connection.name.clone())
+                                .child(Self::tier_badge(connection.tier)),
                         )
-                        .when_some(selected, |panel, connection| {
-                            panel
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(connection.name.clone())
-                                        .child(Self::tier_badge(connection.tier)),
-                                )
-                                .child(div().flex().flex_col().gap_2().children(nodes))
-                                .children(self.topology_section(connection))
-                                .children(self.cloud_usage_section(connection, cx))
-                        })
-                        .when(selected.is_none(), |panel| {
-                            panel.child("Add or select a cluster connection to begin.")
-                        }),
-                ),
-            )
+                        .child(div().flex().flex_col().gap_2().children(nodes))
+                        .children(self.topology_section(connection))
+                        .children(self.cloud_usage_header(connection, cx))
+                        .children(self.cloud_usage_body(connection))
+                })
+                .when(selected.is_none(), |panel| {
+                    panel.child("Add or select a cluster connection to begin.")
+                }),
+        )
     }
 
     /// A read-only shards-and-replicas view, built entirely from the
