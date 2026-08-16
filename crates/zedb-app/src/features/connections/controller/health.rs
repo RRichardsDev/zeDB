@@ -130,6 +130,11 @@ impl Workspace {
             })
             .map(|node| node.memberships.clone())
             .unwrap_or_default();
+        let previous_config = self
+            .connection
+            .connected
+            .as_ref()
+            .map(|connected| connected.client_config.clone());
         let Some(connected) = self.connection.connected.as_mut() else {
             return;
         };
@@ -157,6 +162,7 @@ impl Workspace {
         );
         self.load_schema_databases(cx);
         self.ops_reset(cx);
+        self.restart_tails_for_node_switch(previous_config, cx);
         cx.notify();
     }
 }

@@ -18,6 +18,8 @@ GitHub release notes.
   port-forwards): native connect tries the same remap shift the HTTP
   port uses, and the server-identity check keeps cross-node sockets
   refused.
+- Switching nodes restarts any active tails on the new node instead of
+  keeping the previous node's rows and cursor on screen.
 
 ## v0.1.30 - 2026-08-16
 

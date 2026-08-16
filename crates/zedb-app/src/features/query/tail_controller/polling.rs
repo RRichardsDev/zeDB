@@ -217,6 +217,62 @@ impl Workspace {
         .detach();
     }
 
+    /// A node switch repoints every query at a different server, but a
+    /// tail's rows, last-seen key, and push transport all belong to the
+    /// node it was seeded on; keeping them would filter the new node's
+    /// data through the old node's boundary. Restart every active tail
+    /// from scratch against the new node instead.
+    pub(crate) fn restart_tails_for_node_switch(
+        &mut self,
+        previous_config: Option<ChConfig>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(connection_name) = self.connection.connected.as_ref().map(|c| c.name.clone())
+        else {
+            return;
+        };
+        let tab_ids: Vec<usize> = self
+            .query
+            .tabs
+            .iter()
+            .filter(|tab| tab.tail.is_some())
+            .map(|tab| tab.id)
+            .collect();
+        for tab_id in tab_ids {
+            self.query.next_tail_generation += 1;
+            let generation = self.query.next_tail_generation;
+            let Some(state) = self
+                .query
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.id == tab_id)
+                .and_then(|tab| tab.tail.as_mut())
+            else {
+                continue;
+            };
+            if let Some(stream) = state.stream.take() {
+                stream.abort.abort();
+            }
+            if let (Some(config), Some(watch)) = (previous_config.clone(), state.watch.take()) {
+                // The temporary Live View lives on the node the tail left.
+                drop_tail_view(config, watch.view.clone());
+            }
+            state.generation = generation;
+            state.last = None;
+            state.key_index = 0;
+            state.native_available = None;
+            state.push = TailPush::Poll;
+            state.stream_connecting = false;
+            state.stream_rejected = false;
+            state.paused = false;
+            state.error = None;
+            self.tail_poll_once(tab_id, generation, connection_name.clone(), cx);
+            self.start_tail_loop(tab_id, generation, connection_name.clone(), cx);
+            self.probe_native_push(tab_id, generation, connection_name.clone(), cx);
+        }
+        cx.notify();
+    }
+
     /// Stop the tail on a tab (its loop notices the cleared/renumbered
     /// generation and exits). The tab and its rows stay.
     pub(crate) fn stop_tail(&mut self, tab_id: usize, cx: &mut Context<Self>) {
