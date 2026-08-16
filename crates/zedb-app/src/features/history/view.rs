@@ -126,10 +126,14 @@ impl Workspace {
 
         let content: gpui::AnyElement = match active_tab {
             HistoryTab::History => {
+                // History is connection-scoped: only the current
+                // connection's runs show. Saved snippets below stay global
+                // on purpose.
                 let entries: Vec<&HistoryEntry> = self
                     .history
                     .entries
                     .iter()
+                    .filter(|entry| connection.as_deref() == Some(entry.connection.as_str()))
                     .filter(|entry| filter.is_empty() || entry.sql.to_lowercase().contains(&filter))
                     .take(HISTORY_SHOWN)
                     .collect();
@@ -145,11 +149,6 @@ impl Workspace {
                         // connection / rows / ms (or the error) stay left.
                         let when = relative_time(entry.at);
                         let mut parts: Vec<String> = Vec::new();
-                        if let Some(connection_name) = &connection {
-                            if *connection_name != entry.connection {
-                                parts.push(entry.connection.clone());
-                            }
-                        }
                         if let Some(rows) = entry.rows {
                             parts.push(format!("{rows} rows"));
                         }

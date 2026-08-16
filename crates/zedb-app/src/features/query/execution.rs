@@ -302,9 +302,13 @@ impl Workspace {
             return;
         };
         statements.retain(|(statement, _)| !statement.trim().is_empty());
+        // Running stamps the tab with the connection it ran on; from now
+        // on the tab lives in that connection's scope.
+        let connection_name = connected.name.clone();
         let Some(tab) = self.query.tabs.get_mut(self.query.active_tab) else {
             return;
         };
+        tab.connection = Some(connection_name);
         if statements.is_empty() {
             tab.outcome = QueryOutcome::Error("Query is empty".into());
             cx.notify();

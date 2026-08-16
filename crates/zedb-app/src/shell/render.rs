@@ -6,6 +6,9 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Agent-requested effects need a Window; apply them here.
         self.agent_drain_effects(window, cx);
+        // Tabs are connection-scoped; keep the active tab visible (and
+        // one tab existing) whatever changed since the last frame.
+        self.ensure_visible_tab(window, cx);
         div()
             .size_full()
             .flex()

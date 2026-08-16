@@ -5,7 +5,8 @@ impl Workspace {
     pub(crate) fn add_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.query.next_tab_id;
         self.query.next_tab_id += 1;
-        let tab = Self::make_query_tab(id, "", self.schema.provider.clone(), window, cx);
+        let mut tab = Self::make_query_tab(id, "", self.schema.provider.clone(), window, cx);
+        tab.connection = self.active_connection_name();
         self.query.tabs.push(tab);
         self.query.active_tab = self.query.tabs.len() - 1;
         self.show_query_editor = true;
@@ -13,8 +14,71 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The active connection's name, the scope open tabs belong to.
+    pub(crate) fn active_connection_name(&self) -> Option<String> {
+        self.connection
+            .connected
+            .as_ref()
+            .map(|connected| connected.name.clone())
+    }
+
+    /// Whether a tab belongs on screen right now. Unowned tabs (never
+    /// run anywhere) show everywhere; owned tabs show on their
+    /// connection, and everything shows while disconnected so nothing
+    /// silently vanishes.
+    pub(crate) fn tab_on_active_connection(&self, tab: &QueryTab) -> bool {
+        match (&tab.connection, self.connection.connected.as_ref()) {
+            (Some(owner), Some(connected)) => *owner == connected.name,
+            _ => true,
+        }
+    }
+
+    /// Keep two invariants every frame: the active tab is visible on the
+    /// current connection, and at least one tab is visible. Runs from
+    /// render, the one place a Window is always in hand.
+    pub(crate) fn ensure_visible_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let active_visible = self
+            .query
+            .tabs
+            .get(self.query.active_tab)
+            .is_some_and(|tab| self.tab_on_active_connection(tab));
+        if active_visible {
+            return;
+        }
+        let nearest = {
+            let visible = |tab: &QueryTab| self.tab_on_active_connection(tab);
+            self.query
+                .tabs
+                .iter()
+                .enumerate()
+                .skip(self.query.active_tab)
+                .find(|(_, tab)| visible(tab))
+                .or_else(|| {
+                    self.query
+                        .tabs
+                        .iter()
+                        .enumerate()
+                        .take(self.query.active_tab)
+                        .rev()
+                        .find(|(_, tab)| visible(tab))
+                })
+                .map(|(index, _)| index)
+        };
+        match nearest {
+            Some(index) => self.query.active_tab = index,
+            None => self.add_query_tab(window, cx),
+        }
+        cx.notify();
+    }
+
     pub(crate) fn close_query_tab(&mut self, tab_id: usize, cx: &mut Context<Self>) {
-        if self.query.tabs.len() == 1 {
+        let visible_count = self
+            .query
+            .tabs
+            .iter()
+            .filter(|tab| self.tab_on_active_connection(tab))
+            .count();
+        if visible_count <= 1 {
             return;
         }
         let Some(index) = self.query.tabs.iter().position(|tab| tab.id == tab_id) else {
@@ -119,11 +183,13 @@ impl Workspace {
     }
 
     pub(crate) fn close_other_query_tabs(&mut self, keep_id: usize, cx: &mut Context<Self>) {
+        // Bulk closes act on what the user can see: another connection's
+        // hidden tabs are not "others", they are elsewhere.
         let ids: Vec<usize> = self
             .query
             .tabs
             .iter()
-            .filter(|tab| tab.id != keep_id)
+            .filter(|tab| tab.id != keep_id && self.tab_on_active_connection(tab))
             .map(|tab| tab.id)
             .collect();
         self.close_query_tab_ids(&ids, keep_id, cx);
@@ -135,6 +201,7 @@ impl Workspace {
         };
         let ids: Vec<usize> = self.query.tabs[pos + 1..]
             .iter()
+            .filter(|tab| self.tab_on_active_connection(tab))
             .map(|tab| tab.id)
             .collect();
         self.close_query_tab_ids(&ids, from_id, cx);

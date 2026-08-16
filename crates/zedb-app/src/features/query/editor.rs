@@ -88,6 +88,7 @@ impl Workspace {
         .detach();
         QueryTab {
             persistent_id: zedb_core::new_local_id("tab"),
+            connection: None,
             saved_tab_id: None,
             name: format!("Tab {id}"),
             id,
@@ -148,7 +149,8 @@ impl Workspace {
     ) {
         let id = self.query.next_tab_id;
         self.query.next_tab_id += 1;
-        let tab = Self::make_query_tab(id, sql, self.schema.provider.clone(), window, cx);
+        let mut tab = Self::make_query_tab(id, sql, self.schema.provider.clone(), window, cx);
+        tab.connection = self.active_connection_name();
         self.query.tabs.push(tab);
         self.query.active_tab = self.query.tabs.len() - 1;
         self.show_query_editor = true;

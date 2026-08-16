@@ -9,6 +9,11 @@ GitHub release notes.
 
 ## Unreleased
 
+- Query history now shows only the current connection's runs; saved
+  queries stay shared across connections on purpose.
+- Open tabs are connection-scoped: each connection shows its own tabs
+  (plus never-run scratch tabs), and switching back restarts any tails
+  those tabs were running instead of leaving them frozen.
 - Fleet view: the green "Up to date" tick now appears only while writes
   are locked; unlocked shows the state as plain text beside the actions.
 - A successful regen closes itself and reruns the chain check in the

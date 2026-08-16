@@ -1,8 +1,11 @@
 # Phase 10.3: connection-scoped workspace state
 
-Status: PLANNED. Groups the session-scoping items from
+Status: COMPLETE (2026-08-16). Groups the session-scoping items from
 `docs/IRL-ISSUES.md` plus two defects found during the 10.1
-verification.
+verification. Note: the "restored tail seeds on the wrong node" item
+turned out to be the native-pool host-keying bug already fixed in 10.1
+verification (restored tabs are plain tabs and never self-seed); it
+shipped no separate fix.
 
 What follows the connection and what does not, made deliberate:
 

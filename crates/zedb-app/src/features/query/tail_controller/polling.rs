@@ -217,12 +217,15 @@ impl Workspace {
         .detach();
     }
 
-    /// A node switch repoints every query at a different server, but a
-    /// tail's rows, last-seen key, and push transport all belong to the
-    /// node it was seeded on; keeping them would filter the new node's
-    /// data through the old node's boundary. Restart every active tail
-    /// from scratch against the new node instead.
-    pub(crate) fn restart_tails_for_node_switch(
+    /// A node or connection switch repoints every query at a different
+    /// server, but a tail's rows, last-seen key, and push transport all
+    /// belong to the server it was seeded on; keeping them would filter
+    /// the new server's data through the old boundary, and a tail whose
+    /// connection went away has a dead loop. Restart every tail visible
+    /// on the current connection from scratch. Hidden tabs (owned by
+    /// another connection) are left alone; they restart when their
+    /// connection returns and this runs again.
+    pub(crate) fn restart_visible_tails(
         &mut self,
         previous_config: Option<ChConfig>,
         cx: &mut Context<Self>,
@@ -235,7 +238,7 @@ impl Workspace {
             .query
             .tabs
             .iter()
-            .filter(|tab| tab.tail.is_some())
+            .filter(|tab| tab.tail.is_some() && self.tab_on_active_connection(tab))
             .map(|tab| tab.id)
             .collect();
         for tab_id in tab_ids {

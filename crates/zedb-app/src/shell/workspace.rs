@@ -4,15 +4,23 @@ use gpui::prelude::*;
 
 impl Workspace {
     pub(crate) fn query_editor_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let tab_rows = self
+        // Only the active connection's tabs (plus unowned ones) render;
+        // the rest wait, intact, for their connection to return.
+        let visible: Vec<(usize, &QueryTab)> = self
             .query
             .tabs
             .iter()
             .enumerate()
-            .map(|(index, tab)| {
+            .filter(|(_, tab)| self.tab_on_active_connection(tab))
+            .collect();
+        let visible_count = visible.len();
+        let last_visible_index = visible.last().map(|(index, _)| *index).unwrap_or(0);
+        let tab_rows = visible
+            .iter()
+            .map(|&(index, tab)| {
                 let tab_id = tab.id;
-                let multiple = self.query.tabs.len() > 1;
-                let has_right = index + 1 < self.query.tabs.len();
+                let multiple = visible_count > 1;
+                let has_right = index < last_visible_index;
                 let active = index == self.query.active_tab;
                 // Tail tabs are labelled "Tail N" and wear a steel-blue,
                 // top-rounded border so they read as a distinct live view.
@@ -89,7 +97,7 @@ impl Workspace {
                     })
                     .gap_2()
                     .child(label)
-                    .when(self.query.tabs.len() > 1, |tab_row| {
+                    .when(visible_count > 1, |tab_row| {
                         tab_row.child(
                             div()
                                 .id(("close-query-tab", tab_id))

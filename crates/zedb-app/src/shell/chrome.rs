@@ -149,6 +149,7 @@ impl Workspace {
                     saved_tab_id: tab.saved_tab_id.clone(),
                     name: tab_display_name(tab),
                     sql: tab.editor.read(cx).value().to_string(),
+                    connection: tab.connection.clone(),
                 })
                 .collect(),
             active_tab: self.query.active_tab,

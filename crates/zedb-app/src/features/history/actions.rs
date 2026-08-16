@@ -111,6 +111,7 @@ impl Workspace {
         self.query.next_tab_id += 1;
         let mut tab =
             Self::make_query_tab(id, &saved.sql, self.schema.provider.clone(), window, cx);
+        tab.connection = self.active_connection_name();
         tab.saved_tab_id = Some(saved.id);
         tab.name = saved.name;
         tab.max_rows = crate::max_rows_from_limit(saved.row_limit);

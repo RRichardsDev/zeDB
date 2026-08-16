@@ -80,6 +80,9 @@ impl MaxRows {
 pub(crate) struct QueryTab {
     pub(crate) persistent_id: String,
     pub(crate) saved_tab_id: Option<String>,
+    /// Owning connection. `None` (never run anywhere) shows on every
+    /// connection; owned tabs show only on theirs.
+    pub(crate) connection: Option<String>,
     pub(crate) name: String,
     pub(crate) id: usize,
     pub(crate) editor: Entity<InputState>,

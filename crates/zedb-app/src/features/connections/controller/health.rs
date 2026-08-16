@@ -162,7 +162,7 @@ impl Workspace {
         );
         self.load_schema_databases(cx);
         self.ops_reset(cx);
-        self.restart_tails_for_node_switch(previous_config, cx);
+        self.restart_visible_tails(previous_config, cx);
         cx.notify();
     }
 }

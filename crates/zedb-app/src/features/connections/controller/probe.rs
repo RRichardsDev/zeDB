@@ -107,6 +107,12 @@ impl Workspace {
                 this.connection
                     .password_cache
                     .insert(name.clone(), connected_password.clone());
+                // Tails on this connection's tabs stopped when it went
+                // away (their loops exit on the name mismatch); now that
+                // it is back, restart them fresh. The previous config is
+                // unknown here, so a 26.3 Live View left on another
+                // server is not dropped; WATCH cleanup owns that case.
+                this.restart_visible_tails(None, cx);
                 match schema_cache {
                     Ok(cache) => this.schema.cache = Some(cache),
                     Err(error) => {

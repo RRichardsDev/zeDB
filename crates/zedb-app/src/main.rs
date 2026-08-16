@@ -640,6 +640,7 @@ impl Workspace {
                 saved_tab_id: None,
                 name: "Tab 1".to_string(),
                 sql: DEFAULT_QUERY.to_string(),
+                connection: None,
             }],
         };
         let active_query_tab = saved_session
@@ -663,6 +664,7 @@ impl Workspace {
                     tab.persistent_id = saved.id;
                 }
                 tab.saved_tab_id = saved.saved_tab_id;
+                tab.connection = saved.connection;
                 if !saved.name.is_empty() {
                     tab.name = saved.name;
                 }

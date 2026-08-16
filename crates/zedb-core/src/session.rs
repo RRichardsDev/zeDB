@@ -24,6 +24,8 @@ pub struct SavedQueryTab {
     pub saved_tab_id: Option<String>,
     pub name: String,
     pub sql: String,
+    /// Owning connection; `None` shows on every connection.
+    pub connection: Option<String>,
 }
 
 fn session_path() -> Result<PathBuf, StoreError> {
