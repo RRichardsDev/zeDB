@@ -845,8 +845,10 @@ impl Workspace {
                                     .child("Start")
                                     .tooltip(|window, cx| {
                                         gpui_component::tooltip::Tooltip::new(
-                                            "Waking a service needs an organization API key; \
-                                             the browser sign-in is read-only",
+                                            "Starting from here needs an organization API key \
+                                             (the browser sign-in is read-only). Connecting to \
+                                             the service still wakes it; the first query takes \
+                                             a minute.",
                                         )
                                         .build(window, cx)
                                     }),
