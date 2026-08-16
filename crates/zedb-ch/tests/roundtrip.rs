@@ -233,14 +233,20 @@ async fn query_roundtrip_type_zoo() {
     assert_eq!(columns.len(), 20);
     assert_eq!(columns[0].name, "id");
     assert_eq!(columns[0].type_name, "UInt64");
-    assert_eq!(columns[9].type_name, "DateTime64(3, 'UTC')");
+    // Newer ClickHouse releases render type names without a space
+    // after the comma; compare whitespace-insensitively so the test
+    // holds across server versions.
+    assert_eq!(columns[9].type_name.replace(' ', ""), "DateTime64(3,'UTC')");
 
     let result = client.query("SELECT * FROM zoo").await.expect("select");
 
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.columns.len(), 20);
     assert_eq!(result.columns[0].name, "id");
-    assert_eq!(result.columns[9].type_name, "DateTime64(3, 'UTC')");
+    assert_eq!(
+        result.columns[9].type_name.replace(' ', ""),
+        "DateTime64(3,'UTC')"
+    );
 
     let row = &result.rows[0];
     assert_eq!(row[0], Value::UInt(42));
