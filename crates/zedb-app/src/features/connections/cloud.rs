@@ -927,13 +927,32 @@ impl Workspace {
     /// the plaintext is never shown. Needs the org's API key; the
     /// form only offers this behind an explicit rotation confirm.
     pub(crate) fn cloud_provision_password(&mut self, cx: &mut Context<Self>) {
-        let Some(form) = self.connection.form.as_mut() else {
+        let Some(form) = self.connection.form.as_ref() else {
             return;
         };
         let Some(cloud) = form.cloud.clone() else {
             return;
         };
-        form.provision = ProvisionStage::Working;
+        // The warehouse shares one set of users, and the control
+        // plane only rotates the password on the primary service:
+        // aiming at a secondary compute is a 400. Resolve the
+        // primary; the provenance id stands in when the panel has no
+        // fresh listing to resolve through.
+        let services = &self.connection.cloud.services;
+        let service_id = services
+            .iter()
+            .find(|(_, service)| service.id == cloud.service_id)
+            .and_then(|(_, service)| service.warehouse_id.as_deref())
+            .and_then(|warehouse| {
+                services.iter().find(|(_, service)| {
+                    service.warehouse_id.as_deref() == Some(warehouse) && service.is_primary
+                })
+            })
+            .map(|(_, service)| service.id.clone())
+            .unwrap_or_else(|| cloud.service_id.clone());
+        if let Some(form) = self.connection.form.as_mut() {
+            form.provision = ProvisionStage::Working;
+        }
         cx.notify();
         let task = rt::tokio().spawn(async move {
             let stored =
@@ -946,13 +965,8 @@ impl Workspace {
             else {
                 return Err("No API key in the Keychain for this organization".to_string());
             };
-            clickhouse_cloud::provision_password(
-                &key_id,
-                &key_secret,
-                &cloud.org_id,
-                &cloud.service_id,
-            )
-            .await
+            clickhouse_cloud::provision_password(&key_id, &key_secret, &cloud.org_id, &service_id)
+                .await
         });
         cx.spawn(async move |this, cx| {
             let outcome = task

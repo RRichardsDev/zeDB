@@ -245,9 +245,14 @@ pub async fn provision_password(
         .body("{}")
         .send()
         .await
-        .map_err(|error| format!("could not reach ClickHouse Cloud: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("ClickHouse Cloud refused the password reset: {error}"))?;
+        .map_err(|error| format!("could not reach ClickHouse Cloud: {error}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "ClickHouse Cloud refused the password reset: {status} {body}"
+        ));
+    }
     let body = response
         .text()
         .await
