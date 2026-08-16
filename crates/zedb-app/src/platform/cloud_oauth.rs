@@ -287,13 +287,6 @@ pub fn claims(token: &str) -> Option<serde_json::Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-pub fn email(token: &str) -> Option<String> {
-    claims(token)?
-        .get("email")
-        .and_then(|value| value.as_str())
-        .map(str::to_string)
-}
-
 fn expiry_unix(token: &str) -> Option<i64> {
     claims(token)?.get("exp").and_then(|value| value.as_i64())
 }
@@ -449,8 +442,13 @@ mod tests {
 
     #[test]
     fn reads_claims_from_a_jwt() {
-        let token = fake_jwt(r#"{"email":"user@example.com","exp":1786988782}"#);
-        assert_eq!(email(&token).as_deref(), Some("user@example.com"));
+        let token = fake_jwt(
+            r#"{"email":"user@example.com","name":"User","picture":"p","exp":1786988782}"#,
+        );
+        let (email, name, picture) = identity_fields(&claims(&token).unwrap());
+        assert_eq!(email.as_deref(), Some("user@example.com"));
+        assert_eq!(name.as_deref(), Some("User"));
+        assert_eq!(picture.as_deref(), Some("p"));
         assert_eq!(expiry_unix(&token), Some(1786988782));
         assert!(claims("not-a-jwt").is_none());
     }
