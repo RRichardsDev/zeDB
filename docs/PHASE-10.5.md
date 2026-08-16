@@ -68,11 +68,11 @@ form. The redesign folds it into the single Add Connection entry:
 
 ## Increments
 
-- 10.5a: device-flow sign-in, org/service discovery, unified Add
-  Connection entry, prefilled full-access setup with optional API-key
-  password provisioning, the yellow border.
-- 10.5b: Bearer read-only connections over the Query API (a second
-  client path with graceful degradation everywhere).
+- 10.5a: the front door, specified in `docs/PHASE-10.5A.md`.
+- 10.5b: Cloud-truthful internals, specified in `docs/PHASE-10.5B.md`
+  (the self-audit debts from `docs/CLOUD-STRATEGY.md`).
+- 10.5c+: control-plane surfaces and Bearer read-only connections over
+  the Query API, per `docs/CLOUD-STRATEGY.md`.
 
 ## Acceptance (10.5a)
 
