@@ -48,6 +48,19 @@ pub(crate) struct ConnectionForm {
     /// Carried through the form so saving keeps (or sets) the link to
     /// the ClickHouse Cloud service the connection came from.
     pub(crate) cloud: Option<zedb_core::CloudProvenance>,
+    /// Where the Cloud password-provisioning flow stands; `Idle` for
+    /// non-Cloud connections and for OAuth-only orgs (no API key, no
+    /// provisioning).
+    pub(crate) provision: ProvisionStage,
+}
+
+/// Provisioning rotates the service's real database password, so it
+/// hides behind an explicit confirm.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProvisionStage {
+    Idle,
+    Confirm,
+    Working,
 }
 
 pub(crate) struct DriverSettingForm {

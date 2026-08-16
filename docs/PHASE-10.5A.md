@@ -1,6 +1,11 @@
 # Phase 10.5a: the Cloud front door
 
-Status: PLANNED. Child of `docs/PHASE-10.5.md`; strategy in
+Status: BUILT (2026-08-16), awaiting live verification against a real
+Cloud org (sign-in, discovery, provisioning). The OAuth module lives
+in `zedb-app/src/platform/cloud_oauth.rs` beside the forge sign-in,
+not zedb-core as first specced: zedb-core carries no HTTP or async
+runtime, and `platform/` is where the GitHub/GitLab device flow
+already lives. Child of `docs/PHASE-10.5.md`; strategy in
 `docs/CLOUD-STRATEGY.md`. Read `docs/PRODUCT-PRINCIPLES.md` before
 changing the setup flow's character.
 

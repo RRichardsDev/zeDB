@@ -267,6 +267,11 @@ impl Render for Workspace {
                             .min_w_0()
                             .flex()
                             .flex_col()
+                            // ClickHouse yellow marks a live Cloud
+                            // service: same value as the mark asset.
+                            .when(self.active_connection_is_cloud(), |main| {
+                                main.border_1().border_color(gpui::rgb(0xFFCC01))
+                            })
                             .when(self.show_preferences, |main| {
                                 main.child(self.preferences_panel(cx))
                             })

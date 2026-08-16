@@ -31,6 +31,7 @@ impl Workspace {
             read_only: true,
             driver_settings: Self::seeded_driver_settings(&[], cx),
             cloud: None,
+            provision: ProvisionStage::Idle,
         });
         self.notice = None;
         cx.notify();
@@ -74,6 +75,7 @@ impl Workspace {
             read_only: connection.read_only,
             driver_settings: Self::seeded_driver_settings(&connection.driver.settings, cx),
             cloud: connection.cloud,
+            provision: ProvisionStage::Idle,
         });
         self.notice = None;
         cx.notify();

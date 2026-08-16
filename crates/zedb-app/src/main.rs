@@ -4,6 +4,8 @@ mod agent_pane;
 mod author;
 #[path = "platform/clickhouse_cloud.rs"]
 mod clickhouse_cloud;
+#[path = "platform/cloud_oauth.rs"]
+mod cloud_oauth;
 #[path = "features/fleet/codegen.rs"]
 mod codegen;
 #[path = "features/settings/command_palette.rs"]
@@ -91,7 +93,7 @@ use zedb_core::{
 use components::text_input::{self, TextInput};
 use features::connections::{
     differentiating_cluster, ConnectedCluster, ConnectionDraft, ConnectionForm, ConnectionState,
-    DriverSettingForm, EndpointHealth, NodeForm,
+    DriverSettingForm, EndpointHealth, NodeForm, ProvisionStage,
 };
 use features::query::{
     max_rows_from_limit, nearest_occurrence, resolve_query_variables, split_statements,

@@ -9,6 +9,23 @@ GitHub release notes.
 
 ## Unreleased
 
+- Sign in with ClickHouse Cloud from the Cloud panel: approve a code
+  in the browser and every organization you belong to lists its
+  services with live state, no API key needed. The sign-in is
+  read-only; an API key still wakes services and manages the org, and
+  the Start button says so instead of failing when only the sign-in
+  is present.
+- Adding a connection from a Cloud service now keeps the native TCP
+  port the control plane advertises, so instant tails skip port
+  discovery.
+- With an API key linked, the connection form can provision the
+  service's database password itself, behind an explicit confirm that
+  says it rotates the existing password; the result goes to the macOS
+  Keychain without ever being displayed.
+- The Cloud connection form explains the read-only default instead of
+  silently gating KILL QUERY and measured advisories.
+- The editor area wears a thin ClickHouse-yellow border while the
+  active connection is a linked Cloud service.
 - The Cloud button in the connections header wears the ClickHouse mark
   in brand yellow.
 - Connection settings can declare an explicit native (TCP) port per

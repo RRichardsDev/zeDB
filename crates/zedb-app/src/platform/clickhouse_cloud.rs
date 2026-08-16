@@ -61,6 +61,16 @@ impl CloudService {
             .map(|endpoint| format!("https://{}:{}", endpoint.host, endpoint.port))
     }
 
+    /// The native TCP-over-TLS port the control plane advertises;
+    /// saved as the node's explicit native port so tails need no
+    /// runtime discovery.
+    pub fn native_secure_port(&self) -> Option<u16> {
+        self.endpoints
+            .iter()
+            .find(|endpoint| endpoint.protocol == "nativesecure")
+            .map(|endpoint| endpoint.port)
+    }
+
     pub fn is_running(&self) -> bool {
         self.state == "running"
     }
@@ -119,9 +129,41 @@ async fn get<T: serde::de::DeserializeOwned>(
         .map_err(|error| format!("unexpected Cloud reply: {error}"))
 }
 
+async fn get_bearer<T: serde::de::DeserializeOwned>(path: &str, token: &str) -> Result<T, String> {
+    let response = client()?
+        .get(format!("{API_BASE}{path}"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|error| format!("could not reach ClickHouse Cloud: {error}"))?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("ClickHouse Cloud rejected the sign-in; sign in again".into());
+    }
+    let response = response
+        .error_for_status()
+        .map_err(|error| format!("ClickHouse Cloud refused the request: {error}"))?;
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("unexpected Cloud reply: {error}"))?;
+    serde_json::from_str::<Envelope<T>>(&body)
+        .map(|envelope| envelope.result)
+        .map_err(|error| format!("unexpected Cloud reply: {error}"))
+}
+
 /// The organizations this API key can see (org-scoped keys see one).
 pub async fn list_organizations(key_id: &str, key_secret: &str) -> Result<Vec<CloudOrg>, String> {
     get("/organizations", key_id, key_secret).await
+}
+
+/// The signed-in user's organizations (OAuth Bearer; read-only).
+pub async fn list_organizations_bearer(token: &str) -> Result<Vec<CloudOrg>, String> {
+    get_bearer("/organizations", token).await
+}
+
+/// Every service in the organization, via the sign-in token.
+pub async fn list_services_bearer(token: &str, org_id: &str) -> Result<Vec<CloudService>, String> {
+    get_bearer(&format!("/organizations/{org_id}/services"), token).await
 }
 
 /// Every service in the organization, with live state and endpoints.
@@ -160,6 +202,45 @@ pub async fn start_service(
         .error_for_status()
         .map(|_| ())
         .map_err(|error| format!("ClickHouse Cloud refused the start: {error}"))
+}
+
+#[derive(Deserialize)]
+struct PasswordReply {
+    #[serde(default)]
+    password: Option<String>,
+}
+
+/// Rotate the service's database password to a server-generated one
+/// and return it. Destructive by design (the old password stops
+/// working); callers confirm with the user first.
+pub async fn provision_password(
+    key_id: &str,
+    key_secret: &str,
+    org_id: &str,
+    service_id: &str,
+) -> Result<String, String> {
+    let response = client()?
+        .patch(format!(
+            "{API_BASE}/organizations/{org_id}/services/{service_id}/password"
+        ))
+        .basic_auth(key_id, Some(key_secret))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .map_err(|error| format!("could not reach ClickHouse Cloud: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("ClickHouse Cloud refused the password reset: {error}"))?;
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("unexpected Cloud reply: {error}"))?;
+    serde_json::from_str::<Envelope<PasswordReply>>(&body)
+        .ok()
+        .and_then(|envelope| envelope.result.password)
+        .ok_or_else(|| {
+            "ClickHouse Cloud reset the password but returned none; paste one instead".into()
+        })
 }
 
 #[cfg(test)]

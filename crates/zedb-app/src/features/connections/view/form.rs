@@ -135,6 +135,112 @@ impl Workspace {
                         .child(Self::field("USER", form.user.clone()))
                         .child(Self::field("DATABASE", form.database.clone()))
                         .child(Self::field("PASSWORD", form.password.clone()))
+                        .when_some(form.cloud.clone(), |panel, cloud| {
+                            let keyed = self
+                                .connection
+                                .cloud
+                                .org_has_key(&self.preferences, &cloud.org_id);
+                            panel.when(keyed, |panel| {
+                                panel.child(match form.provision {
+                                    ProvisionStage::Idle => div()
+                                        .flex()
+                                        .child(
+                                            div()
+                                                .id("cloud-provision")
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded(px(3.))
+                                                .border_1()
+                                                .border_color(theme::border())
+                                                .text_xs()
+                                                .text_color(theme::text())
+                                                .child("Provision password")
+                                                .hover(|button| {
+                                                    button.bg(theme::hover()).cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    if let Some(form) =
+                                                        this.connection.form.as_mut()
+                                                    {
+                                                        form.provision = ProvisionStage::Confirm;
+                                                        cx.notify();
+                                                    }
+                                                })),
+                                        )
+                                        .into_any_element(),
+                                    ProvisionStage::Confirm => div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .p_3()
+                                        .rounded(px(4.))
+                                        .border_1()
+                                        .border_color(theme::warning())
+                                        .child(div().text_xs().text_color(theme::text()).child(
+                                            "This rotates the service's database password: the \
+                                             current one stops working everywhere. The new \
+                                             password goes into the field above and, on save, \
+                                             the macOS Keychain; it is never displayed.",
+                                        ))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .id("cloud-provision-confirm")
+                                                        .px_2()
+                                                        .py_0p5()
+                                                        .rounded(px(3.))
+                                                        .bg(theme::primary())
+                                                        .text_xs()
+                                                        .text_color(theme::primary_foreground())
+                                                        .child("Rotate and provision")
+                                                        .hover(|button| {
+                                                            button
+                                                                .bg(theme::primary_hover())
+                                                                .cursor_pointer()
+                                                        })
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.cloud_provision_password(cx)
+                                                        })),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id("cloud-provision-cancel")
+                                                        .px_2()
+                                                        .py_0p5()
+                                                        .rounded(px(3.))
+                                                        .border_1()
+                                                        .border_color(theme::border())
+                                                        .text_xs()
+                                                        .text_color(theme::text_dim())
+                                                        .child("Cancel")
+                                                        .hover(|button| {
+                                                            button
+                                                                .bg(theme::hover())
+                                                                .cursor_pointer()
+                                                        })
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            if let Some(form) =
+                                                                this.connection.form.as_mut()
+                                                            {
+                                                                form.provision =
+                                                                    ProvisionStage::Idle;
+                                                                cx.notify();
+                                                            }
+                                                        })),
+                                                ),
+                                        )
+                                        .into_any_element(),
+                                    ProvisionStage::Working => div()
+                                        .text_xs()
+                                        .text_color(theme::text_dim())
+                                        .child("Provisioning a new password\u{2026}")
+                                        .into_any_element(),
+                                })
+                            })
+                        })
                         .child(
                             div()
                                 .flex()
@@ -255,6 +361,16 @@ impl Workspace {
                                         )),
                                 ),
                         )
+                        .when(form.cloud.is_some() && form.read_only, |panel| {
+                            // The silent default gates KILL QUERY and
+                            // measured codec savings; one sentence
+                            // makes it a choice instead of a surprise.
+                            panel.child(div().text_xs().text_color(theme::text_dim()).child(
+                                "Cloud connections start read-only: no writes, no KILL QUERY, \
+                                 and advisors skip measurements that write. Flip the toggle \
+                                 here when you want a writable session.",
+                            ))
+                        })
                         .child(
                             div()
                                 .flex()

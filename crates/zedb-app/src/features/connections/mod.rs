@@ -11,5 +11,5 @@ mod view;
 
 pub(crate) use model::{
     differentiating_cluster, ConnectedCluster, ConnectionDraft, ConnectionForm, ConnectionState,
-    DriverSettingForm, EndpointHealth, NodeForm,
+    DriverSettingForm, EndpointHealth, NodeForm, ProvisionStage,
 };

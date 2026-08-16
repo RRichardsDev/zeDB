@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use gpui::prelude::*;
 
-use crate::clickhouse_cloud::{self, CloudService};
+use crate::clickhouse_cloud::{self, CloudOrg, CloudService};
 use crate::*;
 
 pub(crate) struct CloudLinkState {
@@ -24,6 +24,16 @@ pub(crate) struct CloudLinkState {
     /// service id -> last seen state, for the sidebar's idle marker.
     pub(crate) states: HashMap<String, String>,
     pub(crate) generation: u64,
+    /// A refresh token sits in the Keychain (browser sign-in done).
+    pub(crate) signed_in: bool,
+    /// The signed-in account email, once a token has been decoded.
+    pub(crate) account: Option<String>,
+    /// The user code awaiting browser approval, while polling.
+    pub(crate) authorizing: Option<String>,
+    /// Organizations visible through the sign-in (superset of, or
+    /// disjoint from, the keyed orgs in preferences).
+    pub(crate) oauth_orgs: Vec<CloudOrg>,
+    pub(crate) oauth_generation: u64,
 }
 
 impl CloudLinkState {
@@ -38,7 +48,18 @@ impl CloudLinkState {
             services: Vec::new(),
             states: HashMap::new(),
             generation: 0,
+            signed_in: false,
+            account: None,
+            authorizing: None,
+            oauth_orgs: Vec::new(),
+            oauth_generation: 0,
         }
+    }
+
+    /// Whether this org's Start button can work: waking is a
+    /// management write, which only an API key can do.
+    pub(crate) fn org_has_key(&self, preferences: &zedb_core::Preferences, org_id: &str) -> bool {
+        preferences.cloud_orgs.iter().any(|org| org.id == org_id)
     }
 }
 
@@ -46,11 +67,121 @@ impl Workspace {
     pub(crate) fn cloud_open(&mut self, cx: &mut Context<Self>) {
         self.connection.cloud.open = true;
         self.connection.cloud.error = None;
+        self.connection.cloud.signed_in = cloud_oauth::signed_in();
         if self.connection.cloud.key_id.is_none() {
             self.connection.cloud.key_id = Some(Self::input("", "API key id", false, cx));
             self.connection.cloud.key_secret = Some(Self::input("", "API key secret", true, cx));
         }
         self.cloud_refresh(cx);
+        cx.notify();
+    }
+
+    /// Browser sign-in via the OAuth device flow: show the code, open
+    /// the browser, poll until approved, keep only the refresh token
+    /// (Keychain) and an in-memory access token.
+    pub(crate) fn cloud_sign_in(&mut self, cx: &mut Context<Self>) {
+        self.connection.cloud.oauth_generation += 1;
+        let generation = self.connection.cloud.oauth_generation;
+        self.connection.cloud.error = None;
+        cx.notify();
+        let handle = rt::tokio().spawn(cloud_oauth::start_device_flow());
+        cx.spawn(async move |this, cx| {
+            let device = match handle.await {
+                Ok(Ok(device)) => device,
+                Ok(Err(error)) => {
+                    this.update(cx, |this, cx| this.flash_warning(error, cx))
+                        .ok();
+                    return;
+                }
+                Err(_) => return,
+            };
+            let stale = this
+                .update(cx, |this, cx| {
+                    if this.connection.cloud.oauth_generation != generation {
+                        return true;
+                    }
+                    this.connection.cloud.authorizing = Some(device.user_code.clone());
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                        device.user_code.clone(),
+                    ));
+                    cx.open_url(device.open_url());
+                    cx.notify();
+                    false
+                })
+                .unwrap_or(true);
+            if stale {
+                return;
+            }
+            let poll_device = device.clone();
+            let tokens = match rt::tokio()
+                .spawn(async move { cloud_oauth::poll_for_tokens(&poll_device).await })
+                .await
+            {
+                Ok(Ok(tokens)) => tokens,
+                Ok(Err(error)) => {
+                    this.update(cx, |this, cx| {
+                        if this.connection.cloud.oauth_generation == generation {
+                            this.connection.cloud.authorizing = None;
+                            this.flash_warning(error, cx);
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                    return;
+                }
+                Err(_) => return,
+            };
+            let stored = match tokens.refresh.as_deref() {
+                Some(refresh) => cloud_oauth::store_refresh_token(refresh),
+                None => Err("no offline access granted; sign-in will not survive a restart".into()),
+            };
+            cloud_oauth::cache_access_token(&tokens.access);
+            let account = cloud_oauth::email(&tokens.access);
+            this.update(cx, |this, cx| {
+                if this.connection.cloud.oauth_generation != generation {
+                    return;
+                }
+                this.connection.cloud.authorizing = None;
+                this.connection.cloud.signed_in = true;
+                this.connection.cloud.account = account;
+                match stored {
+                    Ok(()) => this.flash_notice("Signed in to ClickHouse Cloud", cx),
+                    Err(error) => this.flash_warning(error, cx),
+                }
+                this.cloud_refresh(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Stop waiting for the browser approval. The abandoned poll keeps
+    /// running against a code the user never approves; its result is
+    /// discarded by the generation check.
+    pub(crate) fn cloud_sign_in_cancel(&mut self, cx: &mut Context<Self>) {
+        self.connection.cloud.oauth_generation += 1;
+        self.connection.cloud.authorizing = None;
+        cx.notify();
+    }
+
+    /// Clear the Keychain refresh token and every OAuth-derived row;
+    /// keyed organizations stay linked.
+    pub(crate) fn cloud_sign_out(&mut self, cx: &mut Context<Self>) {
+        cloud_oauth::sign_out();
+        self.connection.cloud.signed_in = false;
+        self.connection.cloud.account = None;
+        self.connection.cloud.oauth_orgs.clear();
+        let keyed: Vec<String> = self
+            .preferences
+            .cloud_orgs
+            .iter()
+            .map(|org| org.id.clone())
+            .collect();
+        self.connection
+            .cloud
+            .services
+            .retain(|(owner, _)| keyed.contains(owner));
         cx.notify();
     }
 
@@ -145,11 +276,14 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Re-list every linked org's services: state, endpoints, and
-    /// anything added or removed in the console since last look.
+    /// Re-list every visible org's services: keyed orgs through their
+    /// API keys, then any further orgs the browser sign-in can see
+    /// (read-only Bearer). State, endpoints, and anything added or
+    /// removed in the console since last look.
     pub(crate) fn cloud_refresh(&mut self, cx: &mut Context<Self>) {
         let orgs = self.preferences.cloud_orgs.clone();
-        if orgs.is_empty() {
+        let signed_in = self.connection.cloud.signed_in;
+        if orgs.is_empty() && !signed_in {
             return;
         }
         self.connection.cloud.loading = true;
@@ -159,7 +293,9 @@ impl Workspace {
         let task = rt::tokio().spawn(async move {
             let mut services = Vec::new();
             let mut errors = Vec::new();
-            for org in orgs {
+            let mut oauth_orgs = Vec::new();
+            let mut account = None;
+            for org in &orgs {
                 let stored =
                     zedb_core::secrets::get_plain(&clickhouse_cloud::keychain_key(&org.id))
                         .ok()
@@ -178,10 +314,44 @@ impl Workspace {
                     Err(error) => errors.push(format!("{}: {error}", org.name)),
                 }
             }
-            (services, errors)
+            if signed_in {
+                match cloud_oauth::access_token().await {
+                    Ok(Some(token)) => {
+                        account = cloud_oauth::email(&token);
+                        match clickhouse_cloud::list_organizations_bearer(&token).await {
+                            Ok(list) => {
+                                for org in list {
+                                    // Keyed orgs are already listed above with
+                                    // the stronger credential.
+                                    if !orgs.iter().any(|keyed| keyed.id == org.id) {
+                                        match clickhouse_cloud::list_services_bearer(
+                                            &token, &org.id,
+                                        )
+                                        .await
+                                        {
+                                            Ok(list) => services.extend(
+                                                list.into_iter()
+                                                    .map(|service| (org.id.clone(), service)),
+                                            ),
+                                            Err(error) => {
+                                                errors.push(format!("{}: {error}", org.name))
+                                            }
+                                        }
+                                    }
+                                    oauth_orgs.push(org);
+                                }
+                            }
+                            Err(error) => errors.push(error),
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => errors.push(error),
+                }
+            }
+            (services, errors, oauth_orgs, account)
         });
         cx.spawn(async move |this, cx| {
-            let Ok((services, errors)) = task.await else {
+            let Ok((services, errors, oauth_orgs, account)) = task.await else {
                 return;
             };
             this.update(cx, |this, cx| {
@@ -194,6 +364,10 @@ impl Workspace {
                     .map(|(_, service)| (service.id.clone(), service.state.clone()))
                     .collect();
                 this.connection.cloud.services = services;
+                this.connection.cloud.oauth_orgs = oauth_orgs;
+                if account.is_some() {
+                    this.connection.cloud.account = account;
+                }
                 this.connection.cloud.error = (!errors.is_empty()).then(|| errors.join(" \u{b7} "));
                 // A waking service settles on its own schedule: keep
                 // polling until nothing is mid-transition, so the
@@ -303,7 +477,15 @@ impl Workspace {
             nodes: vec![NodeForm {
                 name: Self::input(name, "Node 1", false, cx),
                 endpoint: Self::input(url, "https://host:8443", false, cx),
-                native_port: Self::input("", "tcp auto", false, cx),
+                native_port: Self::input(
+                    service
+                        .native_secure_port()
+                        .map(|port| port.to_string())
+                        .unwrap_or_default(),
+                    "tcp auto",
+                    false,
+                    cx,
+                ),
             }],
             user: Self::input("default", "default", false, cx),
             database: Self::input("", "optional", false, cx),
@@ -319,9 +501,71 @@ impl Workspace {
             read_only: true,
             driver_settings: Self::seeded_driver_settings(&[], cx),
             cloud: Some(cloud),
+            provision: ProvisionStage::Idle,
         });
         self.notice = None;
         cx.notify();
+    }
+
+    /// Rotate the linked service's database password through the
+    /// control plane and drop the result straight into the form's
+    /// (masked) password field: saving stores it in the Keychain and
+    /// the plaintext is never shown. Needs the org's API key; the
+    /// form only offers this behind an explicit rotation confirm.
+    pub(crate) fn cloud_provision_password(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = self.connection.form.as_mut() else {
+            return;
+        };
+        let Some(cloud) = form.cloud.clone() else {
+            return;
+        };
+        form.provision = ProvisionStage::Working;
+        cx.notify();
+        let task = rt::tokio().spawn(async move {
+            let stored =
+                zedb_core::secrets::get_plain(&clickhouse_cloud::keychain_key(&cloud.org_id))
+                    .ok()
+                    .flatten();
+            let Some((key_id, key_secret)) = stored
+                .as_deref()
+                .and_then(clickhouse_cloud::split_credentials)
+            else {
+                return Err("No API key in the Keychain for this organization".to_string());
+            };
+            clickhouse_cloud::provision_password(
+                &key_id,
+                &key_secret,
+                &cloud.org_id,
+                &cloud.service_id,
+            )
+            .await
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = task
+                .await
+                .unwrap_or_else(|_| Err("Provisioning stopped".into()));
+            this.update(cx, |this, cx| {
+                let Some(form) = this.connection.form.as_mut() else {
+                    return;
+                };
+                form.provision = ProvisionStage::Idle;
+                let password_input = form.password.clone();
+                match outcome {
+                    Ok(password) => {
+                        password_input.update(cx, |input, cx| input.set_text(password, cx));
+                        this.flash_notice(
+                            "New password provisioned; save the connection to store it in the \
+                             Keychain",
+                            cx,
+                        );
+                    }
+                    Err(error) => this.flash_warning(format!("Could not provision: {error}"), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// A probe found no reachable node: when the connection came from
@@ -390,6 +634,19 @@ impl Workspace {
         .detach();
     }
 
+    /// Whether the active connection is linked to a ClickHouse Cloud
+    /// service. Linkage is the stored service id from setup, never a
+    /// URL heuristic; this drives the editor area's yellow border.
+    pub(crate) fn active_connection_is_cloud(&self) -> bool {
+        let Some(connected) = self.connection.connected.as_ref() else {
+            return false;
+        };
+        self.connection
+            .connections
+            .iter()
+            .any(|connection| connection.name == connected.name && connection.cloud.is_some())
+    }
+
     /// The sidebar's marker for a connection whose Cloud service is not
     /// running: "idle" or "waking", muted.
     pub(crate) fn cloud_state_label(&self, connection: &ConnectionConfig) -> Option<&'static str> {
@@ -439,6 +696,7 @@ impl Workspace {
                     } else {
                         theme::text_dim()
                     };
+                    let keyed = self.connection.cloud.org_has_key(&self.preferences, org_id);
                     let org_id = org_id.clone();
                     let service_id = service.id.clone();
                     let asleep = service.is_asleep();
@@ -457,7 +715,7 @@ impl Workspace {
                             service.state, service.provider, service.region
                         )))
                         .child(div().flex_1())
-                        .when(asleep, |row| {
+                        .when(asleep && keyed, |row| {
                             row.child(
                                 div()
                                     .id(("cloud-start", index))
@@ -481,6 +739,30 @@ impl Workspace {
                                             )
                                         }
                                     })),
+                            )
+                        })
+                        .when(asleep && !keyed, |row| {
+                            // Sign-in tokens are read-only on the
+                            // management API: an honest disabled
+                            // button beats a failing one.
+                            row.child(
+                                div()
+                                    .id(("cloud-start-disabled", index))
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded(px(3.))
+                                    .border_1()
+                                    .border_color(theme::border())
+                                    .text_xs()
+                                    .text_color(theme::text_dim())
+                                    .child("Start")
+                                    .tooltip(|window, cx| {
+                                        gpui_component::tooltip::Tooltip::new(
+                                            "Waking a service needs an organization API key; \
+                                             the browser sign-in is read-only",
+                                        )
+                                        .build(window, cx)
+                                    }),
                             )
                         })
                         .child(if added {
@@ -508,11 +790,17 @@ impl Workspace {
                         })
                 })
                 .collect::<Vec<_>>();
-        let org_line = orgs
-            .iter()
-            .map(|org| org.name.clone())
-            .collect::<Vec<_>>()
-            .join(", ");
+        let mut org_names: Vec<String> = orgs.iter().map(|org| org.name.clone()).collect();
+        for org in &self.connection.cloud.oauth_orgs {
+            if !orgs.iter().any(|keyed| keyed.id == org.id) {
+                org_names.push(org.name.clone());
+            }
+        }
+        let any_org = !org_names.is_empty();
+        let org_line = org_names.join(", ");
+        let signed_in = self.connection.cloud.signed_in;
+        let account = self.connection.cloud.account.clone();
+        let authorizing = self.connection.cloud.authorizing.clone();
 
         div()
             .id("cloud-panel-scroll")
@@ -556,7 +844,108 @@ impl Workspace {
                                         ),
                                 ),
                         )
-                        .when(!orgs.is_empty(), |panel| {
+                        .child(match (&authorizing, signed_in) {
+                            (Some(user_code), _) => div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .p_3()
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(theme::border())
+                                .child(div().text_xs().text_color(theme::text_dim()).child(
+                                    "Approve the sign-in in your browser with this code (copied):",
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .child(
+                                            div()
+                                                .text_lg()
+                                                .font_family("Menlo")
+                                                .text_color(theme::text())
+                                                .child(user_code.clone()),
+                                        )
+                                        .child(div().flex_1())
+                                        .child(
+                                            div()
+                                                .id("cloud-signin-cancel")
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded(px(3.))
+                                                .border_1()
+                                                .border_color(theme::border())
+                                                .text_xs()
+                                                .text_color(theme::text_dim())
+                                                .child("Cancel")
+                                                .hover(|button| {
+                                                    button.bg(theme::hover()).cursor_pointer()
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.cloud_sign_in_cancel(cx)
+                                                })),
+                                        ),
+                                )
+                                .into_any_element(),
+                            (None, true) => div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().size(px(7.)).rounded_full().bg(theme::success()))
+                                .child(div().text_sm().text_color(theme::text()).child(
+                                    match account {
+                                        Some(email) => format!("Signed in as {email}"),
+                                        None => "Signed in to ClickHouse Cloud".to_string(),
+                                    },
+                                ))
+                                .child(div().flex_1())
+                                .child(
+                                    div()
+                                        .id("cloud-sign-out")
+                                        .text_xs()
+                                        .text_color(theme::text_dim())
+                                        .child("Sign out")
+                                        .hover(|button| {
+                                            button.text_color(theme::danger()).cursor_pointer()
+                                        })
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.cloud_sign_out(cx)),
+                                        ),
+                                )
+                                .into_any_element(),
+                            (None, false) => div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .child(
+                                    div().flex().child(
+                                        div()
+                                            .id("cloud-sign-in")
+                                            .px_3()
+                                            .py_1()
+                                            .rounded(px(3.))
+                                            .bg(theme::primary())
+                                            .text_color(theme::primary_foreground())
+                                            .child("Sign in with ClickHouse Cloud")
+                                            .hover(|button| {
+                                                button.bg(theme::primary_hover()).cursor_pointer()
+                                            })
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.cloud_sign_in(cx)
+                                                }),
+                                            ),
+                                    ),
+                                )
+                                .child(div().text_xs().text_color(theme::text_dim()).child(
+                                    "Approve in the browser; your organizations and services \
+                                     appear here with live state. No API key needed to look.",
+                                ))
+                                .into_any_element(),
+                        })
+                        .when(any_org, |panel| {
                             panel
                                 .child(
                                     div()
@@ -612,15 +1001,16 @@ impl Workspace {
                         })
                         .child(div().text_xs().text_color(theme::text_dim()).child(
                             if orgs.is_empty() {
-                                "LINK AN ORGANIZATION"
+                                "API KEY \u{b7} FOR WAKING AND MANAGING"
                             } else {
-                                "LINK ANOTHER ORGANIZATION"
+                                "API KEY \u{b7} ANOTHER ORGANIZATION"
                             },
                         ))
                         .child(div().text_xs().text_color(theme::text_dim()).child(
-                            "Create an API key in the Cloud console (Organization \u{2192} API \
-                             keys); services, hosts, and ports fill themselves in. The key is \
-                             stored in the macOS Keychain.",
+                            "The sign-in above is read-only; an organization API key \
+                             (Cloud console \u{2192} Organization \u{2192} API keys) also lets \
+                             zeDB start idle services and provision database passwords. The \
+                             key is stored in the macOS Keychain.",
                         ))
                         .when_some(self.connection.cloud.key_id.clone(), |panel, key_id| {
                             panel.child(Self::field("API KEY ID", key_id))
