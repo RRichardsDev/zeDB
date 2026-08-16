@@ -77,7 +77,10 @@ impl Workspace {
             .child(
                 div().flex().justify_center().w_full().child(
                     div()
-                        .w(px(520.))
+                        // Same width as Preferences and the Cloud
+                        // panel, so the pages line up.
+                        .w(px(680.))
+                        .max_w_full()
                         .flex()
                         .flex_col()
                         .gap_4()
