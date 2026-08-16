@@ -153,9 +153,7 @@ impl McpServer {
     /// Ask the app which repo is open right now; None when no bridge
     /// is configured or it does not answer.
     async fn bridge_repo_root(&self) -> Option<String> {
-        if self.app_socket.is_none() {
-            return None;
-        }
+        self.app_socket.as_ref()?;
         self.forward_app_tool("repo_root", &Value::Null).await.ok()
     }
 
