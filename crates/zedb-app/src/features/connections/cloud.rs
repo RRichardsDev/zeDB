@@ -502,9 +502,96 @@ impl Workspace {
             driver_settings: Self::seeded_driver_settings(&[], cx),
             cloud: Some(cloud),
             provision: ProvisionStage::Idle,
+            key_id: Some(Self::input("", "API key id", false, cx)),
+            key_secret: Some(Self::input("", "API key secret", true, cx)),
+            linking_key: false,
         });
         self.notice = None;
         cx.notify();
+    }
+
+    /// Link an API key pasted inline in the connection form: validate
+    /// it against the control plane, require it to see this
+    /// connection's organization, then store it exactly like the
+    /// Cloud panel's link (secret in the Keychain, org id and name in
+    /// preferences). Unlocks provisioning here and waking in the
+    /// panel.
+    pub(crate) fn cloud_link_from_form(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = self.connection.form.as_mut() else {
+            return;
+        };
+        let Some(cloud) = form.cloud.clone() else {
+            return;
+        };
+        let (Some(key_id), Some(key_secret)) = (form.key_id.as_ref(), form.key_secret.as_ref())
+        else {
+            return;
+        };
+        let key_id = key_id.read(cx).text().trim().to_string();
+        let key_secret = key_secret.read(cx).text().trim().to_string();
+        if key_id.is_empty() || key_secret.is_empty() {
+            self.flash_warning("Paste the API key id and secret", cx);
+            return;
+        }
+        form.linking_key = true;
+        cx.notify();
+        let org_id = cloud.org_id.clone();
+        let task = rt::tokio().spawn(async move {
+            let orgs = clickhouse_cloud::list_organizations(&key_id, &key_secret).await?;
+            let Some(org) = orgs.into_iter().find(|org| org.id == org_id) else {
+                return Err("The API key cannot see this connection's organization".to_string());
+            };
+            zedb_core::secrets::set_plain(
+                &clickhouse_cloud::keychain_key(&org.id),
+                &format!("{key_id}:{key_secret}"),
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(org)
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await.unwrap_or_else(|_| Err("Linking stopped".into()));
+            this.update(cx, |this, cx| {
+                if let Some(form) = this.connection.form.as_mut() {
+                    form.linking_key = false;
+                }
+                match outcome {
+                    Ok(org) => {
+                        let known = this
+                            .preferences
+                            .cloud_orgs
+                            .iter_mut()
+                            .find(|existing| existing.id == org.id);
+                        match known {
+                            Some(existing) => existing.name = org.name.clone(),
+                            None => this.preferences.cloud_orgs.push(zedb_core::CloudOrgRef {
+                                id: org.id.clone(),
+                                name: org.name.clone(),
+                            }),
+                        }
+                        let _ = zedb_core::save_preferences(&this.preferences);
+                        if let Some(form) = this.connection.form.as_ref() {
+                            if let Some(input) = form.key_id.as_ref() {
+                                input.update(cx, |input, cx| input.set_text("", cx));
+                            }
+                            if let Some(input) = form.key_secret.as_ref() {
+                                input.update(cx, |input, cx| input.set_text("", cx));
+                            }
+                        }
+                        this.flash_notice(
+                            format!(
+                                "API key linked for {}; provisioning and waking unlocked",
+                                org.name
+                            ),
+                            cx,
+                        );
+                    }
+                    Err(error) => this.flash_warning(format!("Could not link: {error}"), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Rotate the linked service's database password through the

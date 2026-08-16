@@ -140,8 +140,9 @@ impl Workspace {
                                 .connection
                                 .cloud
                                 .org_has_key(&self.preferences, &cloud.org_id);
-                            panel.when(keyed, |panel| {
-                                panel.child(match form.provision {
+                            panel
+                                .when(keyed, |panel| {
+                                    panel.child(match form.provision {
                                     ProvisionStage::Idle => div()
                                         .flex()
                                         .child(
@@ -239,7 +240,92 @@ impl Workspace {
                                         .child("Provisioning a new password\u{2026}")
                                         .into_any_element(),
                                 })
-                            })
+                                })
+                                .when(!keyed, |panel| {
+                                    let console_url = format!(
+                                        "https://console.clickhouse.cloud/organizations/{}/keys",
+                                        cloud.org_id
+                                    );
+                                    panel.child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme::text_dim())
+                                                    .child("ORGANIZATION API KEY \u{b7} OPTIONAL"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme::text_dim())
+                                                    .child(
+                                                    "The browser sign-in is read-only. Paste an \
+                                                     organization API key to let zeDB provision \
+                                                     the database password here and wake idle \
+                                                     services; it cannot create one for you.",
+                                                ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("cloud-form-console")
+                                                    .text_xs()
+                                                    .text_color(theme::accent())
+                                                    .child(
+                                                        "Create one in the Cloud console \
+                                                     (Organization \u{2192} API keys)",
+                                                    )
+                                                    .hover(|link| link.cursor_pointer())
+                                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                                        cx.open_url(&console_url);
+                                                    })),
+                                            )
+                                            .when_some(form.key_id.clone(), |section, key_id| {
+                                                section.child(Self::field("API KEY ID", key_id))
+                                            })
+                                            .when_some(
+                                                form.key_secret.clone(),
+                                                |section, key_secret| {
+                                                    section.child(Self::field(
+                                                        "API KEY SECRET",
+                                                        key_secret,
+                                                    ))
+                                                },
+                                            )
+                                            .child(
+                                                div().flex().child(
+                                                    div()
+                                                        .id("cloud-form-link")
+                                                        .px_2()
+                                                        .py_0p5()
+                                                        .rounded(px(3.))
+                                                        .border_1()
+                                                        .border_color(theme::border())
+                                                        .text_xs()
+                                                        .text_color(theme::text())
+                                                        .child(if form.linking_key {
+                                                            "Linking\u{2026}"
+                                                        } else {
+                                                            "Link key"
+                                                        })
+                                                        .hover(|button| {
+                                                            button
+                                                                .bg(theme::hover())
+                                                                .cursor_pointer()
+                                                        })
+                                                        .when(!form.linking_key, |button| {
+                                                            button.on_click(cx.listener(
+                                                                |this, _, _, cx| {
+                                                                    this.cloud_link_from_form(cx)
+                                                                },
+                                                            ))
+                                                        }),
+                                                ),
+                                            ),
+                                    )
+                                })
                         })
                         .child(
                             div()

@@ -24,6 +24,10 @@ GitHub release notes.
   Keychain without ever being displayed.
 - The Cloud connection form explains the read-only default instead of
   silently gating KILL QUERY and measured advisories.
+- A Cloud connection whose organization has no API key yet offers key
+  entry right in the form, with a link to the console page where keys
+  are created; linking it unlocks provisioning there and waking in
+  the Cloud panel.
 - The editor area wears a thin ClickHouse-yellow border while the
   active connection is a linked Cloud service.
 - The Cloud button in the connections header wears the ClickHouse mark

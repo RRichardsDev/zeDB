@@ -52,6 +52,14 @@ pub(crate) struct ConnectionForm {
     /// non-Cloud connections and for OAuth-only orgs (no API key, no
     /// provisioning).
     pub(crate) provision: ProvisionStage,
+    /// Inline API-key entry for a Cloud connection whose organization
+    /// has no stored key yet: pasting one here links the org (Keychain
+    /// plus preferences) and unlocks provisioning and waking. Absent
+    /// on non-Cloud forms. Key generation stays in the console: the
+    /// sign-in token is read-only upstream and cannot create keys.
+    pub(crate) key_id: Option<Entity<TextInput>>,
+    pub(crate) key_secret: Option<Entity<TextInput>>,
+    pub(crate) linking_key: bool,
 }
 
 /// Provisioning rotates the service's real database password, so it

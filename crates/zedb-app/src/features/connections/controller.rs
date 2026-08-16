@@ -32,6 +32,9 @@ impl Workspace {
             driver_settings: Self::seeded_driver_settings(&[], cx),
             cloud: None,
             provision: ProvisionStage::Idle,
+            key_id: None,
+            key_secret: None,
+            linking_key: false,
         });
         self.notice = None;
         cx.notify();
@@ -74,8 +77,17 @@ impl Workspace {
             tier: connection.tier,
             read_only: connection.read_only,
             driver_settings: Self::seeded_driver_settings(&connection.driver.settings, cx),
+            key_id: connection
+                .cloud
+                .is_some()
+                .then(|| Self::input("", "API key id", false, cx)),
+            key_secret: connection
+                .cloud
+                .is_some()
+                .then(|| Self::input("", "API key secret", true, cx)),
             cloud: connection.cloud,
             provision: ProvisionStage::Idle,
+            linking_key: false,
         });
         self.notice = None;
         cx.notify();
