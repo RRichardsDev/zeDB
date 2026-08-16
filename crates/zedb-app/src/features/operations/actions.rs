@@ -57,8 +57,10 @@ impl Workspace {
     }
 
     /// Clusters the connected node reported membership of; the scope
-    /// dropdown's options. The implicit per-node "default" cluster is
-    /// not a topology.
+    /// dropdown's options. Single-host clusters are skipped by shape
+    /// (the implicit self-only cluster every node carries is not a
+    /// topology); the name is never consulted, because ClickHouse
+    /// Cloud's real cluster is literally named "default".
     pub(crate) fn ops_cluster_options(&self) -> Vec<String> {
         let Some(connected) = &self.connection.connected else {
             return Vec::new();
@@ -69,9 +71,7 @@ impl Workspace {
         let mut clusters: Vec<String> = health
             .iter()
             .filter(|node| node.node_index == connected.active_node)
-            .flat_map(|node| node.memberships.iter())
-            .filter(|membership| membership.cluster != "default")
-            .map(|membership| membership.cluster.clone())
+            .flat_map(|node| topology_clusters(&node.memberships))
             .collect();
         clusters.dedup();
         clusters
@@ -382,7 +382,7 @@ impl Workspace {
             },
         );
         let disks_query = format!(
-            "SELECT name, free_space, total_space{host_col} FROM {} ORDER BY {}",
+            "SELECT name, free_space, total_space, type{host_col} FROM {} ORDER BY {}",
             from("system.disks"),
             if cluster.is_some() {
                 "hostName(), name"
@@ -403,8 +403,14 @@ impl Workspace {
                 None => "system.parts".to_string(),
             },
         );
+        // Engine-family probe: any Shared* table means coordination is
+        // Cloud-managed and the ZooKeeper-era signals do not apply.
+        let smt_query = "SELECT countIf(engine LIKE 'Shared%') FROM system.tables \
+             WHERE database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA')"
+            .to_string();
         let handle = rt::tokio().spawn(async move {
             let client = zedb_ch::ChClient::new(config);
+            let smt = client.query(&smt_query).await;
             let replica_total = client.query(&replica_total_query).await;
             let replica_problems = client.query(&replica_problems_query).await;
             let queue_issues = client.query(&queue_issues_query).await;
@@ -415,6 +421,7 @@ impl Workspace {
             let disks = client.query(&disks_query).await;
             let top_tables = client.query(&top_tables_query).await;
             (
+                smt,
                 replica_total,
                 replica_problems,
                 queue_issues,
@@ -431,6 +438,7 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 this.ops.slow_fetch_in_flight = false;
                 let Ok((
+                    smt,
                     replica_total,
                     replica_problems,
                     queue_issues,
@@ -444,6 +452,9 @@ impl Workspace {
                 else {
                     return;
                 };
+                if let Ok(smt) = smt {
+                    this.ops.smt = smt.rows.first().map(|row| number(row.first())).unwrap_or(0) > 0;
+                }
                 if let Ok(total) = replica_total {
                     this.ops.replica_total = total
                         .rows
@@ -542,7 +553,8 @@ impl Workspace {
                             name: text(row.first()),
                             free: number(row.get(1)),
                             total: number(row.get(2)),
-                            node: text(row.get(3)),
+                            kind: text(row.get(3)),
+                            node: text(row.get(4)),
                         })
                         .collect();
                 }
@@ -579,6 +591,14 @@ impl Workspace {
             return;
         };
         if connected.client_config.read_only {
+            if self.active_connection_is_cloud() {
+                self.flash_warning(
+                    "Cloud connections start read-only, which blocks KILL QUERY; edit the \
+                     connection and turn off Read only for a writable session",
+                    cx,
+                );
+                return;
+            }
             self.flash_warning("This connection is read-only; KILL QUERY needs write", cx);
             return;
         }
@@ -616,5 +636,49 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+}
+
+/// Real topologies among a node's cluster memberships: judged by
+/// shape (more than one host), never by name, because ClickHouse
+/// Cloud's actual cluster is named "default" while every self-hosted
+/// node also carries a degenerate one-host cluster of that name.
+pub(crate) fn topology_clusters(memberships: &[zedb_ch::ClusterMembership]) -> Vec<String> {
+    memberships
+        .iter()
+        .filter(|membership| membership.hosts > 1)
+        .map(|membership| membership.cluster.clone())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn membership(cluster: &str, hosts: u64) -> zedb_ch::ClusterMembership {
+        zedb_ch::ClusterMembership {
+            cluster: cluster.into(),
+            shard: 1,
+            replica: 1,
+            hosts,
+        }
+    }
+
+    #[test]
+    fn cluster_scope_is_judged_by_shape_not_name() {
+        // Self-hosted single node: its self-only "default" is not a
+        // topology.
+        assert!(topology_clusters(&[membership("default", 1)]).is_empty());
+        // ClickHouse Cloud: the real multi-replica cluster is
+        // literally named "default" and must survive.
+        assert_eq!(
+            topology_clusters(&[membership("default", 3)]),
+            vec!["default".to_string()]
+        );
+        // Mixed: only the real topology remains.
+        assert_eq!(
+            topology_clusters(&[membership("default", 1), membership("main", 4)]),
+            vec!["main".to_string()]
+        );
     }
 }

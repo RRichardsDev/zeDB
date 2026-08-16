@@ -40,6 +40,10 @@ static REPLICATED_ENGINE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:Replicated|Shared)(\w*MergeTree)\(\s*'[^']*'\s*,\s*'[^']*'\s*(?:,\s*)?")
         .expect("static regex")
 });
+// Cloud can also render SharedMergeTree with no coordination clause at
+// all (bare or with other args); the prefix still falls away.
+static SHARED_BARE_ENGINE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:Replicated|Shared)(\w*MergeTree)\b").expect("static regex"));
 static ACCESS_CONTROL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^\s*(CREATE\s+(USER|ROLE)|GRANT|REVOKE|DROP\s+(USER|ROLE))\b")
         .expect("static regex")
@@ -55,7 +59,11 @@ static DROP_SYNC: LazyLock<Regex> =
 /// back to their plain equivalents. The schema is otherwise identical.
 pub fn decluster(sql: &str) -> String {
     let sql = ON_CLUSTER.replace_all(sql, "");
-    REPLICATED_ENGINE.replace_all(&sql, "$1(").into_owned()
+    // Coordination arguments go with the prefix when present; any
+    // remaining Replicated/Shared prefix (no such clause) is dropped
+    // on its own.
+    let sql = REPLICATED_ENGINE.replace_all(&sql, "$1(");
+    SHARED_BARE_ENGINE.replace_all(&sql, "$1").into_owned()
 }
 
 /// Split on top-level `;`, quote- and comment-aware; chunks keep comments.
@@ -352,5 +360,27 @@ mod tests {
     fn decluster_leaves_unrelated_text_alone() {
         let statement = "SELECT 'ON CLUSTER x is just a string here'";
         assert_eq!(decluster(statement), statement);
+    }
+
+    #[test]
+    fn declusters_shared_engines_with_and_without_coordination() {
+        // The two-argument coordination clause goes with the prefix.
+        assert_eq!(
+            decluster("ENGINE = SharedMergeTree('/ch/t', '{replica}') ORDER BY x"),
+            "ENGINE = MergeTree() ORDER BY x"
+        );
+        // Cloud can render the clause-less forms too.
+        assert_eq!(
+            decluster("ENGINE = SharedMergeTree ORDER BY x"),
+            "ENGINE = MergeTree ORDER BY x"
+        );
+        assert_eq!(
+            decluster("ENGINE = SharedMergeTree() ORDER BY x"),
+            "ENGINE = MergeTree() ORDER BY x"
+        );
+        assert_eq!(
+            decluster("ENGINE = SharedReplacingMergeTree(ver) ORDER BY x"),
+            "ENGINE = ReplacingMergeTree(ver) ORDER BY x"
+        );
     }
 }

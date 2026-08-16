@@ -400,6 +400,9 @@ impl Workspace {
             let mut errors = Vec::new();
             let mut oauth_orgs = Vec::new();
             let mut account = None;
+            // Orgs whose listing succeeded: only for these can a
+            // missing service honestly be called deleted.
+            let mut ok_orgs: Vec<String> = Vec::new();
             for org in &orgs {
                 let stored =
                     zedb_core::secrets::get_plain(&clickhouse_cloud::keychain_key(&org.id))
@@ -414,6 +417,7 @@ impl Workspace {
                 };
                 match clickhouse_cloud::list_services(&key_id, &key_secret, &org.id).await {
                     Ok(list) => {
+                        ok_orgs.push(org.id.clone());
                         services.extend(list.into_iter().map(|service| (org.id.clone(), service)))
                     }
                     Err(error) => errors.push(format!("{}: {error}", org.name)),
@@ -435,10 +439,13 @@ impl Workspace {
                                         )
                                         .await
                                         {
-                                            Ok(list) => services.extend(
-                                                list.into_iter()
-                                                    .map(|service| (org.id.clone(), service)),
-                                            ),
+                                            Ok(list) => {
+                                                ok_orgs.push(org.id.clone());
+                                                services.extend(
+                                                    list.into_iter()
+                                                        .map(|service| (org.id.clone(), service)),
+                                                )
+                                            }
                                             Err(error) => {
                                                 errors.push(format!("{}: {error}", org.name))
                                             }
@@ -464,10 +471,10 @@ impl Workspace {
                     &b.1.name,
                 ))
             });
-            (services, errors, oauth_orgs, account)
+            (services, errors, oauth_orgs, account, ok_orgs)
         });
         cx.spawn(async move |this, cx| {
-            let Ok((services, errors, oauth_orgs, account)) = task.await else {
+            let Ok((services, errors, oauth_orgs, account, ok_orgs)) = task.await else {
                 return;
             };
             this.update(cx, |this, cx| {
@@ -480,6 +487,31 @@ impl Workspace {
                     .map(|(_, service)| (service.id.clone(), service.state.clone()))
                     .collect();
                 this.connection.cloud.services = services;
+                // A linked connection whose service vanished from a
+                // successfully listed org is dead, and says so; a
+                // failed listing proves nothing and marks nothing.
+                let deleted: Vec<String> = this
+                    .connection
+                    .connections
+                    .iter()
+                    .filter_map(|connection| connection.cloud.as_ref())
+                    .filter(|cloud| ok_orgs.contains(&cloud.org_id))
+                    .filter(|cloud| {
+                        !this
+                            .connection
+                            .cloud
+                            .services
+                            .iter()
+                            .any(|(_, service)| service.id == cloud.service_id)
+                    })
+                    .map(|cloud| cloud.service_id.clone())
+                    .collect();
+                for service_id in deleted {
+                    this.connection
+                        .cloud
+                        .states
+                        .insert(service_id, "deleted".into());
+                }
                 this.connection.cloud.oauth_orgs = oauth_orgs;
                 if account.is_some() {
                     this.connection.cloud.account = account;
@@ -978,14 +1010,37 @@ impl Workspace {
             let (key_id, key_secret) = stored
                 .as_deref()
                 .and_then(clickhouse_cloud::split_credentials)?;
-            clickhouse_cloud::list_services(&key_id, &key_secret, &cloud.org_id)
+            let list = clickhouse_cloud::list_services(&key_id, &key_secret, &cloud.org_id)
                 .await
-                .ok()?
-                .into_iter()
-                .find(|service| service.id == cloud.service_id)
+                .ok()?;
+            // Some(service): found. None from the ? above: could not
+            // check. Some(None) below: listed and definitely gone.
+            Some((
+                cloud.service_id.clone(),
+                list.into_iter()
+                    .find(|service| service.id == cloud.service_id),
+            ))
         });
         cx.spawn(async move |this, cx| {
-            let Ok(Some(service)) = task.await else {
+            let Ok(Some((service_id, found))) = task.await else {
+                return;
+            };
+            let Some(service) = found else {
+                this.update(cx, |this, cx| {
+                    this.connection
+                        .cloud
+                        .states
+                        .insert(service_id, "deleted".into());
+                    this.flash_warning(
+                        format!(
+                            "{name} no longer exists in ClickHouse Cloud (the service was \
+                             deleted); this connection is dead"
+                        ),
+                        cx,
+                    );
+                    cx.notify();
+                })
+                .ok();
                 return;
             };
             this.update(cx, |this, cx| {
@@ -1044,7 +1099,9 @@ impl Workspace {
             warehouse_id: None,
             is_primary: false,
         };
-        if service.is_asleep() {
+        if state == "deleted" {
+            Some("deleted")
+        } else if service.is_asleep() {
             Some("idle")
         } else if service.is_waking() {
             Some("waking")

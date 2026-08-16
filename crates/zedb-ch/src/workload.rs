@@ -23,18 +23,38 @@ pub struct QueryShape {
 /// The heaviest SELECT shapes touching the table inside the window,
 /// by rows read. `is_initial_query` keeps distributed fan-out legs
 /// from double-counting.
-pub fn query_shapes_sql(database: &str, table: &str, days: u32, limit: usize) -> String {
+/// The query_log source: fanned out over every replica when a real
+/// cluster exists (each initial query logs on exactly one replica, so
+/// the union is the whole workload), the bare table otherwise.
+fn log_source(cluster: Option<&str>) -> String {
+    match cluster {
+        Some(cluster) => format!(
+            "clusterAllReplicas('{}', system.query_log)",
+            escape_string(cluster)
+        ),
+        None => "system.query_log".to_string(),
+    }
+}
+
+pub fn query_shapes_sql(
+    database: &str,
+    table: &str,
+    days: u32,
+    limit: usize,
+    cluster: Option<&str>,
+) -> String {
     let target = escape_string(&format!("{database}.{table}"));
     format!(
         "SELECT any(query) AS example, count() AS runs, sum(read_rows) AS read_rows \
-         FROM system.query_log \
+         FROM {log} \
          WHERE type = 'QueryFinish' AND query_kind = 'Select' AND is_initial_query \
            AND event_date >= today() - {days} \
            AND event_time > now() - INTERVAL {days} DAY \
            AND has(tables, '{target}') \
          GROUP BY normalized_query_hash \
          ORDER BY read_rows DESC \
-         LIMIT {limit}"
+         LIMIT {limit}",
+        log = log_source(cluster)
     )
 }
 
@@ -79,16 +99,22 @@ pub fn parse_skip_indices(result: &QueryResult) -> Vec<SkipIndexInfo> {
 
 /// Projection hits inside the window. `query_log.projections` records
 /// full names (`db.table.projection`); the tail segment is the name.
-pub fn projection_usage_sql(database: &str, table: &str, days: u32) -> String {
+pub fn projection_usage_sql(
+    database: &str,
+    table: &str,
+    days: u32,
+    cluster: Option<&str>,
+) -> String {
     let prefix = escape_string(&format!("{database}.{table}."));
     format!(
         "SELECT arrayJoin(projections) AS projection, count() AS hits \
-         FROM system.query_log \
+         FROM {log} \
          WHERE type = 'QueryFinish' AND is_initial_query \
            AND event_date >= today() - {days} \
            AND event_time > now() - INTERVAL {days} DAY \
            AND startsWith(projection, '{prefix}') \
-         GROUP BY projection"
+         GROUP BY projection",
+        log = log_source(cluster)
     )
 }
 
@@ -196,6 +222,9 @@ pub struct WorkloadFinding {
 /// The whole measured picture for one table.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorkloadReport {
+    /// The cluster the log was fanned out over; None means one
+    /// node's log only, and the tab says so.
+    pub scope: Option<String>,
     pub window_days: u32,
     pub total_runs: u64,
     pub shapes_analyzed: usize,
@@ -437,10 +466,19 @@ mod tests {
 
     #[test]
     fn shape_sql_names_the_table_and_window() {
-        let sql = query_shapes_sql("sat", "events", 7, 12);
+        let sql = query_shapes_sql("sat", "events", 7, 12, None);
+        assert!(sql.contains("FROM system.query_log"));
         assert!(sql.contains("has(tables, 'sat.events')"));
         assert!(sql.contains("INTERVAL 7 DAY"));
         assert!(sql.contains("LIMIT 12"));
+    }
+
+    #[test]
+    fn shape_sql_fans_out_over_the_cluster() {
+        let sql = query_shapes_sql("sat", "events", 7, 12, Some("default"));
+        assert!(sql.contains("clusterAllReplicas('default', system.query_log)"));
+        let projections = projection_usage_sql("sat", "events", 7, Some("default"));
+        assert!(projections.contains("clusterAllReplicas('default', system.query_log)"));
     }
 
     #[test]

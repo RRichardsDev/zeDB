@@ -130,6 +130,14 @@ impl Workspace {
                     parts.push(format!("{stuck} stuck queue entr(ies)"));
                 }
                 (theme::warning(), parts.join(" \u{b7} "))
+            } else if self.ops.smt {
+                // SharedMergeTree: no ZooKeeper-era signals to judge
+                // health by, and pretending otherwise painted a
+                // fabricated green. State what is actually known.
+                (
+                    theme::text_dim(),
+                    "SharedMergeTree \u{b7} coordination is Cloud-managed".to_string(),
+                )
             } else {
                 (
                     theme::success(),
@@ -615,8 +623,25 @@ impl Workspace {
                     list.child(empty_line("No unfinished mutations."))
                 }),
             OpsTab::Replication => content
+                .when(self.ops.smt, |list| {
+                    list.child(
+                        div()
+                            .px_4()
+                            .py_2()
+                            .text_sm()
+                            .text_color(theme::text_dim())
+                            .child(
+                                "This service runs SharedMergeTree: parts live in shared object \
+                             storage and coordination is Cloud-managed, so replication queues \
+                             and Keeper sessions do not apply. Watch parts, merges, and \
+                             mutations on the Background tab instead.",
+                            ),
+                    )
+                })
                 .map(|list| {
-                    if self.ops.replica_total == 0 {
+                    if self.ops.smt {
+                        list
+                    } else if self.ops.replica_total == 0 {
                         list.child(empty_line("No replicated tables."))
                     } else if self.ops.replica_problems.is_empty() {
                         list.child(
@@ -848,7 +873,12 @@ impl Workspace {
                         }),
                 )
                 .when(self.ops.kafka_consumers.is_empty(), |list| {
-                    list.child(empty_line("No Kafka consumers."))
+                    list.child(empty_line(if self.ops.smt {
+                        "No SQL-side Kafka consumers. ClickPipes run in the Cloud control \
+                         plane and do not appear here; see the Cloud console's Data sources."
+                    } else {
+                        "No Kafka consumers."
+                    }))
                 })
                 .child(section_title(
                     "MATERIALIZED VIEW INSERT FAILURES \u{b7} 24H",
@@ -968,33 +998,48 @@ impl Workspace {
                                 .text_color(theme::text())
                                 .child(disk.name.clone()),
                         )
-                        .child(
-                            div()
-                                .w(px(bar_width))
-                                .flex_none()
-                                .h(px(6.))
-                                .rounded(px(3.))
-                                .bg(theme::row_stripe())
-                                .child(
+                        .map(|row| {
+                            // Object storage has no meaningful
+                            // capacity: a percent-full bar would be
+                            // fabricated. Size is the honest number.
+                            if disk.is_object_storage() {
+                                row.child(div().text_color(theme::text_dim()).child(format!(
+                                    "object storage ({}) \u{b7} {} stored \u{b7} no fixed capacity",
+                                    disk.kind,
+                                    Self::format_bytes(used),
+                                )))
+                            } else {
+                                row.child(
                                     div()
-                                        .w(px(bar_width * fraction as f32))
+                                        .w(px(bar_width))
+                                        .flex_none()
                                         .h(px(6.))
                                         .rounded(px(3.))
-                                        .bg(if fraction > 0.9 {
-                                            theme::danger()
-                                        } else if fraction > 0.75 {
-                                            theme::warning()
-                                        } else {
-                                            theme::success()
-                                        }),
-                                ),
-                        )
-                        .child(div().text_color(theme::text_dim()).child(format!(
-                            "{} of {} used ({:.0}%)",
-                            Self::format_bytes(used),
-                            Self::format_bytes(disk.total),
-                            fraction * 100.0
-                        )))
+                                        .bg(theme::row_stripe())
+                                        .child(
+                                            div()
+                                                .w(px(bar_width * fraction as f32))
+                                                .h(px(6.))
+                                                .rounded(px(3.))
+                                                .bg(if fraction > 0.9 {
+                                                    theme::danger()
+                                                } else if fraction > 0.75 {
+                                                    theme::warning()
+                                                } else {
+                                                    theme::success()
+                                                }),
+                                        ),
+                                )
+                                .child(
+                                    div().text_color(theme::text_dim()).child(format!(
+                                        "{} of {} used ({:.0}%)",
+                                        Self::format_bytes(used),
+                                        Self::format_bytes(disk.total),
+                                        fraction * 100.0
+                                    )),
+                                )
+                            }
+                        })
                 }))
                 .when(self.ops.disks.is_empty(), |list| {
                     list.child(empty_line("No disk information."))

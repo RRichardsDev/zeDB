@@ -1,9 +1,12 @@
 # Phase 10.5b: Cloud-truthful internals
 
-Status: PLANNED. Child of `docs/PHASE-10.5.md`; the debts come from the
-self-audit recorded in `docs/CLOUD-STRATEGY.md`. Every item here is a
-correctness fix: zeDB currently shows Cloud users wrong or silently
-partial numbers.
+Status: BUILT (2026-08-16), all six increments. Child of
+`docs/PHASE-10.5.md`; the debts come from the self-audit recorded in
+`docs/CLOUD-STRATEGY.md`. Every item here is a correctness fix: zeDB
+previously showed Cloud users wrong or silently partial numbers. The
+cluster shape check rides on a `hosts` count added to
+ClusterMembership; SMT detection is an engine-family probe in the ops
+slow fetch.
 
 ## Increment 1: unblock the cluster named `default`
 

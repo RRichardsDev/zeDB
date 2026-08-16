@@ -131,6 +131,7 @@ mod tests {
             cluster: cluster.into(),
             shard,
             replica,
+            hosts: 2,
         }
     }
 

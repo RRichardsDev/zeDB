@@ -6,9 +6,18 @@ impl ChClient {
     /// works regardless of how its endpoint is reached (port-mapped
     /// docker, DNS aliases, load balancers).
     pub async fn cluster_memberships(&self) -> Result<Vec<ClusterMembership>> {
+        // hosts counts the whole cluster (not just local rows) so
+        // callers can tell a real topology from the degenerate
+        // single-node cluster by shape instead of by name.
         let result = self
             .query(
-                "SELECT cluster, shard_num, replica_num                  FROM system.clusters WHERE is_local = 1 ORDER BY cluster",
+                "SELECT local.cluster, local.shard_num, local.replica_num, sizes.hosts \
+                 FROM system.clusters AS local \
+                 INNER JOIN ( \
+                     SELECT cluster, count() AS hosts \
+                     FROM system.clusters GROUP BY cluster \
+                 ) AS sizes ON sizes.cluster = local.cluster \
+                 WHERE local.is_local = 1 ORDER BY local.cluster",
             )
             .await?;
         result
@@ -32,6 +41,7 @@ impl ChClient {
                     cluster: text(&row[0])?,
                     shard: number(&row[1])?,
                     replica: number(&row[2])?,
+                    hosts: number(&row[3])?,
                 })
             })
             .collect()

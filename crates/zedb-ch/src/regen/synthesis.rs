@@ -45,17 +45,19 @@ impl Regenerator<'_> {
             }
         }
 
-        // Transplant the Replicated engine prefix: zk path and replica are
-        // declarations the declustered replay stripped. An explicit
-        // non-Replicated engine is deliberate and left alone.
+        // Transplant the Replicated (or Cloud's Shared) engine
+        // prefix: zk path and replica are declarations the
+        // declustered replay stripped. An explicit plain engine is
+        // deliberate and left alone.
         let engine = REPLICATED.captures(&old_body).map(|captures| {
             (
                 captures[1].to_string(),
                 captures[2].to_string(),
                 captures[3].to_string(),
+                captures[4].to_string(),
             )
         });
-        if let Some((family, zk_template, replica)) = engine {
+        if let Some((kind, family, zk_template, replica)) = engine {
             let zk = render(&zk_template, &render_params).unwrap_or(zk_template);
             let with_args =
                 Regex::new(&format!(r"ENGINE = {family}\(([^)]*)\)")).expect("family is a word");
@@ -69,7 +71,7 @@ impl Regenerator<'_> {
                     } else {
                         format!(", {args}")
                     };
-                    format!("ENGINE = Replicated{family}({zk}, {replica}{joined})")
+                    format!("ENGINE = {kind}{family}({zk}, {replica}{joined})")
                 })
                 .into_owned();
             if !replaced {
@@ -79,12 +81,12 @@ impl Regenerator<'_> {
                 sql = bare_engine
                     .replacen(&sql, 1, |_: &regex::Captures| {
                         count += 1;
-                        format!("ENGINE = Replicated{family}({zk}, {replica})")
+                        format!("ENGINE = {kind}{family}({zk}, {replica})")
                     })
                     .into_owned();
                 if count == 0 {
                     return Err(RegenError::Internal(format!(
-                        "could not transplant Replicated{family} engine into:\n{sql}"
+                        "could not transplant {kind}{family} engine into:\n{sql}"
                     )));
                 }
             }

@@ -9,6 +9,26 @@ GitHub release notes.
 
 ## Unreleased
 
+- Ops cluster scope now works on ClickHouse Cloud: single-host
+  clusters are skipped by shape instead of by the name "default",
+  which is exactly Cloud's real cluster name.
+- The workload advisor measures every replica (clusterAllReplicas)
+  when a real cluster exists, and the tab states its scope ("all
+  replicas of X" or "this node only") instead of implying totals.
+- The ops view understands SharedMergeTree: the health strip says
+  coordination is Cloud-managed instead of fabricating a green
+  "replication healthy", the Replication tab explains what applies,
+  object-storage disks show stored size instead of a meaningless
+  percent-full bar, and the Ingestion tab names ClickPipes.
+- Schema regen carries Shared*MergeTree engine definitions the same
+  way it always carried Replicated*, and replay tolerates Cloud's
+  clause-less SharedMergeTree forms.
+- A deleted Cloud service is marked deleted in the sidebar and
+  explained on connect, instead of failing as a plain timeout;
+  service states also refresh gently in the background (every two
+  minutes) so "running" cannot go stale while you watch.
+- KILL QUERY on a read-only Cloud connection explains the Cloud
+  posture and how to get a writable session.
 - zeDB now understands ClickHouse Cloud warehouses: the panel groups
   compute under its warehouse, a connection built from one calls its
   members compute (not nodes) and defaults to the warehouse's name,

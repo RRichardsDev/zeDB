@@ -69,6 +69,9 @@ pub struct ClusterMembership {
     pub cluster: String,
     pub shard: u64,
     pub replica: u64,
+    /// Hosts in the whole cluster: 1 means the degenerate self-only
+    /// cluster every node carries, which is not a topology.
+    pub hosts: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

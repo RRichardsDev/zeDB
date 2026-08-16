@@ -470,6 +470,33 @@ impl Workspace {
         })
         .detach();
 
+        // Gentle state poll while the app runs: a service can idle,
+        // wake, or be deleted while the user watches, and "running"
+        // must not go stale until the next refocus. Two minutes is
+        // plenty; the loop does nothing when no Cloud is linked.
+        cx.spawn(async move |this, cx| loop {
+            gpui::Timer::after(Duration::from_secs(120)).await;
+            let live = this
+                .update(cx, |this, cx| {
+                    let watching = !this.preferences.cloud_orgs.is_empty()
+                        || this.connection.cloud.signed_in
+                        || this
+                            .connection
+                            .connections
+                            .iter()
+                            .any(|connection| connection.cloud.is_some());
+                    if watching {
+                        this.cloud_refresh(cx);
+                    }
+                    true
+                })
+                .unwrap_or(false);
+            if !live {
+                break;
+            }
+        })
+        .detach();
+
         // Coming back to the window re-checks cluster health and
         // updates, debounced so focus flapping stays quiet.
         cx.observe_window_activation(window, |this, window, cx| {

@@ -40,10 +40,13 @@ impl Workspace {
         }
         cx.notify();
 
+        // A real topology fans the log out over every replica; the
+        // shape check keeps single-node installs on the bare table.
+        let cluster = self.ops_cluster_options().first().cloned();
         let task = rt::tokio().spawn({
             let database = database_name.clone();
             let object = object_name.clone();
-            async move { measure_workload(config, &database, &object).await }
+            async move { measure_workload(config, &database, &object, cluster).await }
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -113,8 +116,14 @@ impl Workspace {
                 ));
         }
 
+        // The scope is stated, never implied: a one-node log on a
+        // multi-replica service is a fraction of the workload.
+        let scope = match &report.scope {
+            Some(cluster) => format!("all replicas of {cluster}"),
+            None => "this node only".to_string(),
+        };
         let header = format!(
-            "Measured from system.query_log \u{b7} last {} days \u{b7} {} runs across {} shapes",
+            "Measured from system.query_log ({scope}) \u{b7} last {} days \u{b7} {} runs across {} shapes",
             report.window_days,
             Self::format_count(report.total_runs),
             report.shapes_analyzed,
@@ -283,6 +292,7 @@ async fn measure_workload(
     config: ChConfig,
     database: &str,
     object: &str,
+    cluster: Option<String>,
 ) -> Result<WorkloadReport, String> {
     let client = ChClient::new(config);
     let shapes_result = client
@@ -291,6 +301,7 @@ async fn measure_workload(
             object,
             WINDOW_DAYS,
             SHAPE_LIMIT,
+            cluster.as_deref(),
         ))
         .await
         .map_err(|error| error.to_string())?;
@@ -342,6 +353,7 @@ async fn measure_workload(
             database,
             object,
             WINDOW_DAYS,
+            cluster.as_deref(),
         ))
         .await
         .map(|result| workload::parse_projection_usage(&result))
@@ -367,6 +379,7 @@ async fn measure_workload(
         &projections,
     );
     Ok(WorkloadReport {
+        scope: cluster,
         window_days: WINDOW_DAYS,
         total_runs,
         shapes_analyzed: explained.len(),

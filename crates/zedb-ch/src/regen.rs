@@ -87,7 +87,8 @@ static DROP_ACCESS: LazyLock<Regex> = LazyLock::new(|| {
         .expect("static regex")
 });
 static REPLICATED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"Replicated(\w*MergeTree)\(\s*('[^']*')\s*,\s*('[^']*')").expect("static regex")
+    Regex::new(r"(Replicated|Shared)(\w*MergeTree)\(\s*('[^']*')\s*,\s*('[^']*')")
+        .expect("static regex")
 });
 static STATE_PATH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -255,3 +256,29 @@ pub struct Regenerator<'a> {
 }
 
 type Files = BTreeMap<String, String>;
+
+#[cfg(test)]
+mod engine_prefix_tests {
+    use super::REPLICATED;
+
+    #[test]
+    fn captures_replicated_and_shared_alike() {
+        for (body, kind) in [
+            (
+                "ENGINE = ReplicatedMergeTree('/zk/t', '{replica}') ORDER BY x",
+                "Replicated",
+            ),
+            (
+                "ENGINE = SharedMergeTree('/ch/t', '{replica}') ORDER BY x",
+                "Shared",
+            ),
+        ] {
+            let captures = REPLICATED.captures(body).expect(body);
+            assert_eq!(&captures[1], kind);
+            assert_eq!(&captures[2], "MergeTree");
+        }
+        assert!(REPLICATED
+            .captures("ENGINE = MergeTree() ORDER BY x")
+            .is_none());
+    }
+}

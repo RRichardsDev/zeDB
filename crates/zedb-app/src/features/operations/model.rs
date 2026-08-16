@@ -141,7 +141,19 @@ pub struct OpsDisk {
     pub name: String,
     pub free: u64,
     pub total: u64,
+    /// system.disks `type`: object-storage kinds make a percent-full
+    /// bar meaningless, so the view labels them instead.
+    pub kind: String,
     pub node: String,
+}
+
+impl OpsDisk {
+    pub fn is_object_storage(&self) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "ObjectStorage" | "S3" | "s3" | "s3_plain" | "azure_blob_storage" | "gcs" | "web"
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -254,6 +266,9 @@ pub struct OpsState {
     pub view_failures: Vec<OpsViewFailure>,
     pub async_inserts: Vec<OpsAsyncInsert>,
     pub disks: Vec<OpsDisk>,
+    /// The service's tables are Shared*MergeTree (ClickHouse Cloud):
+    /// ZooKeeper-era replication signals do not apply.
+    pub smt: bool,
     pub top_tables: Vec<OpsTopTable>,
     pub slow_fetch_in_flight: bool,
     pub tab: OpsTab,
