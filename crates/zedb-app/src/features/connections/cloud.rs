@@ -26,8 +26,9 @@ pub(crate) struct CloudLinkState {
     pub(crate) generation: u64,
     /// A refresh token sits in the Keychain (browser sign-in done).
     pub(crate) signed_in: bool,
-    /// The signed-in account email, once a token has been decoded.
-    pub(crate) account: Option<String>,
+    /// The signed-in account (email, name, cached avatar), once the
+    /// identity has been fetched.
+    pub(crate) account: Option<cloud_oauth::Account>,
     /// The user code awaiting browser approval, while polling.
     pub(crate) authorizing: Option<String>,
     /// Organizations visible through the sign-in (superset of, or
@@ -131,12 +132,23 @@ impl Workspace {
                 }
                 Err(_) => return,
             };
-            let stored = match tokens.refresh.as_deref() {
-                Some(refresh) => cloud_oauth::store_refresh_token(refresh),
-                None => Err("no offline access granted; sign-in will not survive a restart".into()),
-            };
+            // The auth server grants no refresh token to this client;
+            // the Keychain-stored access token carries the session
+            // across relaunches for its roughly one-day life.
+            let durable = tokens
+                .refresh
+                .as_deref()
+                .is_some_and(|refresh| cloud_oauth::store_refresh_token(refresh).is_ok());
             cloud_oauth::cache_access_token(&tokens.access);
-            let account = cloud_oauth::email(&tokens.access);
+            let access = tokens.access.clone();
+            let identity = tokens.identity.clone();
+            let account = rt::tokio()
+                .spawn(
+                    async move { cloud_oauth::fetch_account(&access, identity.as_deref()).await },
+                )
+                .await
+                .ok()
+                .filter(cloud_oauth::Account::known);
             this.update(cx, |this, cx| {
                 if this.connection.cloud.oauth_generation != generation {
                     return;
@@ -144,9 +156,13 @@ impl Workspace {
                 this.connection.cloud.authorizing = None;
                 this.connection.cloud.signed_in = true;
                 this.connection.cloud.account = account;
-                match stored {
-                    Ok(()) => this.flash_notice("Signed in to ClickHouse Cloud", cx),
-                    Err(error) => this.flash_warning(error, cx),
+                if durable {
+                    this.flash_notice("Signed in to ClickHouse Cloud", cx);
+                } else {
+                    this.flash_notice(
+                        "Signed in to ClickHouse Cloud; this session lasts about a day",
+                        cx,
+                    );
                 }
                 this.cloud_refresh(cx);
                 cx.notify();
@@ -317,7 +333,8 @@ impl Workspace {
             if signed_in {
                 match cloud_oauth::access_token().await {
                     Ok(Some(token)) => {
-                        account = cloud_oauth::email(&token);
+                        account = Some(cloud_oauth::fetch_account(&token, None).await)
+                            .filter(cloud_oauth::Account::known);
                         match clickhouse_cloud::list_organizations_bearer(&token).await {
                             Ok(list) => {
                                 for org in list {
@@ -1024,32 +1041,92 @@ impl Workspace {
                                     cx,
                                 )))
                                 .into_any_element(),
-                            (None, true) => div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(div().size(px(7.)).rounded_full().bg(theme::success()))
-                                .child(div().text_sm().text_color(theme::text()).child(
-                                    match account {
-                                        Some(email) => format!("Signed in as {email}"),
-                                        None => "Signed in to ClickHouse Cloud".to_string(),
-                                    },
-                                ))
-                                .child(div().flex_1())
-                                .child(
-                                    div()
-                                        .id("cloud-sign-out")
-                                        .text_xs()
-                                        .text_color(theme::text_dim())
-                                        .child("Sign out")
-                                        .hover(|button| {
-                                            button.text_color(theme::danger()).cursor_pointer()
-                                        })
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.cloud_sign_out(cx)),
-                                        ),
-                                )
-                                .into_any_element(),
+                            // Same shape as the forge identity row in
+                            // Preferences: avatar, name over a marked
+                            // detail line, bordered Sign out.
+                            (None, true) => {
+                                let name = account
+                                    .as_ref()
+                                    .and_then(|account| account.name.clone())
+                                    .or_else(|| {
+                                        account.as_ref().and_then(|account| account.email.clone())
+                                    })
+                                    .unwrap_or_else(|| "Signed in".to_string());
+                                let email = account
+                                    .as_ref()
+                                    .and_then(|account| account.email.clone())
+                                    .unwrap_or_else(|| "ClickHouse Cloud".to_string());
+                                let avatar =
+                                    account.as_ref().and_then(|account| account.avatar.clone());
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_3()
+                                            .when_some(avatar, |row, avatar| {
+                                                row.child(
+                                                    gpui::img(gpui::ImageSource::Resource(
+                                                        gpui::Resource::Path(avatar.into()),
+                                                    ))
+                                                    .size(px(36.))
+                                                    .rounded_full(),
+                                                )
+                                            })
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap_0p5()
+                                                    .child(
+                                                        div().text_color(theme::text()).child(name),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_1()
+                                                            .text_sm()
+                                                            .text_color(theme::text_dim())
+                                                            .child(
+                                                                gpui::svg()
+                                                                    .path("icons/clickhouse.svg")
+                                                                    .size(px(11.))
+                                                                    .text_color(gpui::rgb(
+                                                                        0xFFCC01,
+                                                                    )),
+                                                            )
+                                                            .child(email),
+                                                    ),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("cloud-sign-out")
+                                            .px_3()
+                                            .py_1()
+                                            .rounded(px(3.))
+                                            .border_1()
+                                            .border_color(theme::border())
+                                            .text_color(theme::text_dim())
+                                            .hover(|button| {
+                                                button
+                                                    .bg(theme::bg_sidebar())
+                                                    .text_color(theme::text())
+                                                    .cursor_pointer()
+                                            })
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.cloud_sign_out(cx)
+                                                }),
+                                            )
+                                            .child("Sign out"),
+                                    )
+                                    .into_any_element()
+                            }
                             (None, false) => {
                                 div()
                                     .flex()

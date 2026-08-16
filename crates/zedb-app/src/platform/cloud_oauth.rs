@@ -63,6 +63,92 @@ impl DeviceCode {
 pub struct Tokens {
     pub access: String,
     pub refresh: Option<String>,
+    /// OIDC id_token, when granted: the only token whose claims name
+    /// the account.
+    pub identity: Option<String>,
+}
+
+/// Who is signed in, for display: never used for authorization.
+#[derive(Clone, Debug, Default)]
+pub struct Account {
+    pub email: Option<String>,
+    pub name: Option<String>,
+    pub avatar: Option<std::path::PathBuf>,
+}
+
+impl Account {
+    pub fn known(&self) -> bool {
+        self.email.is_some() || self.name.is_some()
+    }
+}
+
+fn identity_fields(claims: &serde_json::Value) -> (Option<String>, Option<String>, Option<String>) {
+    let field = |key: &str| {
+        claims
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    };
+    (field("email"), field("name"), field("picture"))
+}
+
+/// The signed-in account, from the id_token's claims when granted and
+/// the OIDC userinfo endpoint otherwise, with the avatar cached to
+/// disk so gpui can render it from a path. Best-effort: display only.
+pub async fn fetch_account(access_token: &str, identity: Option<&str>) -> Account {
+    let (mut email, mut name, mut picture) = identity
+        .and_then(claims)
+        .map(|claims| identity_fields(&claims))
+        .unwrap_or_default();
+    if email.is_none() {
+        if let Some(userinfo) = fetch_userinfo(access_token).await {
+            let (from_email, from_name, from_picture) = identity_fields(&userinfo);
+            email = email.or(from_email);
+            name = name.or(from_name);
+            picture = picture.or(from_picture);
+        }
+    }
+    let avatar = match picture.as_deref() {
+        Some(url) => download_avatar(url).await,
+        None => None,
+    };
+    Account {
+        email,
+        name,
+        avatar,
+    }
+}
+
+async fn fetch_userinfo(access_token: &str) -> Option<serde_json::Value> {
+    let plane = plane();
+    let body = client()
+        .ok()?
+        .get(format!("{}/userinfo", plane.auth_host))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+    serde_json::from_str(&body).ok()
+}
+
+async fn download_avatar(url: &str) -> Option<std::path::PathBuf> {
+    let bytes = client()
+        .ok()?
+        .get(url)
+        .send()
+        .await
+        .ok()?
+        .bytes()
+        .await
+        .ok()?;
+    let directory = dirs::data_local_dir()?.join("zedb");
+    std::fs::create_dir_all(&directory).ok()?;
+    let path = directory.join("avatar-clickhouse-cloud.png");
+    std::fs::write(&path, &bytes).ok()?;
+    Some(path)
 }
 
 fn client() -> Result<reqwest::Client, String> {
@@ -98,6 +184,10 @@ pub async fn start_device_flow() -> Result<DeviceCode, String> {
 struct TokenReply {
     access_token: Option<String>,
     refresh_token: Option<String>,
+    /// The OIDC identity token: the access token's claims carry no
+    /// email (the auth server keeps identity out of it), so the
+    /// display name comes from here or /userinfo.
+    id_token: Option<String>,
     error: Option<String>,
     interval: Option<u64>,
 }
@@ -135,6 +225,7 @@ pub async fn poll_for_tokens(device: &DeviceCode) -> Result<Tokens, String> {
             return Ok(Tokens {
                 access,
                 refresh: reply.refresh_token,
+                identity: reply.id_token,
             });
         }
         match reply.error.as_deref() {
@@ -176,6 +267,7 @@ async fn refresh_tokens(refresh_token: &str) -> Result<Tokens, String> {
         Some(access) => Ok(Tokens {
             access,
             refresh: reply.refresh_token,
+            identity: reply.id_token,
         }),
         None => Err(format!(
             "ClickHouse Cloud sign-in expired: {}; sign in again",
@@ -245,37 +337,64 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
 
 // -- stored identity --------------------------------------------------
 
-/// The in-memory access token; never written anywhere.
+/// The in-memory access token, the working copy.
 static ACCESS: Mutex<Option<String>> = Mutex::new(None);
+
+/// The Keychain also holds the current access token: the auth server
+/// grants no refresh token to this client (offline_access is dropped
+/// upstream), so the stored access token is what lets a sign-in
+/// survive a relaunch for the rest of its roughly one-day life.
+const ACCESS_KEYCHAIN_KEY: &str = "zedb-clickhouse-cloud-oauth-access";
 
 pub fn store_refresh_token(token: &str) -> Result<(), String> {
     zedb_core::secrets::set_plain(KEYCHAIN_KEY, token).map_err(|error| error.to_string())
 }
 
+/// Whether a stored credential can still open a session: a refresh
+/// token, or an access token that has not expired yet.
 pub fn signed_in() -> bool {
-    zedb_core::secrets::get_plain(KEYCHAIN_KEY)
+    if zedb_core::secrets::get_plain(KEYCHAIN_KEY)
         .ok()
         .flatten()
         .is_some()
+    {
+        return true;
+    }
+    zedb_core::secrets::get_plain(ACCESS_KEYCHAIN_KEY)
+        .ok()
+        .flatten()
+        .is_some_and(|token| is_fresh(expiry_unix(&token), now_unix()))
 }
 
 pub fn sign_out() {
     let _ = zedb_core::secrets::delete_plain(KEYCHAIN_KEY);
+    let _ = zedb_core::secrets::delete_plain(ACCESS_KEYCHAIN_KEY);
     *ACCESS.lock().unwrap() = None;
 }
 
-/// Remember a just-acquired access token for reuse until expiry.
+/// Remember a just-acquired access token: in memory for this run and
+/// in the Keychain for the next one.
 pub fn cache_access_token(token: &str) {
     *ACCESS.lock().unwrap() = Some(token.to_string());
+    let _ = zedb_core::secrets::set_plain(ACCESS_KEYCHAIN_KEY, token);
 }
 
-/// A usable access token, or `Ok(None)` when signed out. Refreshes
-/// through the Keychain refresh token when the cached one is stale,
-/// storing any rotated refresh token back.
+/// A usable access token, or `Ok(None)` when signed out. Falls back
+/// from the in-memory copy to the Keychain copy to a refresh-token
+/// exchange (storing any rotation back).
 pub async fn access_token() -> Result<Option<String>, String> {
     let cached = ACCESS.lock().unwrap().clone();
     if let Some(token) = cached {
         if is_fresh(expiry_unix(&token), now_unix()) {
+            return Ok(Some(token));
+        }
+    }
+    if let Some(token) = zedb_core::secrets::get_plain(ACCESS_KEYCHAIN_KEY)
+        .ok()
+        .flatten()
+    {
+        if is_fresh(expiry_unix(&token), now_unix()) {
+            *ACCESS.lock().unwrap() = Some(token.clone());
             return Ok(Some(token));
         }
     }
