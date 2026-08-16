@@ -180,28 +180,38 @@ pub async fn list_services(
     .await
 }
 
-/// Ask the control plane to start an idled/stopped service. Waking
-/// takes a while; callers poll `list_services` for the state change.
+/// Ask the control plane to bring a sleeping service up. The state
+/// endpoint's commands are start/stop/awake, and they are not
+/// interchangeable: `start` applies to an explicitly stopped service,
+/// `awake` to an auto-idled one (sending `start` to an idle service
+/// does nothing). Waking takes a while; callers poll `list_services`
+/// for the state change.
 pub async fn start_service(
     key_id: &str,
     key_secret: &str,
     org_id: &str,
     service_id: &str,
+    state: &str,
 ) -> Result<(), String> {
+    let command = if state == "stopped" { "start" } else { "awake" };
     let response = client()?
         .patch(format!(
             "{API_BASE}/organizations/{org_id}/services/{service_id}/state"
         ))
         .basic_auth(key_id, Some(key_secret))
         .header("content-type", "application/json")
-        .body(r#"{"command":"start"}"#)
+        .body(format!(r#"{{"command":"{command}"}}"#))
         .send()
         .await
         .map_err(|error| format!("could not reach ClickHouse Cloud: {error}"))?;
-    response
-        .error_for_status()
-        .map(|_| ())
-        .map_err(|error| format!("ClickHouse Cloud refused the start: {error}"))
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "ClickHouse Cloud refused the {command}: {status} {body}"
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]

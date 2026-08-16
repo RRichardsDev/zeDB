@@ -412,6 +412,16 @@ impl Workspace {
         service_id: String,
         cx: &mut Context<Self>,
     ) {
+        // The state decides the command (stopped vs idle), so capture
+        // it before the optimistic overwrite below.
+        let previous_state = self
+            .connection
+            .cloud
+            .services
+            .iter()
+            .find(|(_, service)| service.id == service_id)
+            .map(|(_, service)| service.state.clone())
+            .unwrap_or_default();
         // Show it as waking immediately; the refresh confirms.
         if let Some((_, service)) = self
             .connection
@@ -437,7 +447,14 @@ impl Workspace {
             else {
                 return Err("No API key in the Keychain for this organization".to_string());
             };
-            clickhouse_cloud::start_service(&key_id, &key_secret, &org_id, &service_id).await
+            clickhouse_cloud::start_service(
+                &key_id,
+                &key_secret,
+                &org_id,
+                &service_id,
+                &previous_state,
+            )
+            .await
         });
         cx.spawn(async move |this, cx| {
             let outcome = task.await.unwrap_or_else(|_| Err("Start stopped".into()));
