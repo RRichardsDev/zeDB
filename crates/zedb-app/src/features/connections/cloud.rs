@@ -755,6 +755,39 @@ impl Workspace {
         .detach();
     }
 
+    /// Append a Cloud service to the open connection form as another
+    /// node (the form's Add node leads to the panel and back). The
+    /// form keeps its provenance from the first service.
+    pub(crate) fn cloud_add_node_to_form(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some((_, service)) = self.connection.cloud.services.get(index) else {
+            return;
+        };
+        let Some(url) = service.https_url() else {
+            self.flash_warning("The service reports no HTTPS endpoint", cx);
+            return;
+        };
+        let name = service.name.clone();
+        let port = service.native_secure_port();
+        if self.connection.form.is_none() {
+            return;
+        }
+        let node = NodeForm {
+            name: Self::input(name, "Node 1", false, cx),
+            endpoint: Self::input(url, "https://host:8443", false, cx),
+            native_port: Self::input(
+                port.map(|port| port.to_string()).unwrap_or_default(),
+                "tcp auto",
+                false,
+                cx,
+            ),
+        };
+        if let Some(form) = self.connection.form.as_mut() {
+            form.nodes.push(node);
+        }
+        self.connection.cloud.open = false;
+        cx.notify();
+    }
+
     /// Rotate the linked service's database password through the
     /// control plane and drop the result straight into the form's
     /// (masked) password field: saving stores it in the Keychain and
@@ -922,6 +955,20 @@ impl Workspace {
     pub(crate) fn cloud_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let orgs = self.preferences.cloud_orgs.clone();
         let loading = self.connection.cloud.loading;
+        // With a form in progress, picking a service appends it as a
+        // node of that form instead of starting a new connection.
+        let form_open = self.connection.form.is_some();
+        let form_endpoints: Vec<String> = self
+            .connection
+            .form
+            .as_ref()
+            .map(|form| {
+                form.nodes
+                    .iter()
+                    .map(|node| node.endpoint.read(cx).text())
+                    .collect()
+            })
+            .unwrap_or_default();
         let service_rows = self
             .connection
             .cloud
@@ -929,12 +976,19 @@ impl Workspace {
             .iter()
             .enumerate()
             .map(|(index, (org_id, service))| {
-                let added = self.connection.connections.iter().any(|connection| {
-                    connection
-                        .cloud
-                        .as_ref()
-                        .is_some_and(|cloud| cloud.service_id == service.id)
-                });
+                let added = if form_open {
+                    // The same service cannot land in the form twice.
+                    service
+                        .https_url()
+                        .is_some_and(|url| form_endpoints.contains(&url))
+                } else {
+                    self.connection.connections.iter().any(|connection| {
+                        connection
+                            .cloud
+                            .as_ref()
+                            .is_some_and(|cloud| cloud.service_id == service.id)
+                    })
+                };
                 let state_color = if service.is_running() {
                     theme::success()
                 } else if service.is_waking() {
@@ -1060,13 +1114,19 @@ impl Workspace {
                             .border_color(theme::border())
                             .text_xs()
                             .text_color(theme::text())
-                            .child("Add connection")
+                            .child(if form_open {
+                                "Add node"
+                            } else {
+                                "Add connection"
+                            })
                             .hover(|button| button.bg(theme::hover()).cursor_pointer())
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| {
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if this.connection.form.is_some() {
+                                    this.cloud_add_node_to_form(index, cx)
+                                } else {
                                     this.cloud_add_service(index, cx)
-                                }),
-                            )
+                                }
+                            }))
                             .into_any_element()
                     } else {
                         // Adding wants the probe (and the password
@@ -1081,7 +1141,11 @@ impl Workspace {
                             .border_color(theme::border())
                             .text_xs()
                             .text_color(theme::text_dim())
-                            .child("Add connection")
+                            .child(if form_open {
+                                "Add node"
+                            } else {
+                                "Add connection"
+                            })
                             .tooltip(|window, cx| {
                                 gpui_component::tooltip::Tooltip::new(
                                     "Start the service first; connections are added to a \

@@ -275,15 +275,18 @@ impl Render for Workspace {
                             .when(self.show_preferences, |main| {
                                 main.child(self.preferences_panel(cx))
                             })
+                            // The Cloud panel wins over an open form:
+                            // a form's Add node leads there and comes
+                            // back with the form intact.
                             .when(
-                                !self.show_preferences && self.connection.form.is_some(),
-                                |main| main.child(self.form_panel(cx)),
+                                !self.show_preferences && self.connection.cloud.open,
+                                |main| main.child(self.cloud_panel(cx)),
                             )
                             .when(
                                 !self.show_preferences
-                                    && self.connection.form.is_none()
-                                    && self.connection.cloud.open,
-                                |main| main.child(self.cloud_panel(cx)),
+                                    && !self.connection.cloud.open
+                                    && self.connection.form.is_some(),
+                                |main| main.child(self.form_panel(cx)),
                             )
                             .when(
                                 !self.show_preferences

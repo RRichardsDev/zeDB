@@ -132,12 +132,11 @@ impl Workspace {
                                                 .child("CLUSTER NODES"),
                                         )
                                         .child(if cloud_locked {
-                                            // A Cloud service's topology
-                                            // comes from the control
-                                            // plane: adding a node here
-                                            // means adding another
-                                            // service, so go back to the
-                                            // Cloud panel.
+                                            // Cloud nodes come from the
+                                            // control plane: pick the
+                                            // service in the Cloud panel
+                                            // and it lands here as a
+                                            // node, form intact.
                                             div()
                                                 .id("add-endpoint")
                                                 .px_2()
@@ -151,13 +150,12 @@ impl Workspace {
                                                 })
                                                 .tooltip(|window, cx| {
                                                     gpui_component::tooltip::Tooltip::new(
-                                                        "Cloud services manage their own nodes; \
-                                                         add another service from the Cloud panel",
+                                                        "Pick another Cloud service to add as a \
+                                                         node of this connection",
                                                     )
                                                     .build(window, cx)
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.cancel_form(cx);
                                                     this.cloud_open(cx);
                                                 }))
                                                 .into_any_element()
