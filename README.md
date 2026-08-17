@@ -18,11 +18,36 @@ per-connection schema cache that persists across launches. Stream
 results into a virtualized grid; sort and filter by clicking the
 headers, and zeDB rewrites the actual SQL (a real `ORDER BY`, a real
 `WHERE`) and re-runs just that statement, so what you see is always what
-the server did. Tabs and history are per connection, and any table can
-be tailed live (`tail -f` for ClickHouse): instant streamed updates on
-servers that support it, graceful polling everywhere else.
+the server did. EXPLAIN any statement against the live server, and keep
+a searchable per-connection history with saved queries. Tabs are
+connection-scoped: switch clusters and your workspace follows.
 
 ![Filter popovers offer checkboxes when a column has few distinct values](docs/screenshots/filtering.png)
+
+**Live tails, instantly.**
+Right-click any table and tail it, `tail -f` for ClickHouse. Rows
+stream in newest-first with a live strip, pause/resume, and a retained
+cap you pick up front. On servers with streaming support one click
+upgrades the tail to instant push updates (`STREAM`), millisecond
+latency instead of polling, with graceful fallback everywhere else.
+
+![A live tail with instant STREAM updates](docs/screenshots/tail.png)
+
+**Advice measured on your data, not folklore.**
+The table inspector analyses per-column cardinality and compression and
+suggests better codecs and types, with the estimated savings measured
+on a sample of your actual data: left-click applies the change,
+right-click drafts the `ALTER` into the editor instead.
+
+![Per-column analysis: measured savings, one click to apply](docs/screenshots/columns-advisor.png)
+
+The Workload tab reads your real `system.query_log`, EXPLAINs the
+heaviest query shapes, and tells you run-weighted truths: whether the
+primary key actually prunes, which skip indexes earn their keep, which
+projections are never hit, and what to change, with the scope honestly
+labelled.
+
+![Workload-measured findings: does the primary key actually prune?](docs/screenshots/workload.png)
 
 **A migration engine that understands fleets.**
 Migrations are plain SQL files in a plain git repository. zeDB replays
@@ -55,6 +80,13 @@ SharedMergeTree-aware, so what they report on Cloud is true, not a
 self-hosted view wearing a trench coat.
 
 ![The connection page doubles as a Cloud dashboard: cost, backups, metrics](docs/screenshots/cloud-dashboard.png)
+
+**Eyes on the cluster.**
+The ops view is a live read of what the server is doing: running
+queries (with KILL behind explicit write consent), connections, merges
+and mutations, replication health, Kafka consumers and async inserts,
+disks, and the largest tables, node-scoped or fanned out across the
+cluster.
 
 **Your AI agents, inside the app.**
 Open the agent pane (`cmd-i`) and run Claude Code, Codex, or any
