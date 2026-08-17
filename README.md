@@ -24,6 +24,12 @@ connection-scoped: switch clusters and your workspace follows.
 
 ![Filter popovers offer checkboxes when a column has few distinct values](docs/screenshots/filtering.png)
 
+Ask for the plan and zeDB renders EXPLAIN as the server's own tree,
+with the index-pruning verdict called out: which parts and granules
+the primary key actually kept.
+
+![The query plan: reads show index pruning](docs/screenshots/query-plan.png)
+
 **Live tails, instantly.**
 Right-click any table and tail it, `tail -f` for ClickHouse. Rows
 stream in newest-first with a live strip, pause/resume, and a retained

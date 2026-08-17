@@ -19,7 +19,3 @@ file is the queue, not the history.)
   rejects with ILLEGAL_AGGREGATION; it belongs in HAVING when the
   column is an aggregate alias (seen 2026-08-17 filtering the `hits`
   column of a GROUP BY query).
-- View -> Command Palette... appears not to open the palette when the
-  menu item is triggered (observed via synthetic accessibility
-  clicks, 2026-08-17; needs a hands-on check with a real mouse click
-  and a keyboard shortcut audit: the palette has no keybinding).
