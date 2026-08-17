@@ -283,10 +283,12 @@ pub struct CloudBackup {
     pub status: String,
     #[serde(default, rename = "startedAt")]
     pub started_at: String,
+    // Numeric fields arrive as floats (durationInSeconds: 42.717),
+    // so nothing here assumes integers.
     #[serde(default, rename = "sizeInBytes")]
-    pub size_bytes: Option<u64>,
+    pub size_bytes: Option<f64>,
     #[serde(default, rename = "durationInSeconds")]
-    pub duration_secs: Option<u64>,
+    pub duration_secs: Option<f64>,
     #[serde(default, rename = "type")]
     pub kind: Option<String>,
 }

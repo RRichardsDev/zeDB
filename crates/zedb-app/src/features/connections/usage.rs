@@ -562,10 +562,10 @@ impl Workspace {
                         .to_string();
                     let mut facts = vec![day, backup.status.clone()];
                     if let Some(size) = backup.size_bytes {
-                        facts.push(Self::format_bytes(size));
+                        facts.push(Self::format_bytes(size as u64));
                     }
                     if let Some(duration) = backup.duration_secs {
-                        facts.push(format!("{duration}s"));
+                        facts.push(format!("{duration:.0}s"));
                     }
                     if let Some(kind) = &backup.kind {
                         facts.push(kind.clone());
