@@ -295,7 +295,11 @@ async fn measure_workload(
     cluster: Option<String>,
 ) -> Result<WorkloadReport, String> {
     let client = ChClient::new(config);
-    let shapes_result = client
+    // The fan-out can fail on clusters whose inter-node auth differs
+    // from ours (docker dev clusters especially); one node's log with
+    // the honest "this node only" label beats an error.
+    let mut cluster = cluster;
+    let shapes_result = match client
         .query(&workload::query_shapes_sql(
             database,
             object,
@@ -304,7 +308,23 @@ async fn measure_workload(
             cluster.as_deref(),
         ))
         .await
-        .map_err(|error| error.to_string())?;
+    {
+        Ok(result) => result,
+        Err(error) if cluster.is_some() => {
+            cluster = None;
+            client
+                .query(&workload::query_shapes_sql(
+                    database,
+                    object,
+                    WINDOW_DAYS,
+                    SHAPE_LIMIT,
+                    None,
+                ))
+                .await
+                .map_err(|_| error.to_string())?
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     let shapes = workload::parse_query_shapes(&shapes_result);
     let total_runs = shapes.iter().map(|shape| shape.runs).sum();
 
