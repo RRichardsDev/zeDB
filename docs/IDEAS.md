@@ -29,6 +29,12 @@ context (the old 10.5c/d core) were promoted to `docs/PHASE-13.md`
 
 ## Exploration
 
+- UI scaling with cmd +/- (check what GPUI offers out of the box).
+  Was the Phase 11 stub, demoted 2026-08-19; the number was retired
+  unused.
+- Decide whether native TCP should become the default transport (the
+  Phase 10.1 transport work has the facts; this is a judgment call,
+  not new infrastructure). Also from the Phase 11 stub.
 - Inline charting of result sets.
 - EXPLAIN visualization as pipeline / plan graphs (the textual
   EXPLAIN views shipped; the graphs did not).

@@ -4,7 +4,7 @@ Raw inbox. Items graduate into a phase doc and gain a reference here;
 they leave the list when shipped.
 
 - ai chat drag doesnt  play nice with highlighting and scrolling
-  -> PHASE-10.6.md
+  -> shipped 2026-08-16 (phase doc retired)
 - does ch cloud provide any oauth login which we could use from inside the app. It still feels super janky to set one up. And feel like its slapped onto the other way of setting up the clusters. This should feel more integrated.
   -> shipped in v0.1.31 (phase doc retired)
 - Git account should be per repo on setup to allow for free switching. Allow multi account logins
