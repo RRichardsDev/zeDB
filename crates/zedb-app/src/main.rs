@@ -92,8 +92,8 @@ use zedb_core::{
 
 use components::text_input::{self, TextInput};
 use features::connections::{
-    differentiating_cluster, ConnectedCluster, ConnectionDraft, ConnectionForm, ConnectionState,
-    DriverSettingForm, EndpointHealth, NodeForm, ProvisionStage,
+    differentiating_cluster, format_chc, ConnectedCluster, ConnectionDraft, ConnectionForm,
+    ConnectionState, DriverSettingForm, EndpointHealth, NodeForm, ProvisionStage, UsageTab,
 };
 use features::query::{
     collect_param_declarations, collect_variable_declarations, max_rows_from_limit,

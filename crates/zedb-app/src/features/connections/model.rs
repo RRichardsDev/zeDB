@@ -18,6 +18,8 @@ pub(crate) struct ConnectionState {
     pub(crate) cloud: super::cloud::CloudLinkState,
     /// The Cloud dashboard on the connection summary page.
     pub(crate) usage: super::CloudUsageState,
+    /// The status bar's Cloud cost figure for the connected connection.
+    pub(crate) cost_status: super::CostStatusState,
 }
 
 impl ConnectionState {
@@ -33,6 +35,7 @@ impl ConnectionState {
             pending_delete: None,
             cloud: super::cloud::CloudLinkState::new(),
             usage: super::CloudUsageState::default(),
+            cost_status: super::CostStatusState::default(),
         }
     }
 }

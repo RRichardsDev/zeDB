@@ -348,7 +348,7 @@ impl Render for Workspace {
                         row.child(self.agent_panel(window, cx))
                     }),
             )
-            .child(self.status_bar())
+            .child(self.status_bar(cx))
             .when(self.show_about, |root| root.child(self.about_panel(cx)))
     }
 }

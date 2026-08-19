@@ -719,7 +719,73 @@ impl Workspace {
             })
     }
 
-    pub(crate) fn status_bar(&self) -> impl IntoElement {
+    /// The status bar's Cloud cost chip: today's credits for the
+    /// connected connection's warehouse, quiet unless the last complete
+    /// day burned clearly above the month's norm. Absent without data;
+    /// a click opens the connection page's Cost tab.
+    fn cost_status_chip(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let connected_name = self.connection.connected.as_ref()?.name.clone();
+        let cost = &self.connection.cost_status;
+        if cost.connection.as_deref() != Some(connected_name.as_str()) || cost.fetched_at.is_none()
+        {
+            return None;
+        }
+        let high_burn = cost.high_burn();
+        let label = if high_burn {
+            format!(
+                "cloud {} CHC today \u{b7} high burn",
+                format_chc(cost.today)
+            )
+        } else {
+            format!("cloud {} CHC today", format_chc(cost.today))
+        };
+        let tooltip = format!(
+            "ClickHouse Cloud credits, this connection's warehouse.\n\
+             Today so far: {} CHC \u{b7} yesterday: {} CHC \u{b7} median of the \
+             last {} complete days: {} CHC/day.\n\
+             Warns when yesterday exceeds 1.5x the median (and at least 1 CHC). \
+             Click for the Cost tab.",
+            format_chc(cost.today),
+            format_chc(cost.yesterday),
+            cost.days,
+            format_chc(cost.median),
+        );
+
+        Some(
+            div()
+                .id("cost-status-chip")
+                .flex_none()
+                .text_color(if high_burn {
+                    theme::warning()
+                } else {
+                    theme::text_dim()
+                })
+                .child(label)
+                .hover(|chip| chip.text_color(theme::text()).cursor_pointer())
+                .tooltip(move |window, cx| {
+                    gpui_component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(index) = this
+                        .connection
+                        .connections
+                        .iter()
+                        .position(|connection| connection.name == connected_name)
+                    {
+                        this.connection.selected = Some(index);
+                    }
+                    this.show_ops = false;
+                    this.show_query_editor = false;
+                    this.show_fleet = false;
+                    this.connection.usage.tab = Some(UsageTab::Cost);
+                    this.cloud_usage_refresh(false, cx);
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
+    }
+
+    pub(crate) fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let status = self
             .notice
             .clone()
@@ -793,7 +859,14 @@ impl Workspace {
                             })
                     }),
             )
-            .child(concat!("zedb ", env!("CARGO_PKG_VERSION")))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .children(self.cost_status_chip(cx))
+                    .child(concat!("zedb ", env!("CARGO_PKG_VERSION"))),
+            )
     }
 
     /// Vim state for the bottom bar: mode, command line, and recording

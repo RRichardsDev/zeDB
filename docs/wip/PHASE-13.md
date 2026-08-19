@@ -43,6 +43,15 @@ connect, instead of timing out with an explanation.
 
 ## Slice 2: cost in the status bar, burn-rate aware
 
+Status: BUILT (2026-08-19, overnight). Threshold: warn when the last
+complete day exceeds 1.5x the median of the prior complete days, at
+least 1 CHC, and only with >= 7 days of history (verified against the
+live org: a 3-day-old warehouse stays quiet). Warehouse-scoped
+exactly like the dashboard's Cost tab; fetched on connect and
+refreshed hourly on refocus; absent without data; click opens the
+Cost tab. Figures verified against the live cost API; visuals
+verified by screenshot (quiet, high-burn, tooltip).
+
 The dashboard already fetches the warehouse-scoped 30-day cost. Put a
 quiet daily figure in the status bar for Cloud connections, with a
 warning accent only when the recent burn rate is clearly above the

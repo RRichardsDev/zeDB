@@ -9,6 +9,13 @@ GitHub release notes.
 
 ## Unreleased
 
+- The status bar shows today's ClickHouse Cloud credits for the
+  connected connection's warehouse ("cloud 5.35 CHC today"), quiet
+  and muted; it turns amber with "high burn" only when yesterday
+  exceeded 1.5x the 30-day median (at least 1 CHC, and only with a
+  week of history so young warehouses stay quiet). The tooltip shows
+  the figures and the rule; clicking opens the Cost tab. Absent, not
+  zero, without data.
 - The sidebar's Cloud idle marker judges the linked service's whole
   warehouse, not just the originally linked service: a connection
   whose primary is running no longer says "idle" because a stopped

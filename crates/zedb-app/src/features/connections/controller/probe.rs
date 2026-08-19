@@ -173,6 +173,8 @@ impl Workspace {
                     this.fleet_refresh(cx);
                 }
                 this.start_health_poll(cx);
+                // The status bar's Cloud cost follows the connection.
+                this.cost_status_refresh(true, cx);
                 this.notice = Some(format!(
                     "Connected to {name} via {} ({reachable}/{total} nodes reachable)",
                     active_node.name
@@ -194,6 +196,8 @@ impl Workspace {
         // Cloud service states move while the app is unfocused (idling,
         // console changes); the sidebar markers follow on refocus.
         self.cloud_refresh(cx);
+        // The status bar's cost figure ages an hour at most.
+        self.cost_status_refresh(false, cx);
         // Update check: same quiet path as the periodic loop.
         let update_handle = rt::tokio().spawn(updates::check());
         cx.spawn(async move |this, cx| {
