@@ -9,6 +9,12 @@ GitHub release notes.
 
 ## Unreleased
 
+- The connection page's Cloud dashboard manages wake state: idle or
+  stopped services show a Wake button (when the org's API key is
+  linked; an honest disabled button otherwise), a "Wake all" appears
+  when several services are down, the card shows "waking" through the
+  transition, and the dashboard keeps refreshing until the control
+  plane reports the service running.
 - Hovering a `${db}` or `{db:Identifier}` placeholder shows the value
   in effect at that position, the line that declared it, and what the
   value names in the schema ("Database with 14 objects"); an unset

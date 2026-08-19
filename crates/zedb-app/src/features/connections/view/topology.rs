@@ -76,7 +76,7 @@ impl Workspace {
                         .child(div().flex().flex_col().gap_2().children(nodes))
                         .children(self.topology_section(connection))
                         .children(self.cloud_usage_header(connection, cx))
-                        .children(self.cloud_usage_body(connection))
+                        .children(self.cloud_usage_body(connection, cx))
                 })
                 .when(selected.is_none(), |panel| {
                     panel.child("Add or select a cluster connection to begin.")

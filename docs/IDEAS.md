@@ -8,19 +8,17 @@ of what is NOT built.
 ## ClickHouse Cloud (Phase 10.5 remainder)
 
 The front door (10.5a), the truthfulness fixes (10.5b), and the
-connection-page dashboard shipped in v0.1.31. Still open, per
-`docs/CLOUD-STRATEGY.md`:
+connection-page dashboard shipped in v0.1.31. Wake-before-connect,
+status-bar cost with burn-rate warnings, and the read-only agent
+context (the old 10.5c/d core) were promoted to `docs/PHASE-13.md`
+(2026-08-19). Still parked here, per `docs/CLOUD-STRATEGY.md`:
 
-- Rest of 10.5c, the control-plane surfaces nobody else has: cost in
-  the status bar with burn-rate warnings; pre-flight estimates
-  phrased in wake/compute terms; the audit-log timeline beside ops;
-  wake-before-connect built into connecting itself; backup-restore
-  wired into fleet as migration rehearsal ("rehearse this migration
-  on a restored copy"); ClickPipes surfaced from the API, not just
+- Pre-flight estimates phrased in wake/compute terms; the audit-log
+  timeline beside ops; ClickPipes surfaced from the API, not just
   named.
-- 10.5d: Cloud control-plane context (state, tier, cost) exposed
-  read-only to the in-app agent and MCP, with the byte caps
-  re-reasoned as billing ceilings.
+- Backup-restore wired into fleet as migration rehearsal ("rehearse
+  this migration on a restored copy"); waits with migrations on the
+  analytics-clickhouse-ddl battle-test.
 - Query-API Bearer connections: read-only SQL as the signed-in user,
   no database credentials at all, degrading honestly (no native TCP,
   no writes, no session settings).

@@ -49,6 +49,10 @@ pub(crate) struct CloudUsageState {
     pub(crate) backups: Vec<(String, Vec<CloudBackup>)>,
     pub(crate) metrics: Vec<(String, Vec<(String, f64)>)>,
     pub(crate) generation: u64,
+    /// Services asked to wake, with remaining refresh polls: the
+    /// control plane can report `idle` for a while after accepting
+    /// the awake, so the watch outlives the state string.
+    pub(crate) waking: std::collections::HashMap<String, u8>,
 }
 
 impl CloudUsageState {
@@ -160,6 +164,27 @@ impl Workspace {
                         this.connection.usage.error =
                             (!errors.is_empty()).then(|| errors.join(" \u{b7} "));
                         this.connection.usage.fetched_for = Some(name);
+                        // Waking services settle on their own schedule:
+                        // drop the watches that landed (or gave up) and
+                        // keep polling while any remain.
+                        let running: Vec<String> = this
+                            .connection
+                            .usage
+                            .services
+                            .iter()
+                            .filter(|service| service.is_running())
+                            .map(|service| service.id.clone())
+                            .collect();
+                        this.connection.usage.waking.retain(|id, polls| {
+                            if running.contains(id) || *polls == 0 {
+                                return false;
+                            }
+                            *polls -= 1;
+                            true
+                        });
+                        if !this.connection.usage.waking.is_empty() {
+                            this.cloud_usage_schedule_wake_poll(cx);
+                        }
                     }
                     Err(error) => {
                         this.connection.usage.error = Some(error);
@@ -167,6 +192,103 @@ impl Workspace {
                     }
                 }
                 cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Ask the control plane to wake a dashboard service, then keep
+    /// refreshing until its state settles. Waking is a management
+    /// write: it needs the org's API key from the Keychain.
+    pub(crate) fn cloud_usage_wake(&mut self, service_id: String, cx: &mut Context<Self>) {
+        let Some(cloud) = self
+            .connection
+            .selected
+            .and_then(|index| self.connection.connections.get(index))
+            .and_then(|connection| connection.cloud.clone())
+        else {
+            return;
+        };
+        // The state decides the command (stopped vs idle); capture it
+        // before the watch shows the row as waking.
+        let previous_state = self
+            .connection
+            .usage
+            .services
+            .iter()
+            .find(|service| service.id == service_id)
+            .map(|service| service.state.clone())
+            .unwrap_or_default();
+        // 24 polls at the 15s cadence is about six minutes of wake time.
+        self.connection.usage.waking.insert(service_id.clone(), 24);
+        cx.notify();
+        let org_id = cloud.org_id.clone();
+        let wake_id = service_id.clone();
+        let task = rt::tokio().spawn(async move {
+            let stored = zedb_core::secrets::get_plain(&clickhouse_cloud::keychain_key(&org_id))
+                .ok()
+                .flatten();
+            let Some((key_id, key_secret)) = stored
+                .as_deref()
+                .and_then(clickhouse_cloud::split_credentials)
+            else {
+                return Err("No API key in the Keychain for this organization".to_string());
+            };
+            clickhouse_cloud::start_service(
+                &key_id,
+                &key_secret,
+                &org_id,
+                &wake_id,
+                &previous_state,
+            )
+            .await
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await.unwrap_or_else(|_| Err("Wake stopped".into()));
+            this.update(cx, |this, cx| match outcome {
+                Ok(()) => {
+                    this.flash_notice("Waking the service; it can take a few minutes", cx);
+                    this.cloud_usage_refresh(true, cx);
+                }
+                Err(error) => {
+                    this.connection.usage.waking.remove(&service_id);
+                    this.flash_warning(format!("Could not wake: {error}"), cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Wake every asleep service in the dashboard: one control-plane
+    /// request per service, all sharing the same refresh watch.
+    pub(crate) fn cloud_usage_wake_all(&mut self, cx: &mut Context<Self>) {
+        let asleep: Vec<String> = self
+            .connection
+            .usage
+            .services
+            .iter()
+            .filter(|service| {
+                service.is_asleep() && !self.connection.usage.waking.contains_key(&service.id)
+            })
+            .map(|service| service.id.clone())
+            .collect();
+        for service_id in asleep {
+            self.cloud_usage_wake(service_id, cx);
+        }
+    }
+
+    /// One delayed forced refresh while any wake watch is live; the
+    /// refresh completion decides whether to schedule the next one.
+    fn cloud_usage_schedule_wake_poll(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            gpui::Timer::after(std::time::Duration::from_secs(15)).await;
+            this.update(cx, |this, cx| {
+                if !this.connection.usage.waking.is_empty() {
+                    this.cloud_usage_refresh(true, cx);
+                }
             })
             .ok();
         })
@@ -181,9 +303,18 @@ impl Workspace {
         connection: &ConnectionConfig,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
-        connection.cloud.as_ref()?;
+        let cloud = connection.cloud.as_ref()?;
+        let keyed = self
+            .connection
+            .cloud
+            .org_has_key(&self.preferences, &cloud.org_id);
         let usage = &self.connection.usage;
         let active = usage.tab();
+        let asleep = usage
+            .services
+            .iter()
+            .filter(|service| service.is_asleep() && !usage.waking.contains_key(&service.id))
+            .count();
 
         let tabs = div()
             .flex()
@@ -211,6 +342,25 @@ impl Workspace {
                     }))
             }))
             .child(div().flex_1())
+            // With several services down, one click beats one per card;
+            // lives in the toolbar so the cards stay clean.
+            .when(asleep >= 2 && keyed, |row| {
+                row.child(
+                    div()
+                        .id("usage-wake-all")
+                        .px_2()
+                        .py_0p5()
+                        .mr_1()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(theme::accent())
+                        .text_xs()
+                        .text_color(theme::accent())
+                        .child(format!("Wake all ({asleep})"))
+                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                        .on_click(cx.listener(|this, _, _, cx| this.cloud_usage_wake_all(cx))),
+                )
+            })
             .child(
                 div()
                     .id("cloud-usage-refresh")
@@ -273,8 +423,14 @@ impl Workspace {
     pub(crate) fn cloud_usage_body(
         &self,
         connection: &ConnectionConfig,
+        cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
-        connection.cloud.as_ref()?;
+        let cloud = connection.cloud.as_ref()?;
+        // Waking is a management write, which only an API key can do.
+        let keyed = self
+            .connection
+            .cloud
+            .org_has_key(&self.preferences, &cloud.org_id);
         let usage = &self.connection.usage;
         let body = if usage.loading && usage.services.is_empty() {
             div()
@@ -284,7 +440,7 @@ impl Workspace {
                 .into_any_element()
         } else {
             match usage.tab() {
-                UsageTab::Overview => self.cloud_usage_overview(),
+                UsageTab::Overview => self.cloud_usage_overview(keyed, cx),
                 UsageTab::Cost => self.cloud_usage_cost(),
                 UsageTab::Backups => self.cloud_usage_backups(),
                 UsageTab::Metrics => self.cloud_usage_metrics(),
@@ -301,7 +457,7 @@ impl Workspace {
         )
     }
 
-    fn cloud_usage_overview(&self) -> gpui::AnyElement {
+    fn cloud_usage_overview(&self, keyed: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
         let usage = &self.connection.usage;
         if usage.services.is_empty() {
             return div()
@@ -314,14 +470,24 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_2()
-            .children(usage.services.iter().map(|service| {
+            .children(usage.services.iter().enumerate().map(|(index, service)| {
+                // A watched service shows as waking even while the
+                // plane still reports idle; the state settles later.
+                let watched = usage.waking.contains_key(&service.id);
+                let waking = service.is_waking() || (watched && !service.is_running());
                 let state_color = if service.is_running() {
                     theme::success()
-                } else if service.is_waking() {
+                } else if waking {
                     theme::warning()
                 } else {
                     theme::text_dim()
                 };
+                let state_label = if waking && !service.is_waking() {
+                    "waking".to_string()
+                } else {
+                    service.state.clone()
+                };
+                let wakeable = service.is_asleep() && !watched;
                 let mut facts: Vec<String> = Vec::new();
                 if let Some(version) = &service.clickhouse_version {
                     facts.push(format!("ClickHouse {version}"));
@@ -379,11 +545,57 @@ impl Workspace {
                                 )
                             })
                             .child(div().flex_1())
+                            .when(wakeable && keyed, |row| {
+                                let service_id = service.id.clone();
+                                row.child(
+                                    div()
+                                        .id(("usage-wake", index))
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded(px(3.))
+                                        .border_1()
+                                        .border_color(theme::accent())
+                                        .text_xs()
+                                        .text_color(theme::accent())
+                                        .child("Wake")
+                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.cloud_usage_wake(service_id.clone(), cx)
+                                        })),
+                                )
+                            })
+                            .when(wakeable && !keyed, |row| {
+                                // Sign-in tokens are read-only on the
+                                // management API: an honest disabled
+                                // button beats a failing one.
+                                row.child(
+                                    div()
+                                        .id(("usage-wake-disabled", index))
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded(px(3.))
+                                        .border_1()
+                                        .border_color(theme::border())
+                                        .text_xs()
+                                        .text_color(theme::text_dim())
+                                        .child("Wake")
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(
+                                                "Link an API key to wake services",
+                                            )
+                                            .build(window, cx)
+                                        }),
+                                )
+                            })
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::text_dim())
-                                    .child(service.state.clone()),
+                                    .text_color(if waking {
+                                        theme::warning()
+                                    } else {
+                                        theme::text_dim()
+                                    })
+                                    .child(state_label),
                             ),
                     )
                     .child(
