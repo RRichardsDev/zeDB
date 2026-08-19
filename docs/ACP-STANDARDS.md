@@ -93,7 +93,7 @@ widening of the older "elevated tokens are never stored" stance:
 the token is Keychain-held per host, revocable at the provider, and
 never touches argv, env values, or `.git/config`. SSH URLs the user
 types stay on their own git and keys. Planned evolution
-(docs/IRL-ISSUES.md): multi-account sign-in with the account bound
+(docs/wip/IRL-ISSUES.md): multi-account sign-in with the account bound
 per cluster connection.
 
 ## Adding a tool: the checklist

@@ -1,7 +1,7 @@
 # Phase 13: Cloud control plane, continued
 
 Wake-aware connecting, cost awareness, and agent context: the part of
-the 10.5c/d remainder (`docs/IDEAS.md`, `docs/CLOUD-STRATEGY.md`)
+the 10.5c/d remainder (`docs/wip/IDEAS.md`, `docs/CLOUD-STRATEGY.md`)
 worth doing now, under its own number since 10.5 shipped two releases
 ago.
 

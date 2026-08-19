@@ -28,6 +28,37 @@ applied where.
 Open source, for the ClickHouse community, built in the open. Opinionated
 about migration layout and workflow; those opinions are the product.
 
+## Differentiators
+
+The thesis (proven across Phases 8-13): model what ClickHouse actually
+is (columnar, MergeTree, distributed, stream-fed, increasingly Cloud)
+instead of SQL-in-general. Generic tools cannot follow; each area below
+was chosen by reward-per-infrastructure: the next layer on machinery
+that already exists, never a green field.
+
+- **Workload-measured advice.** Every advisor anywhere reasons from a
+  single query; zeDB grounds index/projection advice in the user's
+  actual `query_log` traffic ("this bloom_filter never prunes
+  anything"). Shipped as the table inspector's Workload tab; the
+  cross-table surface is parked in the ideas list.
+- **Replication and Keeper health.** The distributed twin of the ops
+  view: replica delay, queue, readonly, session state, at a glance.
+  Generic tools cannot even see replication. Shipped.
+- **Ingestion visibility.** "Where did my rows go": Kafka consumers,
+  MV insert failures, async insert queue. Shipped as the ops
+  Ingestion tab; failures drawn onto the Dependencies DAG is parked.
+- **Pre-flight cost.** EXPLAIN-estimate before running, moving advice
+  from post-mortem to the moment behavior can change. Shipped.
+- **ClickHouse Cloud as a first-class home.** A different axis:
+  adoption rather than capability; every differentiator is worthless
+  to a user who bounced off setup. Sign-in, service linking, state
+  awareness, wake management, and the control-plane dashboard
+  shipped; the remainder is the active phase.
+- **Migrations (the biggest prize) stay deliberately held.** Their
+  requirements come from the analytics-clickhouse-ddl production
+  battle-test, not design-ahead; the replay engine's opinions are
+  already fixed in this spec.
+
 ## Design principles
 
 1. **Replay, don't interpret.** Semantic questions about SQL are answered by

@@ -13,7 +13,7 @@ them: the cluster instance.
   instance uses; the credential broker resolves per cluster, not
   globally.
 - The existing broker (GIT_ASKPASS to own binary, per-host Keychain
-  tokens) becomes per-account keyed; `docs/IRL-ISSUES.md` and the git
+  tokens) becomes per-account keyed; `docs/wip/IRL-ISSUES.md` and the git
   broker devlog entries hold the constraints.
 
 ## Why deferred

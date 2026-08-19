@@ -78,8 +78,14 @@ This project is indexed by GitNexus as **zeDB** (3601 symbols, 10669 relationshi
 
 - `docs/FORMAT.md` specifies the format-1 migration repo (zedb.toml,
   migrations/YYYY/MM/NNNNN, rollback classes, current-state/); the
-  vision and differentiator ranking live in `docs/PHASE-12.md` and
-  the phase docs beside it.
+  vision and differentiator ranking live in `docs/SPEC.md`.
+
+## Working docs
+
+- `docs/wip/` holds the working state: active and deferred phase
+  docs, IDEAS.md / MAYBE-IDEAS.md parking lots, IRL-ISSUES.md (the
+  raw inbox), and in-flight refactor notes. Top-level `docs/` is the
+  durable contracts only. Retired phase docs are deleted, not moved.
 
 ## Changelog
 
