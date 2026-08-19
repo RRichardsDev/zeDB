@@ -1,7 +1,7 @@
 # Phase 13: Cloud control plane, continued
 
 Wake-aware connecting, cost awareness, and agent context: the part of
-the 10.5c/d remainder (`docs/wip/IDEAS.md`, `docs/CLOUD-STRATEGY.md`)
+the 10.5c/d remainder (`docs/wip/IDEAS.md`, `docs/contracts/CLOUD-STRATEGY.md`)
 worth doing now, under its own number since 10.5 shipped two releases
 ago.
 
@@ -40,13 +40,13 @@ connect, instead of timing out with an explanation.
 The dashboard already fetches the warehouse-scoped 30-day cost. Put a
 quiet daily figure in the status bar for Cloud connections, with a
 warning accent only when the recent burn rate is clearly above the
-month's norm. Muted semantic colors per `docs/UI-DESIGN.md`; no
+month's norm. Muted semantic colors per `docs/contracts/UI-DESIGN.md`; no
 persistent alarm badges.
 
 ## Slice 3 (10.5d): control-plane context for the agent
 
 Expose state, tier, and cost read-only to the in-app agent and MCP,
-per the `docs/ACP-STANDARDS.md` checklist (read-only tool, no server
+per the `docs/contracts/ACP-STANDARDS.md` checklist (read-only tool, no server
 writes, no wake). Re-reason the byte caps as billing ceilings using
 slice 2's burn-rate numbers.
 

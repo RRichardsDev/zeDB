@@ -51,7 +51,7 @@ This project is indexed by GitNexus as **zeDB** (3601 symbols, 10669 relationshi
 
 ## Product principles
 
-- `docs/PRODUCT-PRINCIPLES.md` states the tool's spine: hands-on
+- `docs/contracts/PRODUCT-PRINCIPLES.md` states the tool's spine: hands-on
   first, with the user's own agents helping natively only where they
   were already reaching for them. Not an AI upsell. Read it before
   any feature that changes the tool's character (especially anything
@@ -59,7 +59,7 @@ This project is indexed by GitNexus as **zeDB** (3601 symbols, 10669 relationshi
 
 ## Agent (ACP) integration
 
-- `docs/ACP-STANDARDS.md` is the contract for the in-app agent pane:
+- `docs/contracts/ACP-STANDARDS.md` is the contract for the in-app agent pane:
   which tools exist, why every one is read-only or propose-only, what
   the agent may never reach (server writes, the write lock), and the
   checklist for adding a tool. Read it before touching
@@ -67,18 +67,18 @@ This project is indexed by GitNexus as **zeDB** (3601 symbols, 10669 relationshi
 
 ## UI work
 
-- Before changing the user interface, read and follow `docs/UI-DESIGN.md`.
+- Before changing the user interface, read and follow `docs/contracts/UI-DESIGN.md`.
 - Reuse or extend existing UI primitives before introducing one-off controls.
 - `vendor/gpui-component` carries local patches, each marked with a
-  `zeDB patch` comment and cataloged in `docs/VENDOR-PATCHES.md`.
+  `zeDB patch` comment and cataloged in `docs/contracts/VENDOR-PATCHES.md`.
   Keep both in sync when patching the vendor; read that file before
   any vendor rebase.
 
 ## Migration repo format
 
-- `docs/FORMAT.md` specifies the format-1 migration repo (zedb.toml,
+- `docs/contracts/FORMAT.md` specifies the format-1 migration repo (zedb.toml,
   migrations/YYYY/MM/NNNNN, rollback classes, current-state/); the
-  vision and differentiator ranking live in `docs/SPEC.md`.
+  vision and differentiator ranking live in `docs/contracts/SPEC.md`.
 
 ## Working docs
 

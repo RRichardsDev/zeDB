@@ -50,7 +50,7 @@ The design bets are simple:
 | `crates/zedb-cli` | Command-line interface for the same operations |
 | `crates/zedb-app` | The GPUI desktop app (macOS) |
 
-`docs/SPEC.md` is the full design document; `docs/devlog.md` records
+`docs/contracts/SPEC.md` is the full design document; `docs/devlog.md` records
 findings and gotchas as development goes.
 
 ## Building

@@ -1,4 +1,4 @@
-//! Migration repo model: the on-disk format defined in docs/FORMAT.md.
+//! Migration repo model: the on-disk format defined in docs/contracts/FORMAT.md.
 
 mod chain;
 mod config;

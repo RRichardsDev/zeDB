@@ -4,7 +4,7 @@
 //! statements are applied to an in-process server (the pinned binary, see
 //! `pin`) and the canonical `create_table_query` is read back from
 //! `system.tables`. Ported from the ancestor tooling's `canonical.py`;
-//! see docs/FORMAT.md.
+//! see docs/contracts/FORMAT.md.
 
 use std::collections::BTreeMap;
 use std::io::Write;

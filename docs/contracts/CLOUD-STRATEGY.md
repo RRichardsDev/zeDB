@@ -113,5 +113,5 @@ on Cloud today, in rough order of impact:
   cost) exposed read-only to the in-app agent, and the byte caps
   re-reasoned as billing ceilings.
 
-Everything here stays inside docs/PRODUCT-PRINCIPLES.md: hands-on
+Everything here stays inside docs/contracts/PRODUCT-PRINCIPLES.md: hands-on
 first; the agent surfaces stay read-only or propose-only.

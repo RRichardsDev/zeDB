@@ -3,7 +3,7 @@
 The agent pane runs the user's own ACP agent (Claude Code, Codex,
 anything speaking ACP) with the user's own credentials, and zeDB
 registers its MCP server into that session. This page is the contract
-for that integration. `docs/PRODUCT-PRINCIPLES.md` states the spine
+for that integration. `docs/contracts/PRODUCT-PRINCIPLES.md` states the spine
 this derives from; when the two seem to disagree, the principles win.
 
 ## The rule of thumb

@@ -1,7 +1,7 @@
 //! zedb-ch: the ClickHouse driver.
 //!
 //! HTTP client, typed RowBinary decoding, and the clickhouse-local
-//! replay engine. See docs/SPEC.md.
+//! replay engine. See docs/contracts/SPEC.md.
 //!
 //! Results are decoded from `RowBinaryWithNamesAndTypes` into the
 //! driver-agnostic [`zedb_core::Value`] model. We deliberately do not use

@@ -249,7 +249,7 @@ Built and battle-tested in one sitting against a live Cloud service.
   press. The etiquette is diagnose, explain, then offer the choice;
   and a hard rule: the app's connection is answered only through the
   zedb tools, never a look-alike MCP server. The whole contract lives
-  in docs/ACP-STANDARDS.md.
+  in docs/contracts/ACP-STANDARDS.md.
 - With the query editor open, agent SQL arrives via the editor; DDL
   comes with a spoken offer to capture it as a migration instead.
 

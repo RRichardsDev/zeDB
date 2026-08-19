@@ -1,6 +1,6 @@
 //! zedb-core: domain model for zeDB.
 //!
-//! Everything the CLI and the GPUI app share lives here. See docs/SPEC.md.
+//! Everything the CLI and the GPUI app share lives here. See docs/contracts/SPEC.md.
 
 mod connection;
 pub mod git;

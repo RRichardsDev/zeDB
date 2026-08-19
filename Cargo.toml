@@ -29,7 +29,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 [patch.crates-io]
 # Vendored crates with local patches; the catalog with locations and
-# rationale is docs/VENDOR-PATCHES.md. gpui 0.2.2 carries the
+# rationale is docs/contracts/VENDOR-PATCHES.md. gpui 0.2.2 carries the
 # upstream deadlock fix for window_did_change_key_status (zed#51035)
 # that has no crates.io release yet.
 gpui = { path = "vendor/gpui" }

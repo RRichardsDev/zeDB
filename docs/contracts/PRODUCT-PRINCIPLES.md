@@ -2,7 +2,7 @@
 
 The load-bearing beliefs behind zeDB. Read this before adding a
 feature that changes the tool's character, not just its surface.
-docs/UI-DESIGN.md governs how things look; this governs what earns a
+docs/contracts/UI-DESIGN.md governs how things look; this governs what earns a
 place at all.
 
 ## The spine

@@ -11,7 +11,7 @@ The front door (10.5a), the truthfulness fixes (10.5b), and the
 connection-page dashboard shipped in v0.1.31. Wake-before-connect,
 status-bar cost with burn-rate warnings, and the read-only agent
 context (the old 10.5c/d core) were promoted to `docs/wip/PHASE-13.md`
-(2026-08-19). Still parked here, per `docs/CLOUD-STRATEGY.md`:
+(2026-08-19). Still parked here, per `docs/contracts/CLOUD-STRATEGY.md`:
 
 - Pre-flight estimates phrased in wake/compute terms; the audit-log
   timeline beside ops; ClickPipes surfaced from the API, not just
@@ -30,7 +30,7 @@ context (the old 10.5c/d core) were promoted to `docs/wip/PHASE-13.md`
 ## Distributed and workload layer (Phase 12 remainder)
 
 Phase 12 shipped its increments in v0.1.30 (doc harvested into
-`docs/SPEC.md` Differentiators, 2026-08-19). Deliberately not built:
+`docs/contracts/SPEC.md` Differentiators, 2026-08-19). Deliberately not built:
 
 - The cross-table workload advisor surface (the Workload tab reasons
   per table; "your whole cluster's traffic, ranked" does not exist).

@@ -39,7 +39,7 @@ doc; delete freely.
   zeDB; if they don't use those, it stays hidden and unmentioned.
   Opt-in, off by default, never nagged.
   This opt-in is also the STRUCTURAL enforcement of the product spine
-  (docs/PRODUCT-PRINCIPLES.md): the test "no agent in front of someone
+  (docs/contracts/PRODUCT-PRINCIPLES.md): the test "no agent in front of someone
   who didn't summon it" becomes a single upstream gate instead of
   each surface checking for itself. Without the opt-in flag, the agent
   pane, the error-bar Ask button, and the cmd+N/cmd+I agent shortcuts
@@ -52,7 +52,7 @@ doc; delete freely.
   are at a moment it would have helped (an error), occasionally flash
   a neutral status-bar line: "AI-off rule enforced; agents detected"
   with Enable / Ignore. This is NOT an upsell (see
-  docs/PRODUCT-PRINCIPLES.md): it never fires without a real agent
+  docs/contracts/PRODUCT-PRINCIPLES.md): it never fires without a real agent
   present, states a fact about the user's own rule rather than
   selling, and MUST be self-silencing: rare to begin with, each
   Ignore ratchets frequency down, and a few Ignores stop it for good

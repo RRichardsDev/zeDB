@@ -125,7 +125,7 @@ for updates itself and installs them in place.
 
 Everything about building, architecture, and design decisions lives in
 [DEV_README.md](DEV_README.md). The full design document is
-`docs/SPEC.md`; user-facing changes land in
+`docs/contracts/SPEC.md`; user-facing changes land in
 [CHANGELOG.md](CHANGELOG.md).
 
 ## License
