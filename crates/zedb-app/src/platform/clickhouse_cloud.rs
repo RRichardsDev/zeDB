@@ -420,6 +420,35 @@ pub async fn start_service(
     Ok(())
 }
 
+/// Ask the control plane to stop a running service. Explicitly stopped
+/// services need `start` (not `awake`) to come back; the caller's state
+/// tracking should expect `stopping` then `stopped`.
+pub async fn stop_service(
+    key_id: &str,
+    key_secret: &str,
+    org_id: &str,
+    service_id: &str,
+) -> Result<(), String> {
+    let response = client()?
+        .patch(format!(
+            "{API_BASE}/organizations/{org_id}/services/{service_id}/state"
+        ))
+        .basic_auth(key_id, Some(key_secret))
+        .header("content-type", "application/json")
+        .body(r#"{"command":"stop"}"#)
+        .send()
+        .await
+        .map_err(|error| format!("could not reach ClickHouse Cloud: {error}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "ClickHouse Cloud refused the stop: {status} {body}"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct PasswordReply {
     #[serde(default)]

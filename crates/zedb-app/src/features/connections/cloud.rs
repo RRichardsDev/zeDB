@@ -1016,6 +1016,7 @@ impl Workspace {
             return;
         }
         let name = connection.name.clone();
+        let org_id = cloud.org_id.clone();
         let task = rt::tokio().spawn(async move {
             let stored =
                 zedb_core::secrets::get_plain(&clickhouse_cloud::keychain_key(&cloud.org_id))
@@ -1062,23 +1063,188 @@ impl Workspace {
                     .cloud
                     .states
                     .insert(service.id.clone(), service.state.clone());
+                // Reaching here means the org's API key just worked (the
+                // state fetch above used it), so connecting can finish
+                // the job: wake the service and connect when it lands.
+                // The user's connect click is the explicit wake consent.
                 if service.is_asleep() {
-                    this.flash_warning(
-                        format!(
-                            "{name} is {} in ClickHouse Cloud; start it from the Cloud panel",
-                            service.state
-                        ),
+                    this.cloud_wake_then_connect(
+                        name,
+                        org_id.clone(),
+                        service.id.clone(),
+                        service.state.clone(),
+                        true,
                         cx,
                     );
                 } else if service.is_waking() {
-                    this.flash_notice(
-                        format!("{name} is waking in ClickHouse Cloud; try again shortly"),
+                    this.cloud_wake_then_connect(
+                        name,
+                        org_id.clone(),
+                        service.id.clone(),
+                        service.state.clone(),
+                        false,
                         cx,
                     );
-                    // Clear the sidebar's "waking" once it lands.
-                    this.cloud_schedule_refresh(cx);
                 }
                 cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Phase 13 slice 1, wake-before-connect: an asleep linked service
+    /// is woken (or a waking one watched) and the connect retried when
+    /// the control plane reports it running, instead of leaving the
+    /// user to start it by hand and try again. Bounded at 24 polls of
+    /// the 15s cadence, about six minutes of wake time. Starting any
+    /// other connect abandons the watch (the `connecting` name is the
+    /// guard).
+    fn cloud_wake_then_connect(
+        &mut self,
+        name: String,
+        org_id: String,
+        service_id: String,
+        state: String,
+        wake: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.connection.connecting = Some(name.clone());
+        self.notice = Some(format!(
+            "{name} is {state} in ClickHouse Cloud; waking it, then connecting \
+             (takes a few minutes)\u{2026}"
+        ));
+        self.connection
+            .cloud
+            .states
+            .insert(service_id.clone(), "starting".into());
+        // The connection page's dashboard watches the same wake, so its
+        // card flips to waking and its own polling keeps it honest.
+        self.connection.usage.waking.insert(service_id.clone(), 24);
+        self.cloud_usage_refresh(true, cx);
+        cx.notify();
+        let wake_task = wake.then(|| {
+            let org_id = org_id.clone();
+            let service_id = service_id.clone();
+            rt::tokio().spawn(async move {
+                let stored =
+                    zedb_core::secrets::get_plain(&clickhouse_cloud::keychain_key(&org_id))
+                        .ok()
+                        .flatten();
+                let Some((key_id, key_secret)) = stored
+                    .as_deref()
+                    .and_then(clickhouse_cloud::split_credentials)
+                else {
+                    return Err("No API key in the Keychain for this organization".to_string());
+                };
+                clickhouse_cloud::start_service(&key_id, &key_secret, &org_id, &service_id, &state)
+                    .await
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            if let Some(task) = wake_task {
+                let outcome = task.await.unwrap_or_else(|_| Err("Wake stopped".into()));
+                if let Err(error) = outcome {
+                    this.update(cx, |this, cx| {
+                        if this.connection.connecting.as_deref() == Some(name.as_str()) {
+                            this.connection.connecting = None;
+                        }
+                        this.flash_warning(format!("Could not wake {name}: {error}"), cx);
+                    })
+                    .ok();
+                    return;
+                }
+            }
+            for _ in 0..24 {
+                gpui::Timer::after(std::time::Duration::from_secs(15)).await;
+                let still_waiting = this
+                    .update(cx, |this, _| {
+                        this.connection.connecting.as_deref() == Some(name.as_str())
+                    })
+                    .unwrap_or(false);
+                if !still_waiting {
+                    return;
+                }
+                let org = org_id.clone();
+                let id = service_id.clone();
+                let fetched = rt::tokio()
+                    .spawn(async move {
+                        let stored =
+                            zedb_core::secrets::get_plain(&clickhouse_cloud::keychain_key(&org))
+                                .ok()
+                                .flatten();
+                        let (key_id, key_secret) = stored
+                            .as_deref()
+                            .and_then(clickhouse_cloud::split_credentials)?;
+                        clickhouse_cloud::list_services(&key_id, &key_secret, &org)
+                            .await
+                            .ok()?
+                            .into_iter()
+                            .find(|service| service.id == id)
+                            .map(|service| service.state)
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                let Some(current) = fetched else { continue };
+                let done = this
+                    .update(cx, |this, cx| {
+                        if current == "running" {
+                            this.connection
+                                .cloud
+                                .states
+                                .insert(service_id.clone(), current.clone());
+                            let connection = this
+                                .connection
+                                .connections
+                                .iter()
+                                .find(|connection| connection.name == name)
+                                .cloned();
+                            let Some(connection) = connection else {
+                                this.connection.connecting = None;
+                                cx.notify();
+                                return true;
+                            };
+                            let password = this
+                                .connection
+                                .password_cache
+                                .get(&name)
+                                .cloned()
+                                .or_else(|| zedb_core::secrets::get_password(&name).ok());
+                            let Some(password) = password else {
+                                this.connection.connecting = None;
+                                this.flash_warning(
+                                    format!("{name} is awake, but its password could not be read"),
+                                    cx,
+                                );
+                                return true;
+                            };
+                            this.flash_notice(format!("{name} is awake; connecting\u{2026}"), cx);
+                            this.probe_connection(connection, password, None, cx);
+                            true
+                        } else {
+                            // Keep the sidebar honest through the wait.
+                            this.connection
+                                .cloud
+                                .states
+                                .insert(service_id.clone(), "starting".into());
+                            false
+                        }
+                    })
+                    .unwrap_or(true);
+                if done {
+                    return;
+                }
+            }
+            this.update(cx, |this, cx| {
+                if this.connection.connecting.as_deref() == Some(name.as_str()) {
+                    this.connection.connecting = None;
+                    this.flash_warning(
+                        format!("{name} did not wake within ~6 minutes; connect again to retry"),
+                        cx,
+                    );
+                    cx.notify();
+                }
             })
             .ok();
         })
@@ -1098,24 +1264,66 @@ impl Workspace {
             .any(|connection| connection.name == connected.name && connection.cloud.is_some())
     }
 
-    /// The sidebar's marker for a connection whose Cloud service is not
-    /// running: "idle" or "waking", muted.
+    /// The sidebar's marker for a connection whose Cloud compute is not
+    /// running: "idle" or "waking", muted. Judged across the linked
+    /// service's whole warehouse: the connection is usable when ANY
+    /// member is up, so a stopped secondary must not brand a connection
+    /// whose primary is running.
     pub(crate) fn cloud_state_label(&self, connection: &ConnectionConfig) -> Option<&'static str> {
         let cloud = connection.cloud.as_ref()?;
-        let state = self.connection.cloud.states.get(&cloud.service_id)?;
-        let service = CloudService {
-            state: state.clone(),
+        // The freshest view of one service: the watch map (updated by
+        // wakes, stops, and dashboard polls) over the org list.
+        let state_of = |id: &str, listed: &str| -> String {
+            self.connection
+                .cloud
+                .states
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| listed.to_string())
+        };
+        let services = &self.connection.cloud.services;
+        let warehouse = services
+            .iter()
+            .find(|(_, service)| service.id == cloud.service_id)
+            .and_then(|(_, service)| service.warehouse_id.clone());
+        let members: Vec<String> = match &warehouse {
+            Some(warehouse) => services
+                .iter()
+                .filter(|(_, service)| service.warehouse_id.as_deref() == Some(warehouse.as_str()))
+                .map(|(_, service)| state_of(&service.id, &service.state))
+                .collect(),
+            None => Vec::new(),
+        };
+        // Before the org list loads (or for a service outside it), the
+        // linked service's own state is all there is.
+        let states: Vec<String> = if members.is_empty() {
+            vec![self.connection.cloud.states.get(&cloud.service_id)?.clone()]
+        } else {
+            members
+        };
+        let judge = |state: &str| CloudService {
+            state: state.to_string(),
             ..CloudService::default()
         };
-        if state == "deleted" {
-            Some("deleted")
-        } else if service.is_asleep() {
-            Some("idle")
-        } else if service.is_waking() {
-            Some("waking")
-        } else {
-            None
+        if states.iter().any(|state| judge(state).is_running()) {
+            return None;
         }
+        if states.iter().any(|state| judge(state).is_waking()) {
+            return Some("waking");
+        }
+        if self
+            .connection
+            .cloud
+            .states
+            .get(&cloud.service_id)
+            .is_some_and(|state| state == "deleted")
+        {
+            return Some("deleted");
+        }
+        if states.iter().any(|state| judge(state).is_asleep()) {
+            return Some("idle");
+        }
+        None
     }
 
     /// The Cloud panel: linked orgs with their services, and the key

@@ -24,6 +24,12 @@ after accepting a wake, so watches outlive the state string.
 
 ## Slice 1: wake-before-connect
 
+Status: BUILT (2026-08-19). The probe-failure explanation path now
+wakes an asleep service (or watches a waking one), keeps the
+connecting state honest, and retries the connect when the control
+plane reports running; bounded at ~6 minutes, abandoned if another
+connect starts.
+
 Connecting to an asleep Cloud service should offer to wake it and then
 connect, instead of timing out with an explanation.
 

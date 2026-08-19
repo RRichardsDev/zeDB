@@ -25,10 +25,17 @@ impl Workspace {
                                     .find(|node| node.node_index == index)
                                     .map(|node| node.reachable)
                             });
+                        // The active node of the live connection says so;
+                        // a node with no probe this session is simply not
+                        // connected (it may well have worked before).
+                        let active = self.connection.connected.as_ref().is_some_and(|connected| {
+                            connected.name == connection.name && connected.active_node == index
+                        });
                         let (label, color) = match reachable {
+                            Some(true) if active => ("connected", theme::success()),
                             Some(true) => ("reachable", theme::success()),
                             Some(false) => ("failed", theme::danger()),
-                            None => ("not tested", theme::text_dim()),
+                            None => ("not connected", theme::text_dim()),
                         };
                         div()
                             .flex()

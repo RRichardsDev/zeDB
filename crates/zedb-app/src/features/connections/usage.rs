@@ -53,6 +53,11 @@ pub(crate) struct CloudUsageState {
     /// control plane can report `idle` for a while after accepting
     /// the awake, so the watch outlives the state string.
     pub(crate) waking: std::collections::HashMap<String, u8>,
+    /// Services asked to stop, watched the same way until asleep.
+    pub(crate) stopping: std::collections::HashMap<String, u8>,
+    /// A Stop click arms this; only the second click on the same
+    /// service sends the command. Stopping a service is disruptive.
+    pub(crate) stop_confirm: Option<String>,
 }
 
 impl CloudUsageState {
@@ -182,7 +187,37 @@ impl Workspace {
                             *polls -= 1;
                             true
                         });
-                        if !this.connection.usage.waking.is_empty() {
+                        let asleep: Vec<String> = this
+                            .connection
+                            .usage
+                            .services
+                            .iter()
+                            .filter(|service| service.is_asleep())
+                            .map(|service| service.id.clone())
+                            .collect();
+                        this.connection.usage.stopping.retain(|id, polls| {
+                            if asleep.contains(id) || *polls == 0 {
+                                return false;
+                            }
+                            *polls -= 1;
+                            true
+                        });
+                        // The sidebar's map follows the same truth, so
+                        // a wake or stop watched here lands there too.
+                        for service in &this.connection.usage.services {
+                            if this.connection.usage.waking.contains_key(&service.id)
+                                || this.connection.usage.stopping.contains_key(&service.id)
+                            {
+                                continue;
+                            }
+                            this.connection
+                                .cloud
+                                .states
+                                .insert(service.id.clone(), service.state.clone());
+                        }
+                        if !this.connection.usage.waking.is_empty()
+                            || !this.connection.usage.stopping.is_empty()
+                        {
                             this.cloud_usage_schedule_wake_poll(cx);
                         }
                     }
@@ -222,6 +257,12 @@ impl Workspace {
             .unwrap_or_default();
         // 24 polls at the 15s cadence is about six minutes of wake time.
         self.connection.usage.waking.insert(service_id.clone(), 24);
+        // The sidebar and Cloud page read their own state map; a wake
+        // from the dashboard shows as starting there too.
+        self.connection
+            .cloud
+            .states
+            .insert(service_id.clone(), "starting".into());
         cx.notify();
         let org_id = cloud.org_id.clone();
         let wake_id = service_id.clone();
@@ -262,6 +303,61 @@ impl Workspace {
         .detach();
     }
 
+    /// Ask the control plane to stop a running dashboard service. Only
+    /// reached after the two-click confirm; watched until asleep.
+    pub(crate) fn cloud_usage_stop(&mut self, service_id: String, cx: &mut Context<Self>) {
+        let Some(cloud) = self
+            .connection
+            .selected
+            .and_then(|index| self.connection.connections.get(index))
+            .and_then(|connection| connection.cloud.clone())
+        else {
+            return;
+        };
+        self.connection.usage.stop_confirm = None;
+        self.connection
+            .usage
+            .stopping
+            .insert(service_id.clone(), 24);
+        self.connection
+            .cloud
+            .states
+            .insert(service_id.clone(), "stopping".into());
+        cx.notify();
+        let org_id = cloud.org_id.clone();
+        let stop_id = service_id.clone();
+        let task = rt::tokio().spawn(async move {
+            let stored = zedb_core::secrets::get_plain(&clickhouse_cloud::keychain_key(&org_id))
+                .ok()
+                .flatten();
+            let Some((key_id, key_secret)) = stored
+                .as_deref()
+                .and_then(clickhouse_cloud::split_credentials)
+            else {
+                return Err("No API key in the Keychain for this organization".to_string());
+            };
+            clickhouse_cloud::stop_service(&key_id, &key_secret, &org_id, &stop_id).await
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await.unwrap_or_else(|_| Err("Stop stopped".into()));
+            this.update(cx, |this, cx| match outcome {
+                Ok(()) => {
+                    this.flash_notice("ClickHouse Cloud accepted the stop", cx);
+                    this.cloud_usage_refresh(true, cx);
+                }
+                Err(error) => {
+                    // The card showed stopping optimistically; a refusal
+                    // takes it back.
+                    this.connection.usage.stopping.remove(&service_id);
+                    this.flash_warning(format!("Could not stop: {error}"), cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Wake every asleep service in the dashboard: one control-plane
     /// request per service, all sharing the same refresh watch.
     pub(crate) fn cloud_usage_wake_all(&mut self, cx: &mut Context<Self>) {
@@ -286,7 +382,9 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             gpui::Timer::after(std::time::Duration::from_secs(15)).await;
             this.update(cx, |this, cx| {
-                if !this.connection.usage.waking.is_empty() {
+                if !this.connection.usage.waking.is_empty()
+                    || !this.connection.usage.stopping.is_empty()
+                {
                     this.cloud_usage_refresh(true, cx);
                 }
             })
@@ -471,23 +569,36 @@ impl Workspace {
             .flex_col()
             .gap_2()
             .children(usage.services.iter().enumerate().map(|(index, service)| {
-                // A watched service shows as waking even while the
-                // plane still reports idle; the state settles later.
+                // A watched service shows as waking (or stopping) even
+                // while the plane still reports the old state.
                 let watched = usage.waking.contains_key(&service.id);
-                let waking = service.is_waking() || (watched && !service.is_running());
-                let state_color = if service.is_running() {
-                    theme::success()
-                } else if waking {
+                let halting = usage.stopping.contains_key(&service.id);
+                let waking =
+                    !halting && (service.is_waking() || (watched && !service.is_running()));
+                let stopping = service.state == "stopping" || (halting && !service.is_asleep());
+                let state_color = if stopping || waking {
                     theme::warning()
+                } else if service.is_running() {
+                    theme::success()
                 } else {
                     theme::text_dim()
                 };
-                let state_label = if waking && !service.is_waking() {
+                let state_label = if stopping && service.state != "stopping" {
+                    "stopping".to_string()
+                } else if waking && !service.is_waking() {
                     "waking".to_string()
                 } else {
                     service.state.clone()
                 };
                 let wakeable = service.is_asleep() && !watched;
+                let stoppable = service.is_running() && !halting;
+                // Tested live against the control plane (2026-08-19): a
+                // warehouse primary's explicit stop returns 400 while any
+                // secondary EXISTS (running, stopping, or stopped); only
+                // auto-idle can take it down. The disabled control names
+                // the rule instead of letting the click bounce off a 400.
+                let primary_locked = service.is_primary && usage.services.len() > 1;
+                let stop_armed = usage.stop_confirm.as_deref() == Some(service.id.as_str());
                 let mut facts: Vec<String> = Vec::new();
                 if let Some(version) = &service.clickhouse_version {
                     facts.push(format!("ClickHouse {version}"));
@@ -545,43 +656,126 @@ impl Workspace {
                                 )
                             })
                             .child(div().flex_1())
-                            .when(wakeable && keyed, |row| {
-                                let service_id = service.id.clone();
-                                row.child(
-                                    div()
-                                        .id(("usage-wake", index))
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded(px(3.))
-                                        .border_1()
-                                        .border_color(theme::accent())
-                                        .text_xs()
-                                        .text_color(theme::accent())
-                                        .child("Wake")
-                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.cloud_usage_wake(service_id.clone(), cx)
-                                        })),
-                                )
-                            })
-                            .when(wakeable && !keyed, |row| {
+                            .when(
+                                (wakeable || (stoppable && !primary_locked)) && keyed,
+                                |row| {
+                                    // One power control per card. The hover
+                                    // color announces the action: green will
+                                    // wake, red will stop; stopping still
+                                    // takes the arming click.
+                                    let service_id = service.id.clone();
+                                    let asleep = wakeable;
+                                    let group =
+                                        gpui::SharedString::from(format!("usage-power-{index}"));
+                                    row.child(
+                                        div()
+                                            .id(("usage-power", index))
+                                            .group(group.clone())
+                                            .w(px(24.))
+                                            .h(px(22.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(px(3.))
+                                            .child(
+                                                gpui::svg()
+                                                    .path("icons/power.svg")
+                                                    .size(px(12.))
+                                                    .text_color(if stop_armed {
+                                                        theme::danger()
+                                                    } else {
+                                                        theme::text_dim()
+                                                    })
+                                                    .group_hover(group, move |icon| {
+                                                        icon.text_color(if asleep {
+                                                            theme::success()
+                                                        } else {
+                                                            theme::danger()
+                                                        })
+                                                    }),
+                                            )
+                                            .hover(|button| {
+                                                button.bg(theme::hover()).cursor_pointer()
+                                            })
+                                            .tooltip(move |window, cx| {
+                                                gpui_component::tooltip::Tooltip::new(
+                                                    if stop_armed {
+                                                        "Click again to stop the service"
+                                                    } else if asleep {
+                                                        "Wake the service"
+                                                    } else {
+                                                        "Stop the service"
+                                                    },
+                                                )
+                                                .build(window, cx)
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if asleep {
+                                                    this.cloud_usage_wake(service_id.clone(), cx);
+                                                } else if this
+                                                    .connection
+                                                    .usage
+                                                    .stop_confirm
+                                                    .as_deref()
+                                                    == Some(service_id.as_str())
+                                                {
+                                                    this.cloud_usage_stop(service_id.clone(), cx);
+                                                } else {
+                                                    this.connection.usage.stop_confirm =
+                                                        Some(service_id.clone());
+                                                    cx.notify();
+                                                    // An abandoned confirm
+                                                    // disarms itself.
+                                                    let armed = service_id.clone();
+                                                    cx.spawn(async move |this, cx| {
+                                                        gpui::Timer::after(
+                                                            std::time::Duration::from_secs(6),
+                                                        )
+                                                        .await;
+                                                        this.update(cx, |this, cx| {
+                                                            if this
+                                                                .connection
+                                                                .usage
+                                                                .stop_confirm
+                                                                .as_deref()
+                                                                == Some(armed.as_str())
+                                                            {
+                                                                this.connection
+                                                                    .usage
+                                                                    .stop_confirm = None;
+                                                                cx.notify();
+                                                            }
+                                                        })
+                                                        .ok();
+                                                    })
+                                                    .detach();
+                                                }
+                                            })),
+                                    )
+                                },
+                            )
+                            .when((wakeable || stoppable) && !keyed, |row| {
                                 // Sign-in tokens are read-only on the
                                 // management API: an honest disabled
-                                // button beats a failing one.
+                                // control beats a failing one.
                                 row.child(
                                     div()
-                                        .id(("usage-wake-disabled", index))
-                                        .px_2()
-                                        .py_0p5()
+                                        .id(("usage-power-disabled", index))
+                                        .w(px(24.))
+                                        .h(px(22.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
                                         .rounded(px(3.))
-                                        .border_1()
-                                        .border_color(theme::border())
-                                        .text_xs()
-                                        .text_color(theme::text_dim())
-                                        .child("Wake")
+                                        .child(
+                                            gpui::svg()
+                                                .path("icons/power.svg")
+                                                .size(px(12.))
+                                                .text_color(theme::border()),
+                                        )
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new(
-                                                "Link an API key to wake services",
+                                                "Link an API key to manage service state",
                                             )
                                             .build(window, cx)
                                         }),
@@ -590,12 +784,21 @@ impl Workspace {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(if waking {
+                                    .text_color(if stop_armed {
+                                        theme::danger()
+                                    } else if waking || stopping {
                                         theme::warning()
                                     } else {
                                         theme::text_dim()
                                     })
-                                    .child(state_label),
+                                    .child(if stop_armed {
+                                        // The confirm must be unmissable:
+                                        // the state slot says what the
+                                        // second click will do.
+                                        "click again to stop".to_string()
+                                    } else {
+                                        state_label
+                                    }),
                             ),
                     )
                     .child(

@@ -9,12 +9,31 @@ GitHub release notes.
 
 ## Unreleased
 
+- The sidebar's Cloud idle marker judges the linked service's whole
+  warehouse, not just the originally linked service: a connection
+  whose primary is running no longer says "idle" because a stopped
+  secondary was the one linked at setup.
+- The connection page's node rows tell the truth about state: the live
+  connection's active node says "connected", an unprobed node says
+  "not connected" (the old "not tested" implied it had never worked),
+  and "reachable"/"failed" stay for probe results.
+- Connecting to an asleep Cloud service now wakes it and finishes the
+  connect when the service comes up, instead of timing out and telling
+  you to start it yourself. Progress is shown throughout ("waking it,
+  then connecting"); starting a different connect abandons the wait.
 - The connection page's Cloud dashboard manages wake state: idle or
   stopped services show a Wake button (when the org's API key is
   linked; an honest disabled button otherwise), a "Wake all" appears
   when several services are down, the card shows "waking" through the
   transition, and the dashboard keeps refreshing until the control
-  plane reports the service running.
+  plane reports the service running. Running services get a stop
+  control (a power icon: green hover wakes, red hover stops) behind a
+  two-click confirm, watched through "stopping" the same way. A
+  warehouse primary's stop is disabled with the reason while
+  secondaries exist (tested: the control plane refuses it in every
+  secondary state; only auto-idle takes a primary down). Wakes,
+  stops, and connects keep the dashboard cards and the sidebar's
+  state markers in step.
 - Hovering a `${db}` or `{db:Identifier}` placeholder shows the value
   in effect at that position, the line that declared it, and what the
   value names in the schema ("Database with 14 objects"); an unset
