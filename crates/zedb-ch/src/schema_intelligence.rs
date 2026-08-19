@@ -20,9 +20,10 @@ mod limit;
 mod order_by;
 mod search;
 mod tokens;
+mod vocabulary;
 
 pub use analysis::{analyze_sql, recognized_identifiers, referenced_databases, touched_databases};
-pub use completions::completions;
+pub use completions::{completions, completions_with_placeholders};
 pub use filters::{column_filter, column_filters, filtered_columns, set_column_filter};
 pub use hover::{hover, object_at};
 pub use limit::strip_top_level_limit;
@@ -40,6 +41,9 @@ pub enum SuggestionKind {
     Database,
     Object,
     Column,
+    Function,
+    Keyword,
+    Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

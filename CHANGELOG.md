@@ -9,6 +9,48 @@ GitHub release notes.
 
 ## Unreleased
 
+- Hovering a `${db}` or `{db:Identifier}` placeholder shows the value
+  in effect at that position, the line that declared it, and what the
+  value names in the schema ("Database with 14 objects"); an unset
+  name says how to set it.
+- A placeholder before a dot completes like the name it resolves to:
+  `{db:Identifier}.` and `${db}.` offer that database's tables, using
+  the declaration in effect at the cursor.
+- Typing `:` inside a `{name:...}` query parameter offers the valid
+  parameter types (Identifier, String, UInt64, DateTime, ...) instead
+  of columns and keywords, with Identifier first.
+- Richer editor completions: SQL keywords (GROUP BY, LEFT JOIN, ...)
+  and ~140 common ClickHouse functions with one-glance signatures
+  (toStartOfDay(t), argMax(arg, val), quantile(level)(x), ...) join
+  the schema names. Your own columns and tables always rank first,
+  database names are offered after FROM/JOIN, and vocabulary only
+  appears once you have typed something.
+- Native ClickHouse query parameters work in the editor: `SET
+  param_db = 'X'` plus `{db:Identifier}` placeholders. Each statement
+  runs as its own stateless request, so the app collects the SET
+  lines from the buffer (same nearest-above scoping as `@set`) and
+  sends them as `param_` parameters with every statement they govern.
+  Both styles coexist; `${}` stays for splicing inside literals.
+- An `@set` line is its own statement: running the cursor on it no
+  longer executes the query below it (it confirms "nothing to run"
+  instead), and a trailing semicolon on the value is treated as the
+  line's terminator, not part of the value.
+- Redeclaring a query variable (`@set db=xyz` ... `@set db=abc`) now
+  takes effect from its own line down: each `${db}` use binds to the
+  nearest `@set` above it instead of the last one anywhere in the tab.
+- `INSERT ... VALUES` with comments between the rows now runs:
+  ClickHouse's Values parser rejects them server-side, so the app
+  strips comments from the data section on the wire while the editor
+  keeps the annotated text.
+- SQL comments no longer break query runs: a trailing `-- comment`
+  after the last statement is not sent as its own (failing) statement,
+  a cursor on an end-of-line comment runs the statement it annotates
+  instead of the next one, `${...}` inside comments is left alone by
+  query variables, and grid sort/filter rewrites keep working on
+  statements that end in a line comment.
+- The table details panel has a close button in its header, so getting
+  back to the database overview no longer requires deselecting via the
+  sidebar.
 - Selecting text in the agent pane no longer fights scrolling: drag
   selects, the wheel scrolls, streaming output stops yanking the view
   to the bottom mid-selection, and dragging near the top or bottom

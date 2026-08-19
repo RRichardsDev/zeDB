@@ -4,6 +4,7 @@ use std::ops::Range;
 
 use super::bindings::{resolve_bindings, unique_object};
 use super::tokens::{current_statement, starts_with_case_insensitive, tokenize, word_range};
+use super::vocabulary::{FUNCTIONS, KEYWORDS, PARAM_TYPES};
 use super::{SchemaSuggestion, SuggestionKind};
 use crate::schema_cache::{CachedColumn, CachedObject, SchemaSnapshot};
 
@@ -12,6 +13,22 @@ pub fn completions(
     default_database: Option<&str>,
     sql: &str,
     cursor: usize,
+) -> Vec<SchemaSuggestion> {
+    completions_with_placeholders(snapshot, default_database, sql, cursor, &[], &[])
+}
+
+/// Like [`completions`], with the editor's resolved placeholder values:
+/// `variables` for `${name}` (@set) and `params` for `{name:Type}`
+/// (SET param_). A placeholder before a dot then qualifies the dot the
+/// same way a typed name would, so `{db:Identifier}.` offers that
+/// database's tables.
+pub fn completions_with_placeholders(
+    snapshot: &SchemaSnapshot,
+    default_database: Option<&str>,
+    sql: &str,
+    cursor: usize,
+    variables: &[(String, String)],
+    params: &[(String, String)],
 ) -> Vec<SchemaSuggestion> {
     let cursor = cursor.min(sql.len());
     let replace = word_range(sql, cursor);
@@ -36,6 +53,27 @@ pub fn completions(
     );
     let mut suggestions = Vec::new();
 
+    // Inside a `{name:` query-parameter placeholder the only thing that
+    // can follow the colon is a type; nothing else applies there.
+    let type_position = tokens.len() >= 3
+        && tokens[tokens.len() - 1].text == ":"
+        && tokens[tokens.len() - 2].identifier
+        && tokens[tokens.len() - 3].text == "{";
+    if type_position {
+        for (name, hint) in PARAM_TYPES {
+            if starts_with_case_insensitive(name, prefix) {
+                suggestions.push(SchemaSuggestion {
+                    label: (*name).to_string(),
+                    detail: (*hint).to_string(),
+                    kind: SuggestionKind::Type,
+                    replace: replace.clone(),
+                });
+            }
+        }
+        // PARAM_TYPES is in priority order; keep it.
+        return suggestions;
+    }
+
     let dot_adjacent = tokens
         .last()
         .is_some_and(|token| token.text == "." && token.range.end == context_end);
@@ -49,6 +87,31 @@ pub fn completions(
                         .is_some_and(|dot| token.range.end == dot.range.start)
             })
             .map(|token| token.text);
+        // A placeholder before the dot qualifies it too: resolve
+        // `{db:Identifier}.` / `${db}.` to the declared value and treat
+        // that as the typed qualifier.
+        let qualifier = qualifier.or_else(|| {
+            let dot = tokens.last()?.range.start;
+            let before_dot = &sql[..dot];
+            if !before_dot.ends_with('}') {
+                return None;
+            }
+            let open = before_dot.rfind('{')?;
+            if before_dot[open..].contains('\n') {
+                return None;
+            }
+            let inner = &before_dot[open + 1..before_dot.len() - 1];
+            let dollar = open > 0 && before_dot.as_bytes()[open - 1] == b'$';
+            let (name, declarations) = if dollar {
+                (inner, variables)
+            } else {
+                (inner.split_once(':')?.0, params)
+            };
+            declarations
+                .iter()
+                .find(|(declared, _)| declared == name)
+                .map(|(_, value)| value.as_str())
+        });
         if let Some(qualifier) = qualifier {
             if let Some((database, object)) = bindings.aliases.get(&qualifier.to_ascii_lowercase())
             {
@@ -126,6 +189,18 @@ pub fn completions(
                 }
             }
         }
+        // Other databases stay reachable from a table position: typing
+        // the database name qualifies the follow-up dot completion.
+        for database in snapshot.databases.values() {
+            if !prefix.is_empty() && starts_with_case_insensitive(&database.name, prefix) {
+                suggestions.push(SchemaSuggestion {
+                    label: database.name.clone(),
+                    detail: "database".to_string(),
+                    kind: SuggestionKind::Database,
+                    replace: replace.clone(),
+                });
+            }
+        }
     } else {
         // A bare (unqualified) word in a column position: offer the
         // columns of every table in the query's scope, deduped by
@@ -149,9 +224,53 @@ pub fn completions(
                 }
             }
         }
+        // Vocabulary rides along with bare words only once something is
+        // typed: an empty prefix would wall every keystroke with keywords.
+        if !prefix.is_empty() {
+            for (name, signature) in FUNCTIONS {
+                if starts_with_case_insensitive(name, prefix) {
+                    suggestions.push(SchemaSuggestion {
+                        label: (*name).to_string(),
+                        detail: (*signature).to_string(),
+                        kind: SuggestionKind::Function,
+                        replace: replace.clone(),
+                    });
+                }
+            }
+            for keyword in KEYWORDS {
+                if starts_with_case_insensitive(keyword, prefix) {
+                    suggestions.push(SchemaSuggestion {
+                        label: (*keyword).to_string(),
+                        detail: String::new(),
+                        kind: SuggestionKind::Keyword,
+                        replace: replace.clone(),
+                    });
+                }
+            }
+        }
     }
-    suggestions.sort_by(|left, right| left.label.cmp(&right.label));
+    // Schema names outrank vocabulary: what the user's own data calls
+    // things is almost always what a prefix means.
+    suggestions.sort_by(|left, right| {
+        kind_rank(&left.kind)
+            .cmp(&kind_rank(&right.kind))
+            .then_with(|| {
+                left.label
+                    .to_ascii_lowercase()
+                    .cmp(&right.label.to_ascii_lowercase())
+            })
+    });
     suggestions
+}
+
+fn kind_rank(kind: &SuggestionKind) -> u8 {
+    match kind {
+        SuggestionKind::Column | SuggestionKind::Type => 0,
+        SuggestionKind::Object => 1,
+        SuggestionKind::Database => 2,
+        SuggestionKind::Function => 3,
+        SuggestionKind::Keyword => 4,
+    }
 }
 
 fn column_suggestion(column: &CachedColumn, replace: Range<usize>) -> SchemaSuggestion {
@@ -241,6 +360,96 @@ mod tests {
         assert!(scoped
             .iter()
             .all(|item| item.kind == SuggestionKind::Column));
+    }
+
+    #[test]
+    fn offers_functions_and_keywords_behind_schema_names() {
+        let snapshot = snapshot(Some(columns()));
+        // "eve" matches the event_id column; schema outranks vocabulary.
+        let sql = "SELECT eve FROM analytics.events";
+        let cursor = sql.find("eve ").unwrap() + 3;
+        let items = completions(&snapshot, None, sql, cursor);
+        assert_eq!(items[0].kind, SuggestionKind::Column);
+
+        // "toSta" matches only functions.
+        let sql = "SELECT toSta FROM analytics.events";
+        let cursor = sql.find("toSta").unwrap() + 5;
+        let items = completions(&snapshot, None, sql, cursor);
+        assert!(!items.is_empty());
+        assert!(items
+            .iter()
+            .all(|item| item.kind == SuggestionKind::Function));
+        assert!(items.iter().any(|item| item.label == "toStartOfDay"));
+
+        // "grou" surfaces both groupArray and GROUP BY, functions first.
+        let sql = "SELECT * FROM analytics.events grou";
+        let items = completions(&snapshot, None, sql, sql.len());
+        assert!(items.iter().any(|item| item.label == "groupArray"));
+        assert!(items.iter().any(|item| item.label == "GROUP BY"));
+
+        // An empty prefix stays schema-only: no keyword wall.
+        let sql = "SELECT  FROM analytics.events";
+        let cursor = sql.find("  ").unwrap() + 1;
+        let items = completions(&snapshot, None, sql, cursor);
+        assert!(items.iter().all(|item| item.kind == SuggestionKind::Column));
+    }
+
+    #[test]
+    fn a_placeholder_qualifier_completes_like_its_value() {
+        let snapshot = snapshot(Some(columns()));
+        let params = vec![("db".to_string(), "analytics".to_string())];
+        let variables = vec![("db".to_string(), "analytics".to_string())];
+
+        // {db:Identifier}. offers the tables of the database it names.
+        let sql = "SELECT count() FROM {db:Identifier}.";
+        let items = completions_with_placeholders(&snapshot, None, sql, sql.len(), &[], &params);
+        assert_eq!(items[0].label, "events");
+
+        // ${db}. resolves through @set declarations the same way.
+        let sql = "SELECT count() FROM ${db}.ev";
+        let items = completions_with_placeholders(&snapshot, None, sql, sql.len(), &variables, &[]);
+        assert_eq!(items[0].label, "events");
+
+        // An unresolved placeholder stays quiet rather than guessing.
+        let sql = "SELECT count() FROM {other:Identifier}.";
+        let items = completions_with_placeholders(&snapshot, None, sql, sql.len(), &[], &params);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn offers_types_after_a_parameter_colon() {
+        let snapshot = snapshot(Some(columns()));
+        // Immediately after the colon: the full type list, priority
+        // order, nothing else.
+        let sql = "SELECT count() FROM {db:";
+        let items = completions(&snapshot, Some("analytics"), sql, sql.len());
+        assert!(!items.is_empty());
+        assert!(items.iter().all(|item| item.kind == SuggestionKind::Type));
+        assert_eq!(items[0].label, "Identifier");
+
+        // A typed prefix filters case-insensitively.
+        let sql = "SELECT count() FROM {db:iden";
+        let items = completions(&snapshot, Some("analytics"), sql, sql.len());
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "Identifier");
+
+        // A colon outside a placeholder does not force types.
+        let sql = "SELECT eve FROM analytics.events";
+        let cursor = sql.find("eve ").unwrap() + 3;
+        let items = completions(&snapshot, None, sql, cursor);
+        assert!(items.iter().any(|item| item.kind == SuggestionKind::Column));
+    }
+
+    #[test]
+    fn offers_databases_in_table_position() {
+        let snapshot = snapshot(Some(columns()));
+        // Even with a default database set, other databases stay
+        // reachable by name from FROM.
+        let sql = "SELECT * FROM analyt";
+        let items = completions(&snapshot, Some("analytics"), sql, sql.len());
+        assert!(items
+            .iter()
+            .any(|item| item.kind == SuggestionKind::Database && item.label == "analytics"));
     }
 
     #[test]

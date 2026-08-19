@@ -55,8 +55,17 @@ pub fn set_order_by(sql: &str, columns: &[(String, bool)]) -> String {
         }
         let rest = rest.trim_start();
         if !rest.is_empty() {
+            // A `--` on the output's last line would comment out anything
+            // appended after it on that line; break the line instead.
+            let tail_commented = out
+                .rsplit('\n')
+                .next()
+                .is_some_and(|line| line.contains("--"));
             if rest.starts_with(';') {
-            } else if starts_with_clause(rest) {
+                if tail_commented {
+                    out.push('\n');
+                }
+            } else if starts_with_clause(rest) || tail_commented {
                 out.push('\n');
             } else {
                 out.push(' ');
@@ -377,6 +386,13 @@ mod order_by_tests {
         );
 
         assert_eq!(set_order_by(&multi, &[]), "SELECT * FROM t\nLIMIT 10");
+    }
+
+    #[test]
+    fn a_trailing_line_comment_does_not_swallow_appended_clauses() {
+        let sql = "SELECT * FROM t -- newest first\nORDER BY id DESC LIMIT 5";
+        let stripped = set_order_by(sql, &[]);
+        assert_eq!(stripped, "SELECT * FROM t -- newest first\nLIMIT 5");
     }
 
     #[test]

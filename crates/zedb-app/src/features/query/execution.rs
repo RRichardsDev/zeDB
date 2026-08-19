@@ -25,6 +25,13 @@ impl Workspace {
                 return;
             }
         };
+        // The target resolved to nothing runnable but was not empty to
+        // begin with: an @set line. Declaring is passive; confirm rather
+        // than erroring "Query is empty".
+        if sql_is_blank(&sql) && !sql_is_blank(&raw_sql) {
+            self.flash_warning("@set declares a variable; nothing to run", cx);
+            return;
+        }
         let offset = if sql.trim() == raw_sql.trim() {
             self.query.tabs.get(self.query.active_tab).and_then(|tab| {
                 let editor = tab.editor.read(cx);
@@ -74,7 +81,10 @@ impl Workspace {
             .filter_map(|(start, end)| {
                 let raw = &text[start..end.min(text.len())];
                 let statement = raw.trim();
-                if statement.is_empty() {
+                // Comment-only segments (a trailing `-- note` after the
+                // last semicolon) are not statements; sending one errors
+                // the whole run.
+                if sql_is_blank(statement) {
                     return None;
                 }
                 let leading = raw.len() - raw.trim_start().len();
@@ -85,7 +95,11 @@ impl Workspace {
                 };
                 Some((statement.to_string(), offset))
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if statements.is_empty() && !sql_is_blank(&raw_text) {
+            self.flash_warning("@set declares a variable; nothing to run", cx);
+            return;
+        }
         self.start_statements(statements, cx);
     }
 
@@ -144,8 +158,10 @@ impl Workspace {
         let base = zedb_ch::schema_intelligence::set_order_by(&base, &[]);
         let base = zedb_ch::schema_intelligence::strip_top_level_limit(&base);
         let base = base.trim_end().trim_end_matches(';').to_string();
+        // The statement goes on its own lines so a trailing `-- comment`
+        // cannot swallow the closing paren and LIMIT.
         let probe = format!(
-            "SELECT DISTINCT `{}` AS value FROM ({base}) LIMIT 11",
+            "SELECT DISTINCT `{}` AS value FROM (\n{base}\n) LIMIT 11",
             column.replace('`', "")
         );
         let config = connected.client_config.clone();
@@ -301,7 +317,7 @@ impl Workspace {
             self.flash_warning("Connect to a cluster before running a query", cx);
             return;
         };
-        statements.retain(|(statement, _)| !statement.trim().is_empty());
+        statements.retain(|(statement, _)| !sql_is_blank(statement));
         // Running stamps the tab with the connection it ran on; from now
         // on the tab lives in that connection's scope.
         let connection_name = connected.name.clone();
@@ -337,6 +353,16 @@ impl Workspace {
         tab.elapsed = None;
         let config = connected.client_config.clone();
         let row_limit = tab.max_rows.limit();
+        // Native `{name:Type}` placeholders: each statement runs as its
+        // own stateless HTTP request, so `SET param_` session state would
+        // evaporate; collect the declarations from the buffer and ship
+        // the ones in effect with every statement.
+        let full_text = tab.editor.read(cx).value().to_string();
+        let declarations = collect_param_declarations(&full_text);
+        let statement_params: Vec<Vec<(String, String)>> = statements
+            .iter()
+            .map(|(_, offset)| params_at(&declarations, *offset))
+            .collect();
         // For the history record on completion; `statements` moves
         // into the runner task.
         let run_sqls: Vec<String> = statements.iter().map(|(sql, _)| sql.clone()).collect();
@@ -350,10 +376,23 @@ impl Workspace {
             let mut skipped = 0usize;
             let mut succeeded = Vec::new();
             for (index, (sql, offset)) in statements.iter().enumerate() {
+                // The server's Values parser chokes on comments between
+                // rows; the editor keeps the annotated text, the wire
+                // gets it stripped.
+                let send_sql = strip_insert_values_comments(sql);
+                let params = statement_params
+                    .get(index)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
                 let outcome = client
-                    .query_stream(sql, row_limit.unwrap_or(usize::MAX), |event| {
-                        let _ = sender.send(RunEvent::Stream(event));
-                    })
+                    .query_stream(
+                        &send_sql,
+                        params,
+                        row_limit.unwrap_or(usize::MAX),
+                        |event| {
+                            let _ = sender.send(RunEvent::Stream(event));
+                        },
+                    )
                     .await;
                 match outcome {
                     Ok(current) => {

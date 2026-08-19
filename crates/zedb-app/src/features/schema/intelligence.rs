@@ -61,30 +61,46 @@ impl CompletionProvider for SchemaProvider {
             return Task::ready(Ok(CompletionResponse::Array(Vec::new())));
         };
         let sql = text.to_string();
-        let items =
-            schema_intelligence::completions(&snapshot, default_database.as_deref(), &sql, offset)
-                .into_iter()
-                .map(|suggestion| CompletionItem {
-                    label: suggestion.label.clone(),
-                    detail: (!suggestion.detail.is_empty()).then_some(suggestion.detail),
-                    kind: Some(match suggestion.kind {
-                        SuggestionKind::Database => CompletionItemKind::MODULE,
-                        SuggestionKind::Object => CompletionItemKind::STRUCT,
-                        SuggestionKind::Column => CompletionItemKind::FIELD,
-                    }),
-                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                        range: byte_range_to_lsp(&sql, suggestion.replace),
-                        new_text: suggestion.label,
-                    })),
-                    ..Default::default()
-                })
-                .collect();
+        // Placeholder values in effect at the cursor, so `${db}.` and
+        // `{db:Identifier}.` complete like the database they name.
+        let variables = crate::collect_variable_declarations(&sql)
+            .map(|declarations| crate::params_at(&declarations, Some(offset)))
+            .unwrap_or_default();
+        let params = crate::params_at(&crate::collect_param_declarations(&sql), Some(offset));
+        let items = schema_intelligence::completions_with_placeholders(
+            &snapshot,
+            default_database.as_deref(),
+            &sql,
+            offset,
+            &variables,
+            &params,
+        )
+        .into_iter()
+        .map(|suggestion| CompletionItem {
+            label: suggestion.label.clone(),
+            detail: (!suggestion.detail.is_empty()).then_some(suggestion.detail),
+            kind: Some(match suggestion.kind {
+                SuggestionKind::Database => CompletionItemKind::MODULE,
+                SuggestionKind::Object => CompletionItemKind::STRUCT,
+                SuggestionKind::Column => CompletionItemKind::FIELD,
+                SuggestionKind::Function => CompletionItemKind::FUNCTION,
+                SuggestionKind::Keyword => CompletionItemKind::KEYWORD,
+                SuggestionKind::Type => CompletionItemKind::TYPE_PARAMETER,
+            }),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                range: byte_range_to_lsp(&sql, suggestion.replace),
+                new_text: suggestion.label,
+            })),
+            ..Default::default()
+        })
+        .collect();
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 
     fn is_completion_trigger(&self, _: usize, new_text: &str, _: &mut Context<InputState>) -> bool {
         new_text.chars().last().is_some_and(|character| {
-            character == '.' || character == '_' || character.is_alphanumeric()
+            // ':' opens the type menu inside a `{name:Type}` placeholder.
+            character == '.' || character == '_' || character == ':' || character.is_alphanumeric()
         })
     }
 }
@@ -97,10 +113,42 @@ impl HoverProvider for SchemaProvider {
         _: &mut Window,
         _: &mut App,
     ) -> Task<Result<Option<Hover>>> {
+        let sql = text.to_string();
+        // Placeholders first: hovering `${db}` or `{db:Identifier}` shows
+        // the value in effect there, without needing a schema snapshot.
+        if let Some((mut markdown, value, range)) = crate::variable_hover(&sql, offset) {
+            // The value often names something the schema knows; say what
+            // it is, the way hovering the name directly would.
+            if let Some(value) = value {
+                if let Some((snapshot, default_database)) = self.snapshot() {
+                    if let Some(database) = snapshot
+                        .databases
+                        .values()
+                        .find(|database| database.name.eq_ignore_ascii_case(&value))
+                    {
+                        markdown.push_str(&format!(
+                            "\n\nDatabase with {} objects",
+                            database.objects.len()
+                        ));
+                    } else if let Some(object) = default_database
+                        .as_deref()
+                        .and_then(|database| snapshot.object(database, &value))
+                    {
+                        markdown.push_str(&format!("\n\n{} table", object.engine));
+                    }
+                }
+            }
+            return Task::ready(Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: markdown,
+                }),
+                range: Some(byte_range_to_lsp(&sql, range)),
+            })));
+        }
         let Some((snapshot, default_database)) = self.snapshot() else {
             return Task::ready(Ok(None));
         };
-        let sql = text.to_string();
         let hover =
             schema_intelligence::hover(&snapshot, default_database.as_deref(), &sql, offset).map(
                 |hover| Hover {

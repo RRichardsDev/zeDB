@@ -370,6 +370,7 @@ async fn streaming_query_honors_cap() {
     let summary = client
         .query_stream(
             "SELECT number, number * 2 FROM numbers(10000)",
+            &[],
             1_000,
             |event| match event {
                 QueryStreamEvent::Started { .. } => {}
@@ -414,6 +415,7 @@ async fn streaming_query_reports_server_progress() {
     let summary = client
         .query_stream(
             "SELECT number, sleepEachRow(0.001) FROM numbers(2000)",
+            &[],
             100_000,
             |event| {
                 if let QueryStreamEvent::Progress(event) = event {

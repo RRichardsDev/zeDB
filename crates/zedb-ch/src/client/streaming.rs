@@ -3,10 +3,13 @@ use super::*;
 impl ChClient {
     /// Run a query and report decoded columns and rows as soon as complete
     /// values arrive from ClickHouse. Aborting the caller's task cancels the
-    /// underlying HTTP request.
+    /// underlying HTTP request. `params` are ClickHouse query parameters
+    /// (for `{name:Type}` placeholders), sent as `param_<name>`; each
+    /// request is its own session, so they must ride along every time.
     pub async fn query_stream(
         &self,
         sql: &str,
+        params: &[(String, String)],
         row_limit: usize,
         mut on_event: impl FnMut(QueryStreamEvent),
     ) -> Result<QueryStreamSummary> {
@@ -20,6 +23,9 @@ impl ChClient {
         }
         if let Some(database) = &self.cfg.database {
             request = request.query(&[("database", database.as_str())]);
+        }
+        for (name, value) in params {
+            request = request.query(&[(format!("param_{name}"), value.as_str())]);
         }
         if self.cfg.read_only {
             request = request.query(&[("readonly", "2")]);

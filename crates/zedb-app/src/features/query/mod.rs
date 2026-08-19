@@ -25,7 +25,9 @@ mod view_apply;
 mod view_export;
 
 pub(crate) use buffer::{
-    nearest_occurrence, resolve_query_variables, split_statements, statement_at_cursor,
+    collect_param_declarations, collect_variable_declarations, nearest_occurrence, params_at,
+    resolve_query_variables, split_statements, sql_is_blank, statement_at_cursor,
+    strip_insert_values_comments, variable_hover,
 };
 pub(crate) use state::{
     max_rows_from_limit, tab_display_name, MaxRows, QueryEstimate, QueryOutcome, QueryResizeTarget,

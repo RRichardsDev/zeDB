@@ -818,22 +818,43 @@ impl Workspace {
                         div()
                             .flex()
                             .items_center()
-                            .gap_2()
+                            .justify_between()
                             .child(
-                                div().text_lg().text_color(theme::text()).child(format!(
-                                    "{}.{}",
-                                    selected.database, selected.object.name
-                                )),
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().text_lg().text_color(theme::text()).child(
+                                        format!("{}.{}", selected.database, selected.object.name),
+                                    ))
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py(px(2.))
+                                            .rounded(px(3.))
+                                            .bg(theme::hover())
+                                            .text_xs()
+                                            .text_color(theme::text_dim())
+                                            .child(selected.object.kind.label()),
+                                    ),
                             )
                             .child(
                                 div()
-                                    .px_2()
-                                    .py(px(2.))
+                                    .id("schema-object-close")
+                                    .px_1()
                                     .rounded(px(3.))
-                                    .bg(theme::hover())
-                                    .text_xs()
                                     .text_color(theme::text_dim())
-                                    .child(selected.object.kind.label()),
+                                    .child("\u{00d7}")
+                                    .hover(|close| {
+                                        close
+                                            .bg(theme::hover())
+                                            .text_color(theme::text())
+                                            .cursor_pointer()
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.schema.selected_object = None;
+                                        cx.notify();
+                                    })),
                             ),
                     )
                     .child(
