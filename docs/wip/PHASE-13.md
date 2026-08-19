@@ -56,6 +56,39 @@ per the `docs/contracts/ACP-STANDARDS.md` checklist (read-only tool, no server
 writes, no wake). Re-reason the byte caps as billing ceilings using
 slice 2's burn-rate numbers.
 
+## Review bar (learned building slices 0-1; apply first time)
+
+Every remaining slice gets checked against these; they are what the
+user actually inspects:
+
+- **No label may lie or mislead.** Words carry exact truth: "not
+  tested" became "not connected" because the old word implied it had
+  never worked. If a state is optimistic (shown before the control
+  plane confirms), the design must either be honest about it or
+  revert visibly on refusal.
+- **One state, every surface.** A transition started anywhere
+  (dashboard, sidebar, connect flow, Cloud page) must show everywhere
+  that state is displayed, immediately, and keep updating until
+  settled. The wake buttons going stale while connect woke the
+  service was the bug that taught this.
+- **Transitions are watched, bounded, and abandoned.** Anything
+  in-flight polls until it settles, gives up after a stated bound
+  with a message, and stops when a newer action supersedes it.
+- **Confirms must be unmissable.** An armed destructive action says
+  what the next click does in plain text where the eye already is
+  (not only a tooltip or a color), and disarms itself when abandoned.
+- **Disabled means explained.** A control that cannot work (no API
+  key, upstream rule) renders disabled with the reason in its
+  tooltip; it never lets a click bounce off a 4xx.
+- **Test upstream rules before encoding them.** Docs and plausible
+  theories both got the primary-stop rule wrong until curl against
+  the live control plane settled it (400 in every secondary state).
+  A rule shipped in the UI cites the live test, not the docs.
+- **Icons follow the app's icon grammar.** Quiet utility icons
+  (group_hover recoloring, color set on the svg element), hover color
+  announces intent (green = wake, red = stop), primary actions with a
+  cost keep words.
+
 ## Acceptance
 
 - Connecting to an idle service with a linked key is one flow: wake,
