@@ -60,9 +60,14 @@ impl Workspace {
             Some(name) => format!("Cluster: {name}"),
             None => active_name,
         };
-        let action_context = self.query.tabs[self.query.active_tab]
-            .editor
-            .focus_handle(cx);
+        // The toolbar renders on every view, including with no query tab
+        // open at all (closing the last one returns to the overview), so
+        // the editor's focus handle is optional here.
+        let action_context = self
+            .query
+            .tabs
+            .get(self.query.active_tab)
+            .map(|tab| tab.editor.focus_handle(cx));
 
         Some(
             Button::new("active-node-selector")
@@ -71,8 +76,12 @@ impl Workspace {
                 .compact()
                 .outline()
                 .dropdown_menu(move |menu: PopupMenu, _, _| {
+                    let base = match action_context.clone() {
+                        Some(handle) => menu.action_context(handle),
+                        None => menu,
+                    };
                     let mut menu = nodes.iter().cloned().fold(
-                        menu.action_context(action_context.clone()).min_w(px(180.)),
+                        base.min_w(px(180.)),
                         |menu, (index, name, reachable)| {
                             menu.menu_with_enable(name, Box::new(SelectNode { index }), reachable)
                         },

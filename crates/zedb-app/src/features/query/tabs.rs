@@ -5,7 +5,9 @@ impl Workspace {
     pub(crate) fn add_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.query.next_tab_id;
         self.query.next_tab_id += 1;
+        let label = next_tab_label(self.query.tabs.iter().map(|tab| tab.name.as_str()));
         let mut tab = Self::make_query_tab(id, "", self.schema.provider.clone(), window, cx);
+        tab.name = label;
         tab.connection = self.active_connection_name();
         self.query.tabs.push(tab);
         self.query.active_tab = self.query.tabs.len() - 1;
@@ -66,7 +68,18 @@ impl Workspace {
         };
         match nearest {
             Some(index) => self.query.active_tab = index,
-            None => self.add_query_tab(window, cx),
+            // Only the editor needs a tab to exist: closing the last one
+            // is a deliberate way out of the query view, and conjuring a
+            // scratch tab behind another view would undo that. The index
+            // still has to stay in range, because surfaces outside the
+            // editor (the connection toolbar) read the active tab.
+            None if self.show_query_editor => self.add_query_tab(window, cx),
+            None => {
+                self.query.active_tab = self
+                    .query
+                    .active_tab
+                    .min(self.query.tabs.len().saturating_sub(1))
+            }
         }
         cx.notify();
     }
@@ -93,6 +106,17 @@ impl Workspace {
             .query
             .active_tab
             .min(self.query.tabs.len().saturating_sub(1));
+        // Closing the last tab of this connection is a way out of the
+        // query view, not a request for an empty one: fall back to the
+        // cluster overview rather than opening a fresh scratch tab.
+        let any_visible = self
+            .query
+            .tabs
+            .iter()
+            .any(|tab| self.tab_on_active_connection(tab));
+        if !any_visible {
+            self.show_query_editor = false;
+        }
         cx.notify();
     }
 

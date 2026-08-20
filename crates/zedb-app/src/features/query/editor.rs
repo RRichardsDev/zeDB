@@ -149,7 +149,9 @@ impl Workspace {
     ) {
         let id = self.query.next_tab_id;
         self.query.next_tab_id += 1;
+        let label = next_tab_label(self.query.tabs.iter().map(|tab| tab.name.as_str()));
         let mut tab = Self::make_query_tab(id, sql, self.schema.provider.clone(), window, cx);
+        tab.name = label;
         tab.connection = self.active_connection_name();
         self.query.tabs.push(tab);
         self.query.active_tab = self.query.tabs.len() - 1;

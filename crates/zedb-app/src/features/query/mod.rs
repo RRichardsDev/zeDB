@@ -30,7 +30,7 @@ pub(crate) use buffer::{
     strip_insert_values_comments, variable_hover,
 };
 pub(crate) use state::{
-    max_rows_from_limit, tab_display_name, MaxRows, QueryEstimate, QueryOutcome, QueryResizeTarget,
-    QueryState, QueryTab, RunEvent, TailBatch, TailPush, TailState, TailStream, TailStreamBatch,
-    TailStripInfo, TailWatch,
+    max_rows_from_limit, next_tab_label, tab_display_name, MaxRows, QueryEstimate, QueryOutcome,
+    QueryResizeTarget, QueryState, QueryTab, RunEvent, TailBatch, TailPush, TailState, TailStream,
+    TailStreamBatch, TailStripInfo, TailWatch,
 };

@@ -97,10 +97,11 @@ use features::connections::{
 };
 use features::query::{
     collect_param_declarations, collect_variable_declarations, max_rows_from_limit,
-    nearest_occurrence, params_at, resolve_query_variables, split_statements, sql_is_blank,
-    statement_at_cursor, strip_insert_values_comments, tab_display_name, variable_hover, MaxRows,
-    QueryEstimate, QueryOutcome, QueryResizeTarget, QueryState, QueryTab, RunEvent, TailBatch,
-    TailPush, TailState, TailStream, TailStreamBatch, TailStripInfo, TailWatch,
+    nearest_occurrence, next_tab_label, params_at, resolve_query_variables, split_statements,
+    sql_is_blank, statement_at_cursor, strip_insert_values_comments, tab_display_name,
+    variable_hover, MaxRows, QueryEstimate, QueryOutcome, QueryResizeTarget, QueryState, QueryTab,
+    RunEvent, TailBatch, TailPush, TailState, TailStream, TailStreamBatch, TailStripInfo,
+    TailWatch,
 };
 use features::schema::{
     database_nodes_from_cache, schema_object_from_cache, DatabaseNode, ObjectInspectorTab,

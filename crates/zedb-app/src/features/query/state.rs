@@ -261,6 +261,22 @@ pub(crate) fn max_rows_from_limit(limit: Option<usize>) -> MaxRows {
     }
 }
 
+/// The label for a new tab: "Tab N" for the lowest N not already on a
+/// tab. Ids climb forever (tails, saved tabs, and agent targets refer
+/// to them), but the number the user reads should not: close every tab
+/// and the next one is Tab 1 again, and closing a middle tab frees its
+/// number for reuse.
+pub(crate) fn next_tab_label<'a>(existing: impl Iterator<Item = &'a str>) -> String {
+    let taken: std::collections::HashSet<usize> = existing
+        .filter_map(|name| {
+            name.strip_prefix("Tab ")
+                .and_then(|number| number.parse().ok())
+        })
+        .collect();
+    let number = (1..).find(|number| !taken.contains(number)).unwrap_or(1);
+    format!("Tab {number}")
+}
+
 pub(crate) fn tab_display_name(tab: &QueryTab) -> String {
     tab.tail
         .as_ref()
@@ -271,6 +287,21 @@ pub(crate) fn tab_display_name(tab: &QueryTab) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_numbering_fills_the_lowest_free_slot() {
+        // Fresh, and after closing everything: back to 1.
+        assert_eq!(next_tab_label(std::iter::empty()), "Tab 1");
+        assert_eq!(next_tab_label(["Tab 1", "Tab 2"].into_iter()), "Tab 3");
+        // A closed middle tab frees its number.
+        assert_eq!(next_tab_label(["Tab 1", "Tab 3"].into_iter()), "Tab 2");
+        // Renamed (saved) tabs do not reserve numbers.
+        assert_eq!(next_tab_label(["daily counts"].into_iter()), "Tab 1");
+        assert_eq!(
+            next_tab_label(["Tab 1", "daily counts", "Tab 2"].into_iter()),
+            "Tab 3"
+        );
+    }
 
     #[test]
     fn saved_row_limits_restore_to_matching_choices() {
