@@ -13,6 +13,7 @@ impl ChClient {
         row_limit: usize,
         mut on_event: impl FnMut(QueryStreamEvent),
     ) -> Result<QueryStreamSummary> {
+        self.ensure_secure_endpoint()?;
         let mut request = self
             .http
             .post(&self.cfg.url)

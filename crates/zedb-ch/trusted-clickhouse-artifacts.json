@@ -1,0 +1,10 @@
+{
+  "reviewed_at": "2026-08-20",
+  "source": "https://github.com/ClickHouse/ClickHouse/releases/tag/v26.3.12.3-lts",
+  "artifacts": [
+    { "version": "26.3.12.3", "channel": "lts", "asset": "clickhouse-macos-aarch64", "size": 160026626, "sha256": "f69ad394237f1790d56f70f18328c01caf482049047e953711e6a35a19f5ccc3" },
+    { "version": "26.3.12.3", "channel": "lts", "asset": "clickhouse-macos", "size": 169690061, "sha256": "f8ff4352578a19484a4093a2b44b4ea10676990c68a32fa01251ee7918f38c3f" },
+    { "version": "26.3.12.3", "channel": "lts", "asset": "clickhouse-common-static-26.3.12.3-amd64.tgz", "size": 221918374, "sha256": "7dbaeed746f6f9680f9464b3eaeb4d506bf539fd05999393f3a7eb2ab445ead6" },
+    { "version": "26.3.12.3", "channel": "lts", "asset": "clickhouse-common-static-26.3.12.3-arm64.tgz", "size": 202277394, "sha256": "e21ac295d4d44a7c5de8f594aaf48da1a4754f1d38c9400c77cda60ed8293ba9" }
+  ]
+}

@@ -99,6 +99,23 @@ fn misordered_months_are_rejected() {
 }
 
 #[test]
+fn unsafe_scope_names_are_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_fixture(dir.path());
+    let config_path = dir.path().join("zedb.toml");
+    let config = std::fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("global = { }", "\"../escape\" = { }");
+    std::fs::write(config_path, config).unwrap();
+
+    let error = MigrationRepo::open_root(dir.path())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("scope name"), "{error}");
+    assert!(error.contains("unsafe"), "{error}");
+}
+
+#[test]
 fn invalid_rollback_class_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     copy_fixture(dir.path());

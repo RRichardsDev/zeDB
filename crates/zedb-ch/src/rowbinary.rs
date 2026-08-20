@@ -9,6 +9,46 @@ use zedb_core::{ColumnMeta, QueryResult, Value};
 use crate::error::{ChError, Result};
 use crate::types::{parse_type, ChType};
 
+const MAX_MATERIALIZED_RESPONSE_BYTES: usize = 1024 * 1024 * 1024;
+const MAX_STREAM_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+const MAX_COLUMNS: usize = 16_384;
+const MAX_HEADER_STRING_BYTES: usize = 64 * 1024;
+const MAX_VALUE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_COLLECTION_ITEMS: usize = 100_000;
+const MAX_DECODED_VALUES: usize = 2_000_000;
+const MAX_VALUE_DEPTH: usize = 64;
+
+#[derive(Clone, Copy)]
+struct DecodeBudget {
+    remaining_values: usize,
+}
+
+impl DecodeBudget {
+    fn new() -> Self {
+        Self {
+            remaining_values: MAX_DECODED_VALUES,
+        }
+    }
+
+    fn consume(&mut self, count: usize) -> Result<()> {
+        self.remaining_values = self.remaining_values.checked_sub(count).ok_or_else(|| {
+            ChError::Decode(format!(
+                "decoded value count exceeds limit of {MAX_DECODED_VALUES}"
+            ))
+        })?;
+        Ok(())
+    }
+
+    fn ensure(&self, count: usize) -> Result<()> {
+        if count > self.remaining_values {
+            return Err(ChError::Decode(format!(
+                "decoded value count exceeds limit of {MAX_DECODED_VALUES}"
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Incrementally decodes a `RowBinaryWithNamesAndTypes` response.
 ///
 /// ClickHouse does not frame individual rows, so an incomplete row is retained
@@ -17,6 +57,7 @@ pub(crate) struct StreamingDecoder {
     buffer: Vec<u8>,
     columns: Option<Vec<ColumnMeta>>,
     types: Vec<ChType>,
+    budget: DecodeBudget,
 }
 
 impl StreamingDecoder {
@@ -25,6 +66,7 @@ impl StreamingDecoder {
             buffer: Vec::new(),
             columns: None,
             types: Vec::new(),
+            budget: DecodeBudget::new(),
         }
     }
 
@@ -33,6 +75,16 @@ impl StreamingDecoder {
     }
 
     pub(crate) fn push(&mut self, chunk: &[u8]) -> Result<Vec<Vec<Value>>> {
+        let buffered = self
+            .buffer
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| ChError::Decode("stream buffer length overflow".into()))?;
+        if buffered > MAX_STREAM_BUFFER_BYTES {
+            return Err(ChError::Decode(format!(
+                "incomplete RowBinary data exceeds {MAX_STREAM_BUFFER_BYTES} byte stream buffer limit"
+            )));
+        }
         self.buffer.extend_from_slice(chunk);
         if self.columns.is_none() && !self.try_decode_header()? {
             return Ok(Vec::new());
@@ -47,8 +99,9 @@ impl StreamingDecoder {
             };
             let row_start = reader.pos;
             let mut row = Vec::with_capacity(self.types.len());
+            let mut row_budget = self.budget;
             for ty in &self.types {
-                match read_value(&mut reader, ty) {
+                match read_value(&mut reader, ty, &mut row_budget, 0) {
                     Ok(value) => row.push(value),
                     Err(error) if is_incomplete(&error) => {
                         self.buffer.drain(..consumed);
@@ -61,6 +114,7 @@ impl StreamingDecoder {
                 break;
             }
             consumed = reader.pos;
+            self.budget = row_budget;
             rows.push(row);
             if consumed == self.buffer.len() {
                 break;
@@ -95,15 +149,15 @@ impl StreamingDecoder {
             pos: 0,
         };
         let result = (|| {
-            let n_cols = reader.varuint()? as usize;
+            let n_cols = reader.bounded_len("column count", MAX_COLUMNS)?;
             let mut names = Vec::with_capacity(n_cols);
             for _ in 0..n_cols {
-                names.push(reader.string()?);
+                names.push(reader.string(MAX_HEADER_STRING_BYTES)?);
             }
             let mut type_names = Vec::with_capacity(n_cols);
             let mut types = Vec::with_capacity(n_cols);
             for _ in 0..n_cols {
-                let type_name = reader.string()?;
+                let type_name = reader.string(MAX_HEADER_STRING_BYTES)?;
                 types.push(parse_type(&type_name)?);
                 type_names.push(type_name);
             }
@@ -133,25 +187,37 @@ fn is_incomplete(error: &ChError) -> bool {
 }
 
 pub fn decode(buf: &[u8]) -> Result<QueryResult> {
+    if buf.len() > MAX_MATERIALIZED_RESPONSE_BYTES {
+        return Err(ChError::Decode(format!(
+            "RowBinary response exceeds {MAX_MATERIALIZED_RESPONSE_BYTES} byte limit"
+        )));
+    }
     let mut r = Reader { buf, pos: 0 };
-    let n_cols = r.varuint()? as usize;
+    let n_cols = r.bounded_len("column count", MAX_COLUMNS)?;
     let mut names = Vec::with_capacity(n_cols);
     for _ in 0..n_cols {
-        names.push(r.string()?);
+        names.push(r.string(MAX_HEADER_STRING_BYTES)?);
     }
     let mut type_names = Vec::with_capacity(n_cols);
     let mut types = Vec::with_capacity(n_cols);
     for _ in 0..n_cols {
-        let s = r.string()?;
+        let s = r.string(MAX_HEADER_STRING_BYTES)?;
         types.push(parse_type(&s)?);
         type_names.push(s);
     }
 
     let mut rows = Vec::new();
+    let mut budget = DecodeBudget::new();
     while !r.at_end() {
+        let row_start = r.pos;
         let mut row = Vec::with_capacity(n_cols);
         for ty in &types {
-            row.push(read_value(&mut r, ty)?);
+            row.push(read_value(&mut r, ty, &mut budget, 0)?);
+        }
+        if r.pos == row_start {
+            return Err(ChError::Decode(
+                "RowBinary data remains after a zero-column header".into(),
+            ));
         }
         rows.push(row);
     }
@@ -175,15 +241,19 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        if self.pos + n > self.buf.len() {
+        let end = self
+            .pos
+            .checked_add(n)
+            .ok_or_else(|| ChError::Decode("input offset overflow".into()))?;
+        if end > self.buf.len() {
             return Err(ChError::Decode(format!(
                 "unexpected end of data at offset {} (wanted {n} bytes of {})",
                 self.pos,
                 self.buf.len()
             )));
         }
-        let out = &self.buf[self.pos..self.pos + n];
-        self.pos += n;
+        let out = &self.buf[self.pos..end];
+        self.pos = end;
         Ok(out)
     }
 
@@ -203,8 +273,20 @@ impl<'a> Reader<'a> {
         Err(ChError::Decode("varuint too long".into()))
     }
 
-    fn string(&mut self) -> Result<String> {
-        let len = self.varuint()? as usize;
+    fn bounded_len(&mut self, label: &str, max: usize) -> Result<usize> {
+        let raw = self.varuint()?;
+        let len = usize::try_from(raw)
+            .map_err(|_| ChError::Decode(format!("{label} does not fit in memory")))?;
+        if len > max {
+            return Err(ChError::Decode(format!(
+                "{label} {len} exceeds limit of {max}"
+            )));
+        }
+        Ok(len)
+    }
+
+    fn string(&mut self, max: usize) -> Result<String> {
+        let len = self.bounded_len("header string length", max)?;
         let bytes = self.take(len)?;
         String::from_utf8(bytes.to_vec())
             .map_err(|_| ChError::Decode("invalid utf-8 in header string".into()))
@@ -218,7 +300,18 @@ macro_rules! le {
     }};
 }
 
-fn read_value(r: &mut Reader, ty: &ChType) -> Result<Value> {
+fn read_value(
+    r: &mut Reader,
+    ty: &ChType,
+    budget: &mut DecodeBudget,
+    depth: usize,
+) -> Result<Value> {
+    if depth >= MAX_VALUE_DEPTH {
+        return Err(ChError::Decode(format!(
+            "value nesting exceeds limit of {MAX_VALUE_DEPTH}"
+        )));
+    }
+    budget.consume(1)?;
     Ok(match ty {
         ChType::UInt8 => Value::UInt(r.u8()?.into()),
         ChType::UInt16 => Value::UInt(le!(r, u16).into()),
@@ -234,13 +327,13 @@ fn read_value(r: &mut Reader, ty: &ChType) -> Result<Value> {
         ChType::Float64 => Value::Float(le!(r, f64)),
         ChType::Bool => Value::Bool(r.u8()? != 0),
         ChType::String => {
-            let len = r.varuint()? as usize;
+            let len = r.bounded_len("string length", MAX_VALUE_BYTES)?;
             bytes_to_value(r.take(len)?)
         }
         // The driver requests JSON as its string form
         // (output_format_binary_write_json_as_string).
         ChType::Json => {
-            let len = r.varuint()? as usize;
+            let len = r.bounded_len("JSON length", MAX_VALUE_BYTES)?;
             bytes_to_value(r.take(len)?)
         }
         ChType::FixedString(n) => bytes_to_value(r.take(*n)?),
@@ -316,32 +409,38 @@ fn read_value(r: &mut Reader, ty: &ChType) -> Result<Value> {
             if r.u8()? != 0 {
                 Value::Null
             } else {
-                read_value(r, inner)?
+                read_value(r, inner, budget, depth + 1)?
             }
         }
         // RowBinary serializes LowCardinality columns as their inner type.
-        ChType::LowCardinality(inner) => read_value(r, inner)?,
+        ChType::LowCardinality(inner) => read_value(r, inner, budget, depth + 1)?,
         ChType::Array(inner) => {
-            let len = r.varuint()? as usize;
-            let mut items = Vec::with_capacity(len);
+            let len = r.bounded_len("array length", MAX_COLLECTION_ITEMS)?;
+            budget.ensure(len)?;
+            let mut items = Vec::with_capacity(len.min(1024));
             for _ in 0..len {
-                items.push(read_value(r, inner)?);
+                items.push(read_value(r, inner, budget, depth + 1)?);
             }
             Value::Array(items)
         }
         ChType::Tuple(items) => {
-            let mut out = Vec::with_capacity(items.len());
+            budget.ensure(items.len())?;
+            let mut out = Vec::with_capacity(items.len().min(1024));
             for item_ty in items {
-                out.push(read_value(r, item_ty)?);
+                out.push(read_value(r, item_ty, budget, depth + 1)?);
             }
             Value::Tuple(out)
         }
         ChType::Map(key, value) => {
-            let len = r.varuint()? as usize;
-            let mut pairs = Vec::with_capacity(len);
+            let len = r.bounded_len("map length", MAX_COLLECTION_ITEMS)?;
+            let child_values = len
+                .checked_mul(2)
+                .ok_or_else(|| ChError::Decode("map value count overflow".into()))?;
+            budget.ensure(child_values)?;
+            let mut pairs = Vec::with_capacity(len.min(1024));
             for _ in 0..len {
-                let k = read_value(r, key)?;
-                let v = read_value(r, value)?;
+                let k = read_value(r, key, budget, depth + 1)?;
+                let v = read_value(r, value, budget, depth + 1)?;
                 pairs.push((k, v));
             }
             Value::Map(pairs)
@@ -371,6 +470,21 @@ fn epoch_date() -> NaiveDate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn varuint(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if value == 0 {
+                return out;
+            }
+        }
+    }
 
     fn header(cols: &[(&str, &str)]) -> Vec<u8> {
         let mut buf = vec![cols.len() as u8];
@@ -428,6 +542,34 @@ mod tests {
         let mut buf = header(&[("id", "UInt64")]);
         buf.extend_from_slice(&[1, 2, 3]); // only 3 of 8 bytes
         assert!(matches!(decode(&buf), Err(ChError::Decode(_))));
+    }
+
+    #[test]
+    fn rejects_attacker_controlled_lengths_before_allocation() {
+        let too_many_columns = varuint((MAX_COLUMNS + 1) as u64);
+        assert!(decode(&too_many_columns).is_err());
+
+        let mut oversized_string = header(&[("value", "String")]);
+        oversized_string.extend(varuint((MAX_VALUE_BYTES + 1) as u64));
+        assert!(decode(&oversized_string).is_err());
+
+        let mut oversized_array = header(&[("value", "Array(UInt8)")]);
+        oversized_array.extend(varuint((MAX_COLLECTION_ITEMS + 1) as u64));
+        assert!(decode(&oversized_array).is_err());
+    }
+
+    #[test]
+    fn checked_reader_offsets_cannot_wrap() {
+        let mut reader = Reader {
+            buf: &[],
+            pos: usize::MAX,
+        };
+        assert!(matches!(reader.take(1), Err(ChError::Decode(_))));
+    }
+
+    #[test]
+    fn zero_column_header_with_trailing_data_is_rejected() {
+        assert!(decode(&[0, 1]).is_err());
     }
 
     #[test]

@@ -7,6 +7,36 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- ClickHouse connections no longer send credentials to `/ping` or follow HTTP
+  redirects, remote plaintext HTTP endpoints are refused, and native transport
+  no longer falls back from TLS to plaintext outside an explicit loopback HTTP
+  development connection.
+- ClickHouse binary downloads are streamed through strict compressed and
+  expanded size limits, checked against GitHub release digests before use, and
+  extracted without invoking a system archive tool or following archive links.
+- Migration comments, string literals, and `DEFINER` clauses can no longer
+  select admin credentials; elevated routing is limited to explicit
+  allowlisted statement forms.
+- Guarded agent queries and query-grid distinct-value probes now enforce
+  ClickHouse result-byte limits. Agent responses stream through a client-side
+  ceiling, and MCP request and serialized output frames are capped.
+- Regeneration rejects unsafe scope names and refuses symlinks beneath
+  `current-state`, preventing generated writes or stale-file cleanup from
+  escaping the repository tree.
+- ClickHouse response decoding now rejects oversized wire lengths, excessive
+  collections or nesting, and invalid type parameters before large allocation
+  or unsafe arithmetic.
+- ClickHouse HTTP and native operations now have client-side deadlines, and a
+  stalled long-lived native stream closes its underlying connection.
+- Migration tracking and audit logs no longer retain resolved secret values or
+  credential-bearing endpoint details, and native pool keys no longer contain
+  plaintext passwords or setting values.
+- Downloaded and cached ClickHouse executables now require a matching
+  source-controlled zeDB artifact hash before any process launch; unreviewed
+  versions fail closed.
+
 ## v0.1.33 - 2026-08-20
 
 Interface fixes, all found by a day of real use.

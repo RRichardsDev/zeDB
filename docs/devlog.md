@@ -1,3 +1,55 @@
+## 2026-08-20: dependency advisory gate
+
+- CI now runs cargo-deny against the all-features graph for the supported macOS
+  and Linux targets. Vulnerabilities, unsoundness advisories, and yanked crates
+  fail the build. Unmaintained transitive crates remain visible as warnings
+  while upstream replacements are evaluated.
+- The first remediation updated the shipped HTTP/2 graph from vulnerable
+  `h2 0.4.15` to patched `h2 0.4.16`.
+
+## 2026-08-20: RowBinary decoder budgets
+
+- The RowBinary boundary now caps materialized input, retained partial stream
+  data, header fields, values, collection counts, total decoded values, tuple
+  width, and recursive nesting. Wire lengths and reader offsets use checked
+  conversions and arithmetic.
+- Type strings are bounded before parsing. `FixedString`, `DateTime64`, and
+  Decimal parameters are validated before they can control reads or numeric
+  operations.
+- Adversarial regressions cover oversized declarations, offset overflow,
+  zero-column non-progress, invalid numeric parameters, and excessive type and
+  JSON nesting.
+
+## 2026-08-20: transport deadlines
+
+- The shared ClickHouse HTTP client now has a five-minute whole-request
+  deadline in addition to its connect timeout. Native connect, materialized
+  query, and execute calls have total deadlines, while long-lived native
+  streams enforce an idle deadline and close the socket on expiry.
+- A loopback peer that accepts an HTTP request and then remains silent is
+  covered by a bounded regression test.
+- Release downloads enforce an idle deadline in addition to their total
+  deadline. Replay, formatting, binary verification, and smoke checks use a
+  shared process runner that drains output, then kills and reaps timed-out
+  children.
+
+## 2026-08-20: secret persistence minimization
+
+- Tracking records no longer store resolved template values. Durable errors
+  redact every custom parameter value, and audit endpoints retain only scheme,
+  host, and port.
+- Unix audit files are forced to mode `0600`, including older files, and native
+  pool identity keys use a process-salted digest for passwords and driver
+  setting values.
+
+## 2026-08-20: ClickHouse artifact trust manifest
+
+- Added a checked-in manifest containing the exact size and SHA-256 digest of
+  every supported platform asset for the reviewed 26.3.12.3 LTS release.
+- Cache validation and downloads use the manifest as their authority. GitHub
+  metadata must agree but cannot replace the checked-in digest, fallback
+  selection uses only reviewed versions, and unknown versions fail closed.
+
 ## 2026-08-16: the flaky-suite saga, solved
 
 Server-backed tests had been flaky for days ("missing: ${db}.events",

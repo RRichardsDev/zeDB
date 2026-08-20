@@ -133,6 +133,20 @@ impl RepoConfig {
                 ),
             });
         }
+        for scope in config.scopes.keys() {
+            if scope.is_empty()
+                || !scope
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+            {
+                return Err(RepoError::Config {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "scope name {scope:?} is unsafe; use one lowercase ASCII path component"
+                    ),
+                });
+            }
+        }
         Ok(config)
     }
 

@@ -46,13 +46,7 @@ impl Runner<'_> {
 
     /// Strip rendered secrets from text that outlives the run.
     pub(super) fn redact(&self, text: &str, params: &BTreeMap<String, String>) -> String {
-        let mut redacted = text.to_string();
-        for (name, value) in params {
-            if name.to_lowercase().contains("password") && !value.is_empty() {
-                redacted = redacted.replace(value.as_str(), "[redacted]");
-            }
-        }
-        redacted
+        redact_params(text, params)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -66,11 +60,9 @@ impl Runner<'_> {
         duration_secs: f64,
         params: &BTreeMap<String, String>,
     ) -> Result<(), RunnerError> {
-        let stored_params: Vec<String> = params
-            .iter()
-            .filter(|(name, _)| !name.to_lowercase().contains("password"))
-            .map(|(name, value)| format!("{}: {}", quote(name), quote(value)))
-            .collect();
+        // Resolved template values may be credentials regardless of their
+        // names. Tracking records the run outcome, never parameter values.
+        let _ = params;
         let error_sql = match error {
             Some(message) => quote(message),
             None => "NULL".into(),
@@ -84,7 +76,7 @@ impl Runner<'_> {
             quote(action),
             quote(status),
             quote(&self.run_id),
-            stored_params.join(", ")
+            ""
         );
         self.client
             .execute(&sql)
@@ -106,7 +98,7 @@ impl Runner<'_> {
         let line = format!(
             "{{\"time\":{:?},\"server\":{:?},\"db\":{:?},\"migration\":{migration},\"action\":{:?},\"status\":{:?},\"run_id\":{:?},\"error\":{:?}}}\n",
             chrono::Utc::now().to_rfc3339(),
-            self.options.server.url,
+            audit_endpoint(&self.options.server.url),
             database,
             action,
             status,
@@ -118,11 +110,7 @@ impl Runner<'_> {
                 .unwrap_or_else(std::env::temp_dir)
                 .join("zedb");
             std::fs::create_dir_all(&dir)?;
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join("audit.jsonl"))?;
-            file.write_all(line.as_bytes())
+            append_audit_line(&dir.join("audit.jsonl"), line.as_bytes())
         })();
         if let Err(error) = result {
             eprintln!("warning: could not write audit log: {error}");
@@ -254,5 +242,85 @@ impl Runner<'_> {
             start.elapsed().as_secs_f64()
         );
         Ok(())
+    }
+}
+
+fn redact_params(text: &str, params: &BTreeMap<String, String>) -> String {
+    let mut redacted = text.to_string();
+    for (name, value) in params {
+        if name != "db" && name != "cluster" && !value.is_empty() {
+            redacted = redacted.replace(value.as_str(), "[redacted]");
+        }
+    }
+    redacted
+}
+
+fn audit_endpoint(endpoint: &str) -> String {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return "[invalid endpoint]".into();
+    };
+    let Some(host) = url.host_str() else {
+        return "[invalid endpoint]".into();
+    };
+    match url.port() {
+        Some(port) => format!("{}://{host}:{port}", url.scheme()),
+        None => format!("{}://{host}", url.scheme()),
+    }
+}
+
+fn append_audit_line(path: &std::path::Path, line: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(line)
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    #[test]
+    fn redacts_all_custom_parameter_values() {
+        let params = BTreeMap::from([
+            ("db".into(), "analytics".into()),
+            ("cluster".into(), "main".into()),
+            ("api_key".into(), "key-123".into()),
+            ("signed_url".into(), "token-456".into()),
+        ]);
+        let redacted = redact_params("analytics main failed with key-123 at token-456", &params);
+        assert_eq!(
+            redacted,
+            "analytics main failed with [redacted] at [redacted]"
+        );
+    }
+
+    #[test]
+    fn audit_endpoint_discards_credentials_paths_and_queries() {
+        assert_eq!(
+            audit_endpoint("https://user:pass@db.example.com:8443/signed/path?token=secret"),
+            "https://db.example.com:8443"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_file_is_restricted_even_when_it_already_exists() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit.jsonl");
+        std::fs::write(&path, b"old\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        append_audit_line(&path, b"new\n").unwrap();
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }

@@ -9,6 +9,7 @@
 //! world go through the CLI's consent flags like any other process.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use serde_json::{json, Value};
 use zedb_core::repo::MigrationRepo;
@@ -21,12 +22,18 @@ use crate::{ChClient, ChConfig};
 
 mod handlers;
 
+const MAX_MCP_REQUEST_BYTES: usize = 1024 * 1024;
+const MAX_MCP_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_MCP_TEXT_BYTES: usize = (MAX_MCP_OUTPUT_BYTES - 4096) / 6;
+const OUTPUT_TRUNCATED: &str = "\n[output truncated at the MCP safety limit]\n";
+
 /// Server-side caps applied to every agent query.
 #[derive(Clone, Copy)]
 pub struct QueryCaps {
     pub max_execution_time_secs: u32,
     pub max_result_rows: u64,
     pub max_bytes_to_read: u64,
+    pub max_result_bytes: u64,
 }
 
 impl Default for QueryCaps {
@@ -37,6 +44,9 @@ impl Default for QueryCaps {
             // 10 GiB scanned is generous for exploration and still a
             // ceiling a production cluster survives.
             max_bytes_to_read: 10 * 1024 * 1024 * 1024,
+            // Independent of bytes scanned: one generated value can be much
+            // larger than its source data.
+            max_result_bytes: MAX_MCP_OUTPUT_BYTES as u64,
         }
     }
 }
@@ -87,26 +97,34 @@ impl McpServer {
         let Some(socket) = &self.app_socket else {
             return Err("this tool needs the zeDB app; the pane provides it".into());
         };
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::io::{AsyncWriteExt, BufReader};
         let stream = tokio::net::UnixStream::connect(socket)
             .await
             .map_err(|error| format!("app bridge unavailable: {error}"))?;
         let (read_half, mut write_half) = stream.into_split();
         let request = json!({ "tool": name, "arguments": arguments });
+        let request = request.to_string();
+        if request.len() > MAX_MCP_REQUEST_BYTES {
+            return Err("app bridge request exceeds the MCP safety limit".into());
+        }
         write_half
-            .write_all(request.to_string().as_bytes())
+            .write_all(request.as_bytes())
             .await
             .map_err(|error| error.to_string())?;
         write_half
             .write_all(b"\n")
             .await
             .map_err(|error| error.to_string())?;
-        let mut line = String::new();
-        BufReader::new(read_half)
-            .read_line(&mut line)
-            .await
-            .map_err(|error| error.to_string())?;
-        let reply: Value = serde_json::from_str(&line).map_err(|error| error.to_string())?;
+        let mut reader = BufReader::new(read_half);
+        let line = match read_bounded_line(&mut reader, MAX_MCP_OUTPUT_BYTES).await {
+            Ok(BoundedLine::Line(line)) => line,
+            Ok(BoundedLine::TooLarge) => {
+                return Err("app bridge reply exceeds the MCP safety limit".into())
+            }
+            Ok(BoundedLine::Eof) => return Err("app bridge closed without a reply".into()),
+            Err(error) => return Err(error.to_string()),
+        };
+        let reply: Value = serde_json::from_slice(&line).map_err(|error| error.to_string())?;
         let text = reply
             .get("text")
             .and_then(Value::as_str)
@@ -242,12 +260,126 @@ impl McpServer {
         // Tool errors are results with isError, per MCP; protocol errors
         // stay JSON-RPC errors.
         Ok(match outcome {
-            Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+            Ok(text) => json!({
+                "content": [{ "type": "text", "text": bounded_text(&text) }]
+            }),
             Err(text) => json!({
-                "content": [{ "type": "text", "text": text }],
+                "content": [{ "type": "text", "text": bounded_text(&text) }],
                 "isError": true,
             }),
         })
+    }
+}
+
+struct BoundedText {
+    text: String,
+    payload_limit: usize,
+    truncated: bool,
+}
+
+impl BoundedText {
+    fn new(limit: usize) -> Self {
+        Self {
+            text: String::with_capacity(limit.min(64 * 1024)),
+            payload_limit: limit.saturating_sub(OUTPUT_TRUNCATED.len()),
+            truncated: false,
+        }
+    }
+
+    fn finish(mut self) -> String {
+        if self.truncated {
+            self.text.push_str(OUTPUT_TRUNCATED);
+        }
+        self.text
+    }
+}
+
+impl std::fmt::Write for BoundedText {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        if self.truncated {
+            return Ok(());
+        }
+        let remaining = self.payload_limit.saturating_sub(self.text.len());
+        if value.len() <= remaining {
+            self.text.push_str(value);
+            return Ok(());
+        }
+        let mut end = remaining.min(value.len());
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.text.push_str(&value[..end]);
+        self.truncated = true;
+        Ok(())
+    }
+}
+
+fn bounded_text(value: &str) -> String {
+    let mut output = BoundedText::new(MAX_MCP_TEXT_BYTES);
+    let _ = output.write_str(value);
+    output.finish()
+}
+
+fn serialize_bounded_response(response: &Value) -> Vec<u8> {
+    let encoded = serde_json::to_vec(response).expect("JSON values always serialize");
+    if encoded.len() <= MAX_MCP_OUTPUT_BYTES {
+        return encoded;
+    }
+    serde_json::to_vec(&json!({
+        "jsonrpc": "2.0",
+        "id": response.get("id").cloned().unwrap_or(Value::Null),
+        "error": {
+            "code": -32603,
+            "message": "response exceeds the MCP safety limit",
+        },
+    }))
+    .expect("static JSON response always serializes")
+}
+
+enum BoundedLine {
+    Line(Vec<u8>),
+    TooLarge,
+    Eof,
+}
+
+async fn read_bounded_line<R>(reader: &mut R, limit: usize) -> std::io::Result<BoundedLine>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt as _;
+
+    let mut line = Vec::with_capacity(limit.min(8192));
+    let mut too_large = false;
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return if too_large {
+                Ok(BoundedLine::TooLarge)
+            } else if line.is_empty() {
+                Ok(BoundedLine::Eof)
+            } else {
+                Ok(BoundedLine::Line(line))
+            };
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |index| index + 1);
+        let payload = newline.unwrap_or(available.len());
+        if !too_large {
+            if line.len().saturating_add(payload) > limit {
+                too_large = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(&available[..payload]);
+            }
+        }
+        reader.consume(consumed);
+        if newline.is_some() {
+            return if too_large {
+                Ok(BoundedLine::TooLarge)
+            } else {
+                Ok(BoundedLine::Line(line))
+            };
+        }
     }
 }
 
@@ -425,16 +557,22 @@ fn tool_definitions(with_app_tools: bool, with_schema_cache: bool) -> Value {
 
 /// Serve MCP over stdio until stdin closes.
 pub async fn serve_stdio(server: McpServer) -> std::io::Result<()> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncWriteExt, BufReader};
     let stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
-    let mut lines = BufReader::new(stdin).lines();
-    while let Some(line) = lines.next_line().await? {
-        let Ok(message) = serde_json::from_str::<Value>(&line) else {
+    let mut reader = BufReader::new(stdin);
+    loop {
+        let line = match read_bounded_line(&mut reader, MAX_MCP_REQUEST_BYTES).await? {
+            BoundedLine::Line(line) => line,
+            BoundedLine::TooLarge => continue,
+            BoundedLine::Eof => break,
+        };
+        let Ok(message) = serde_json::from_slice::<Value>(&line) else {
             continue;
         };
         if let Some(response) = server.handle(message).await {
-            stdout.write_all(response.to_string().as_bytes()).await?;
+            let response = serialize_bounded_response(&response);
+            stdout.write_all(&response).await?;
             stdout.write_all(b"\n").await?;
             stdout.flush().await?;
         }
@@ -578,5 +716,43 @@ mod tests {
             .as_str()
             .expect("text");
         assert!(text.contains("no ClickHouse connection"));
+    }
+
+    #[test]
+    fn bounded_text_is_utf8_safe_and_marks_truncation() {
+        let mut output = BoundedText::new(128);
+        write!(output, "{}", "é".repeat(100)).unwrap();
+        let output = output.finish();
+        assert!(output.len() <= 128);
+        assert!(output.ends_with(OUTPUT_TRUNCATED));
+    }
+
+    #[test]
+    fn serialized_responses_stay_within_the_wire_limit() {
+        let text = bounded_text(&"\0".repeat(MAX_MCP_TEXT_BYTES));
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "content": [{ "type": "text", "text": text }] },
+        });
+        assert!(serialize_bounded_response(&response).len() <= MAX_MCP_OUTPUT_BYTES);
+    }
+
+    #[tokio::test]
+    async fn bounded_lines_drain_oversized_messages() {
+        use tokio::io::{AsyncWriteExt, BufReader};
+
+        let (reader, mut writer) = tokio::io::duplex(64);
+        writer.write_all(b"0123456789\n{}\n").await.unwrap();
+        drop(writer);
+        let mut reader = BufReader::new(reader);
+        assert!(matches!(
+            read_bounded_line(&mut reader, 8).await.unwrap(),
+            BoundedLine::TooLarge
+        ));
+        let BoundedLine::Line(line) = read_bounded_line(&mut reader, 8).await.unwrap() else {
+            panic!("expected the next bounded line");
+        };
+        assert_eq!(line, b"{}");
     }
 }

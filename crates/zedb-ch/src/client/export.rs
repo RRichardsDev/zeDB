@@ -15,6 +15,7 @@ impl ChClient {
         use futures_util::StreamExt as _;
         use tokio::io::AsyncWriteExt as _;
 
+        self.ensure_secure_endpoint()?;
         let mut req = self
             .http
             .post(&self.cfg.url)

@@ -71,6 +71,10 @@ refresh_offset_expr = { dummy = "1 HOUR 42 MINUTE", sentinel = "2 HOUR 53 MINUTE
 # interval expressions).
 ```
 
+Scope names are directory names under `current-state` and must match
+`[a-z0-9_]+`. Absolute paths, separators, parent components, uppercase letters,
+and punctuation are rejected when the repo opens.
+
 - `${param}` placeholders may appear in identifier or expression position.
   Identifier-position values must match `[A-Za-z_][A-Za-z0-9_]*` at render
   time; anything else is a hard error (ClickHouse cannot parameterize

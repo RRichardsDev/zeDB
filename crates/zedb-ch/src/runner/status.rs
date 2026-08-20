@@ -62,8 +62,6 @@ static NEEDS_ADMIN: LazyLock<regex::Regex> = LazyLock::new(|| {
     )
     .expect("static regex")
 });
-static NEEDS_ADMIN_ANYWHERE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"(?i)\bDEFINER\b").expect("static regex"));
 
 fn body_lines(statement: &str) -> Vec<&str> {
     statement
@@ -72,19 +70,15 @@ fn body_lines(statement: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Statements needing elevated grants, judged on the statement body.
-/// Definers route to admin as belt and braces (the migration user may
-/// hold SET DEFINER, but admin is the reliable executor).
+/// Statements needing elevated grants, restricted to an allowlist of
+/// statement forms at the start of the SQL body. Comments, literals, and
+/// optional clauses cannot grant access to the admin executor.
 pub fn needs_admin(statement: &str) -> bool {
     let lines = body_lines(statement);
     let Some(first) = lines.first() else {
         return false;
     };
     NEEDS_ADMIN.is_match(first.trim())
-        || NEEDS_ADMIN_ANYWHERE.is_match(&lines.join(
-            "
-",
-        ))
 }
 
 /// SYSTEM statements act on the connected node only (no ON CLUSTER on
@@ -148,6 +142,20 @@ mod tests {
             "CREATE TABLE system_log (x UInt8) ENGINE = Memory"
         ));
         assert!(!is_system("SELECT * FROM system.tables"));
+    }
+
+    #[test]
+    fn admin_routing_requires_an_allowlisted_statement_form() {
+        assert!(needs_admin("-- maintenance\nOPTIMIZE TABLE events FINAL"));
+        assert!(needs_admin("ALTER TABLE events DELETE WHERE expired"));
+        assert!(needs_admin("CREATE FUNCTION f AS x -> x + 1"));
+
+        assert!(!needs_admin("SELECT 1 /* DEFINER */"));
+        assert!(!needs_admin("SELECT 'DEFINER'"));
+        assert!(!needs_admin(
+            "CREATE VIEW v DEFINER = admin SQL SECURITY DEFINER AS SELECT 1"
+        ));
+        assert!(!needs_admin("/* OPTIMIZE TABLE secret */ SELECT 1"));
     }
 
     #[test]

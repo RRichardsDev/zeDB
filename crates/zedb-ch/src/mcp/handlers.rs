@@ -282,35 +282,39 @@ impl McpServer {
                 self.caps.max_execution_time_secs,
                 self.caps.max_result_rows,
                 self.caps.max_bytes_to_read,
+                self.caps.max_result_bytes,
             )
             .await
             .map_err(|error| error.to_string())?;
-        let mut out = String::new();
-        out.push_str(
-            &result
-                .columns
-                .iter()
-                .map(|column| column.name.clone())
-                .collect::<Vec<_>>()
-                .join("\t"),
-        );
-        out.push('\n');
-        for row in &result.rows {
-            out.push_str(
-                &row.iter()
-                    .map(|value| value.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\t"),
-            );
-            out.push('\n');
+        let mut out = BoundedText::new(MAX_MCP_TEXT_BYTES);
+        for (index, column) in result.columns.iter().enumerate() {
+            if index > 0 {
+                write!(out, "\t").expect("writing to a String cannot fail");
+            }
+            write!(out, "{}", column.name).expect("writing to a String cannot fail");
         }
-        if result.rows.len() as u64 >= self.caps.max_result_rows {
-            out.push_str(&format!(
-                "(capped at {} rows; narrow the query for more)\n",
+        writeln!(out).expect("writing to a String cannot fail");
+        'rows: for row in &result.rows {
+            for (index, value) in row.iter().enumerate() {
+                if index > 0 {
+                    write!(out, "\t").expect("writing to a String cannot fail");
+                }
+                write!(out, "{value}").expect("writing to a String cannot fail");
+                if out.truncated {
+                    break 'rows;
+                }
+            }
+            writeln!(out).expect("writing to a String cannot fail");
+        }
+        if !out.truncated && result.rows.len() as u64 >= self.caps.max_result_rows {
+            writeln!(
+                out,
+                "(capped at {} rows; narrow the query for more)",
                 self.caps.max_result_rows
-            ));
+            )
+            .expect("writing to a String cannot fail");
         }
-        Ok(out)
+        Ok(out.finish())
     }
 }
 

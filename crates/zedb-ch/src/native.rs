@@ -1,7 +1,8 @@
 //! Native (TCP) protocol transport.
 //!
-//! A persistent connection over ClickHouse's native protocol (9440 TLS
-//! preferred, then 9000 plaintext) via `klickhouse`, decoded into the same
+//! A persistent connection over ClickHouse's native protocol (9440 TLS,
+//! with 9000 plaintext limited to explicit loopback HTTP development) via
+//! `klickhouse`, decoded into the same
 //! driver-agnostic [`zedb_core::Value`] model the HTTP path produces. Reads
 //! route here when a pooled connection exists ([`crate::ChClient::query`]);
 //! anything mutating stays on HTTP, where a failure is unambiguous.
@@ -18,6 +19,10 @@ use zedb_core::{ColumnMeta, QueryResult, Value};
 
 use crate::error::{ChError, Result};
 use crate::ChConfig;
+
+const NATIVE_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const NATIVE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+const NATIVE_STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 mod codec;
 mod pool;
@@ -64,12 +69,18 @@ impl Drop for NativeTransport {
 
 impl NativeClient {
     /// Connect to the native port of the HTTP config's host: the server's
-    /// own `getServerPort('tcp_port_secure')` over TLS first, then
-    /// `tcp_port` plaintext (defaulting to 9440/9000 when discovery
-    /// fails). Applies `readonly = 2` (for read-only connections) and the
-    /// driver settings before returning, so a handed-out client is never
-    /// missing the session posture.
+    /// own `getServerPort('tcp_port_secure')` over TLS. Plain `tcp_port` is
+    /// considered only for a loopback HTTP configuration (defaulting to
+    /// 9440/9000 when discovery fails). Applies `readonly = 2` for read-only
+    /// connections and the driver settings before returning, so a handed-out
+    /// client is never missing the session posture.
     pub async fn connect(cfg: &ChConfig) -> Result<Self> {
+        tokio::time::timeout(NATIVE_CONNECT_TIMEOUT, Self::connect_inner(cfg))
+            .await
+            .map_err(|_| ChError::NativeTransport("native connection deadline exceeded".into()))?
+    }
+
+    async fn connect_inner(cfg: &ChConfig) -> Result<Self> {
         let host = host_of(&cfg.url)
             .ok_or_else(|| ChError::NativeTransport(format!("no host in URL {:?}", cfg.url)))?;
         let options = klickhouse::ClientOptions {
@@ -95,32 +106,7 @@ impl NativeClient {
         // remap offset is measurable, so shifted candidates go first; the
         // identity check decides what actually answered.
         let offset = discovered_http_offset(&http, &cfg.url).await;
-        let shifted = |port: u16| {
-            u16::try_from(i32::from(port) + offset)
-                .ok()
-                .filter(|shifted| *shifted != 0 && *shifted != port)
-        };
-        let mut candidates: Vec<(NativeEndpoint, u16)> = Vec::new();
-        if let Some(port) = cfg.native_port {
-            // An explicitly configured port is configuration, not a
-            // guess: it goes first, on both transports, and discovery
-            // only runs behind it.
-            candidates.push((NativeEndpoint::Tls, port));
-            candidates.push((NativeEndpoint::Plain, port));
-        }
-        for port in [shifted(secure_port), Some(secure_port)]
-            .into_iter()
-            .flatten()
-        {
-            candidates.push((NativeEndpoint::Tls, port));
-        }
-        for port in [shifted(plain_port), Some(plain_port)]
-            .into_iter()
-            .flatten()
-        {
-            candidates.push((NativeEndpoint::Plain, port));
-        }
-        candidates.dedup();
+        let candidates = native_candidates(cfg, secure_port, plain_port, offset);
         let mut failures = Vec::new();
         let mut chosen = None;
         for (endpoint, port) in candidates {
@@ -271,17 +257,21 @@ impl NativeClient {
     /// Run a query and materialize the full typed result, mirroring
     /// [`crate::ChClient::query`].
     pub async fn query(&self, sql: &str) -> Result<QueryResult> {
-        let mut stream = self.inner.query_raw(sql).await.map_err(map_err)?;
-        let mut columns: Vec<ColumnMeta> = Vec::new();
-        let mut rows: Vec<Vec<Value>> = Vec::new();
-        while let Some(block) = stream.next().await {
-            let block = block.map_err(map_err)?;
-            if columns.is_empty() && !block.column_types.is_empty() {
-                columns = block_columns(&block);
+        tokio::time::timeout(NATIVE_QUERY_TIMEOUT, async {
+            let mut stream = self.inner.query_raw(sql).await.map_err(map_err)?;
+            let mut columns: Vec<ColumnMeta> = Vec::new();
+            let mut rows: Vec<Vec<Value>> = Vec::new();
+            while let Some(block) = stream.next().await {
+                let block = block.map_err(map_err)?;
+                if columns.is_empty() && !block.column_types.is_empty() {
+                    columns = block_columns(&block);
+                }
+                append_block_rows(block, &mut rows);
             }
-            append_block_rows(block, &mut rows);
-        }
-        Ok(QueryResult { columns, rows })
+            Ok(QueryResult { columns, rows })
+        })
+        .await
+        .map_err(|_| ChError::NativeTransport("native query deadline exceeded".into()))?
     }
 
     /// Run a long-lived streaming query (e.g. `WATCH ... EVENTS`), invoking
@@ -293,7 +283,16 @@ impl NativeClient {
         mut on_block: impl FnMut(Vec<ColumnMeta>, Vec<Vec<Value>>) -> bool,
     ) -> Result<()> {
         let mut stream = self.inner.query_raw(sql).await.map_err(map_err)?;
-        while let Some(block) = stream.next().await {
+        loop {
+            let block = tokio::time::timeout(NATIVE_STREAM_IDLE_TIMEOUT, stream.next())
+                .await
+                .map_err(|_| {
+                    self.close();
+                    ChError::NativeTransport("native stream idle deadline exceeded".into())
+                })?;
+            let Some(block) = block else {
+                break;
+            };
             let block = block.map_err(map_err)?;
             if block.rows == 0 {
                 continue;
@@ -313,6 +312,81 @@ impl NativeClient {
     /// statements the tail needs (live view DDL); the app's general
     /// mutating path stays on HTTP.
     pub async fn execute(&self, sql: &str) -> Result<()> {
-        self.inner.execute(sql).await.map_err(map_err)
+        tokio::time::timeout(NATIVE_QUERY_TIMEOUT, self.inner.execute(sql))
+            .await
+            .map_err(|_| ChError::NativeTransport("native execute deadline exceeded".into()))?
+            .map_err(map_err)
+    }
+}
+
+fn native_candidates(
+    cfg: &ChConfig,
+    secure_port: u16,
+    plain_port: u16,
+    offset: i32,
+) -> Vec<(NativeEndpoint, u16)> {
+    let allow_plain = crate::client::endpoint_is_secure_or_loopback(&cfg.url)
+        && cfg.url.trim_start().starts_with("http://");
+    let shifted = |port: u16| {
+        u16::try_from(i32::from(port) + offset)
+            .ok()
+            .filter(|shifted| *shifted != 0 && *shifted != port)
+    };
+    let mut candidates = Vec::new();
+    if let Some(port) = cfg.native_port {
+        // An explicitly configured port is configuration, not a guess. TLS
+        // goes first, and plaintext exists only for a loopback HTTP setup.
+        candidates.push((NativeEndpoint::Tls, port));
+        if allow_plain {
+            candidates.push((NativeEndpoint::Plain, port));
+        }
+    }
+    for port in [shifted(secure_port), Some(secure_port)]
+        .into_iter()
+        .flatten()
+    {
+        candidates.push((NativeEndpoint::Tls, port));
+    }
+    if allow_plain {
+        for port in [shifted(plain_port), Some(plain_port)]
+            .into_iter()
+            .flatten()
+        {
+            candidates.push((NativeEndpoint::Plain, port));
+        }
+    }
+    candidates.dedup();
+    candidates
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    fn config(url: &str) -> ChConfig {
+        ChConfig {
+            url: url.into(),
+            user: "security-review".into(),
+            password: Some("test-secret".into()),
+            database: None,
+            read_only: false,
+            driver: Default::default(),
+            native_port: Some(9441),
+        }
+    }
+
+    #[test]
+    fn plaintext_native_candidates_are_loopback_http_only() {
+        for endpoint in ["https://db.example.com:8443", "http://db.example.com:8123"] {
+            let candidates = native_candidates(&config(endpoint), 9440, 9000, 0);
+            assert!(candidates
+                .iter()
+                .all(|(transport, _)| *transport == NativeEndpoint::Tls));
+        }
+
+        let local = native_candidates(&config("http://127.0.0.1:8123"), 9440, 9000, 0);
+        assert!(local
+            .iter()
+            .any(|(transport, _)| *transport == NativeEndpoint::Plain));
     }
 }

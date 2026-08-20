@@ -14,6 +14,17 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  dependencies:
+    name: Dependencies (RustSec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject vulnerable dependencies
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
+          command-arguments: --warn unmaintained
+
   core:
     name: Core (fmt, clippy, test)
     runs-on: ubuntu-latest

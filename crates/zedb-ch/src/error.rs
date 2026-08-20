@@ -18,6 +18,12 @@ pub enum ChError {
     #[error("failed to decode RowBinary response: {0}")]
     Decode(String),
 
+    #[error("insecure ClickHouse transport refused: {0}")]
+    InsecureTransport(String),
+
+    #[error("ClickHouse response exceeded the {limit} byte safety limit")]
+    ResponseTooLarge { limit: u64 },
+
     /// The native (TCP) transport failed below the server: connect,
     /// handshake, or a dropped connection. Reads fall back to HTTP on
     /// this; a [`ChError::Server`] never does (the query really ran).

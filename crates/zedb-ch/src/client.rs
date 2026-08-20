@@ -16,6 +16,13 @@ mod export;
 mod streaming;
 mod topology;
 
+const MAX_MATERIALIZED_RESPONSE_BYTES: u64 = 1024 * 1024 * 1024;
+#[cfg(not(test))]
+const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+#[cfg(test)]
+const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
+const MAX_ERROR_RESPONSE_BYTES: u64 = 1024 * 1024;
+
 #[derive(Debug, Clone, Default)]
 pub struct ChConfig {
     /// Base URL of the HTTP interface, e.g. `http://localhost:8123`.
@@ -92,9 +99,24 @@ impl ChClient {
             .unwrap_or(10);
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(connect_timeout))
+            .timeout(HTTP_REQUEST_TIMEOUT)
+            // ClickHouse credentials use custom headers that Reqwest does not
+            // classify as sensitive. Following redirects could forward them
+            // to another authority, so database requests never redirect.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_default();
         Self { cfg, http }
+    }
+
+    pub(super) fn ensure_secure_endpoint(&self) -> Result<()> {
+        if endpoint_is_secure_or_loopback(&self.cfg.url) {
+            return Ok(());
+        }
+        Err(ChError::InsecureTransport(format!(
+            "use https:// for non-loopback endpoint {:?}",
+            self.cfg.url
+        )))
     }
 
     /// Query-string pairs for this cluster's driver settings. The
@@ -154,20 +176,24 @@ impl ChClient {
         max_execution_time_secs: u32,
         max_result_rows: u64,
         max_bytes_to_read: u64,
+        max_result_bytes: u64,
     ) -> Result<QueryResult> {
         let time = max_execution_time_secs.to_string();
         let rows = max_result_rows.to_string();
-        let bytes = max_bytes_to_read.to_string();
+        let read_bytes = max_bytes_to_read.to_string();
+        let result_bytes = max_result_bytes.to_string();
         let body = self
-            .request(
+            .request_bounded(
                 sql,
                 &[
                     ("default_format", "RowBinaryWithNamesAndTypes"),
                     ("max_execution_time", &time),
                     ("max_result_rows", &rows),
-                    ("result_overflow_mode", "break"),
-                    ("max_bytes_to_read", &bytes),
+                    ("max_result_bytes", &result_bytes),
+                    ("result_overflow_mode", "throw"),
+                    ("max_bytes_to_read", &read_bytes),
                 ],
+                max_result_bytes,
             )
             .await?;
         rowbinary::decode(&body)
@@ -234,14 +260,9 @@ impl ChClient {
     /// `GET /ping`: true when the server is up and answering.
     pub async fn ping(&self) -> bool {
         let url = format!("{}/ping", self.cfg.url.trim_end_matches('/'));
-        let mut request = self
-            .http
-            .get(url)
-            .header("X-ClickHouse-User", &self.cfg.user);
-        if let Some(password) = &self.cfg.password {
-            request = request.header("X-ClickHouse-Key", password);
-        }
-        match request.send().await {
+        // ClickHouse does not authenticate /ping. Sending credentials here
+        // creates exposure without adding a useful connection check.
+        match self.http.get(url).send().await {
             Ok(resp) => resp.status().is_success(),
             Err(_) => false,
         }
@@ -255,6 +276,17 @@ impl ChClient {
     }
 
     async fn request(&self, sql: &str, params: &[(&str, &str)]) -> Result<Vec<u8>> {
+        self.request_bounded(sql, params, MAX_MATERIALIZED_RESPONSE_BYTES)
+            .await
+    }
+
+    async fn request_bounded(
+        &self,
+        sql: &str,
+        params: &[(&str, &str)],
+        max_response_bytes: u64,
+    ) -> Result<Vec<u8>> {
+        self.ensure_secure_endpoint()?;
         let mut req = self
             .http
             .post(&self.cfg.url)
@@ -284,15 +316,51 @@ impl ChClient {
             .get("X-ClickHouse-Exception-Code")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse().ok());
-        let bytes = resp.bytes().await?;
+        let limit = if status.is_success() {
+            max_response_bytes
+        } else {
+            MAX_ERROR_RESPONSE_BYTES
+        };
+        if resp.content_length().is_some_and(|length| length > limit) {
+            return Err(ChError::ResponseTooLarge { limit });
+        }
+        let mut bytes = Vec::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if bytes.len() as u64 + chunk.len() as u64 > limit {
+                return Err(ChError::ResponseTooLarge { limit });
+            }
+            bytes.extend_from_slice(&chunk);
+        }
         if !status.is_success() {
             return Err(ChError::Server {
                 code,
                 message: String::from_utf8_lossy(&bytes).trim().to_string(),
             });
         }
-        Ok(bytes.to_vec())
+        Ok(bytes)
     }
+}
+
+pub(crate) fn endpoint_is_secure_or_loopback(endpoint: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return false;
+    };
+    if url.scheme() == "https" {
+        return true;
+    }
+    if url.scheme() != "http" {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 fn value_as_u64(value: &Value) -> Option<u64> {
@@ -310,4 +378,147 @@ fn next_query_id() -> String {
         .unwrap_or_default()
         .as_millis();
     format!("zedb-{millis}-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn config(url: String) -> ChConfig {
+        ChConfig {
+            url,
+            user: "security-review".into(),
+            password: Some("test-secret".into()),
+            database: None,
+            read_only: false,
+            driver: DriverConfig::default(),
+            native_port: None,
+        }
+    }
+
+    async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
+        let mut bytes = vec![0; 8192];
+        let length = stream.read(&mut bytes).await.unwrap();
+        String::from_utf8_lossy(&bytes[..length]).into_owned()
+    }
+
+    #[test]
+    fn only_tls_or_literal_loopback_http_is_accepted() {
+        assert!(endpoint_is_secure_or_loopback(
+            "https://db.example.com:8443"
+        ));
+        assert!(endpoint_is_secure_or_loopback("http://localhost:8123"));
+        assert!(endpoint_is_secure_or_loopback("http://127.0.0.1:8123"));
+        assert!(endpoint_is_secure_or_loopback("http://[::1]:8123"));
+        assert!(!endpoint_is_secure_or_loopback(
+            "http://db.example.com:8123"
+        ));
+        assert!(!endpoint_is_secure_or_loopback("http://192.0.2.1:8123"));
+        assert!(!endpoint_is_secure_or_loopback("not a URL"));
+    }
+
+    #[tokio::test]
+    async fn remote_plaintext_is_refused_before_connecting() {
+        let client = ChClient::new(config("http://192.0.2.1:8123".into()));
+        assert!(matches!(
+            client.test_connection().await,
+            Err(ChError::InsecureTransport(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn ping_sends_no_clickhouse_credentials() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut stream).await;
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOk")
+                .await
+                .unwrap();
+            request
+        });
+
+        let client = ChClient::new(config(format!("http://{address}")));
+        assert!(client.ping().await);
+        let request = server.await.unwrap().to_ascii_lowercase();
+        assert!(!request.contains("x-clickhouse-user"));
+        assert!(!request.contains("x-clickhouse-key"));
+        assert!(!request.contains("test-secret"));
+    }
+
+    #[tokio::test]
+    async fn database_requests_do_not_follow_redirects() {
+        let destination = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination_address = destination.local_addr().unwrap();
+        let redirector = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirector_address = redirector.local_addr().unwrap();
+
+        let redirect = tokio::spawn(async move {
+            let (mut stream, _) = redirector.accept().await.unwrap();
+            let request = read_request(&mut stream).await;
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://{destination_address}/capture\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+
+        let client = ChClient::new(config(format!("http://{redirector_address}")));
+        assert!(matches!(
+            client.test_connection().await,
+            Err(ChError::Server { .. })
+        ));
+        let first_request = redirect.await.unwrap();
+        assert!(first_request.contains("test-secret"));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), destination.accept())
+                .await
+                .is_err(),
+            "redirect destination received a credential-bearing request"
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_requests_stop_before_materializing_large_responses() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = read_request(&mut stream).await;
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\n0123456789abcdef",
+                )
+                .await
+                .unwrap();
+        });
+
+        let client = ChClient::new(config(format!("http://{address}")));
+        let result = client.request_bounded("SELECT 1", &[], 8).await;
+        assert!(matches!(
+            result,
+            Err(ChError::ResponseTooLarge { limit: 8 })
+        ));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_http_peer_hits_the_whole_request_deadline() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = read_request(&mut stream).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+
+        let client = ChClient::new(config(format!("http://{address}")));
+        let started = std::time::Instant::now();
+        assert!(!client.ping().await);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        server.abort();
+    }
 }
