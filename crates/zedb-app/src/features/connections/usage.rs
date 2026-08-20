@@ -656,6 +656,35 @@ impl Workspace {
                                 )
                             })
                             .child(div().flex_1())
+                            .when(stoppable && primary_locked && keyed, |row| {
+                                // Visible, muted, and explained: an
+                                // invisible control cannot say why it
+                                // will not work.
+                                row.child(
+                                    div()
+                                        .id(("usage-power-locked", index))
+                                        .w(px(24.))
+                                        .h(px(22.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(3.))
+                                        .child(
+                                            gpui::svg()
+                                                .path("icons/power.svg")
+                                                .size(px(12.))
+                                                .text_color(theme::disabled()),
+                                        )
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(
+                                                "ClickHouse Cloud refuses to stop a warehouse's \
+                                                 primary while secondary services exist; it \
+                                                 still idles on its own timeout",
+                                            )
+                                            .build(window, cx)
+                                        }),
+                                )
+                            })
                             .when(
                                 (wakeable || (stoppable && !primary_locked)) && keyed,
                                 |row| {
@@ -771,7 +800,7 @@ impl Workspace {
                                             gpui::svg()
                                                 .path("icons/power.svg")
                                                 .size(px(12.))
-                                                .text_color(theme::border()),
+                                                .text_color(theme::disabled()),
                                         )
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new(
