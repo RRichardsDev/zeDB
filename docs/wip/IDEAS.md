@@ -47,7 +47,9 @@ Phase 12 shipped its increments in v0.1.30 (doc harvested into
   unused.
 - Decide whether native TCP should become the default transport (the
   Phase 10.1 transport work has the facts; this is a judgment call,
-  not new infrastructure). Also from the Phase 11 stub.
+  not new infrastructure). Also from the Phase 11 stub. Phase 14
+  answers it for the ops view specifically; the fleet-wide default is
+  still open.
 - Inline charting of result sets.
 - EXPLAIN visualization as pipeline / plan graphs (the textual
   EXPLAIN views shipped; the graphs did not).
