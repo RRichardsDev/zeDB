@@ -9,6 +9,12 @@ GitHub release notes.
 
 ## Unreleased
 
+- The in-app agent gains `cloud_context`: a read-only picture of the
+  active connection's ClickHouse Cloud warehouse (service states,
+  tier, size) and its 30-day cost with the high-burn verdict, with
+  data freshness stated in the reply. Deliberately no wake or stop
+  tool; service state stays the user's, and on Cloud the reply notes
+  that run_query's byte cap doubles as a per-query billing ceiling.
 - The status bar shows today's ClickHouse Cloud credits for the
   connected connection's warehouse ("cloud 5.35 CHC today"), quiet
   and muted; it turns amber with "high burn" only when yesterday

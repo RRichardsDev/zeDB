@@ -17,7 +17,14 @@ decides, applies, and owns every write.**
   `fleet_status`, `drift`, `check_chain`, `regen_preview`,
   `list_migrations`, `migration_sql`, `dry_run`, `list_databases`,
   `list_tables`, `describe`, `run_query` (execution-time, row, and
-  byte caps enforced server-side), `schema_search`, `lint_sql`.
+  byte caps enforced server-side), `schema_search`, `lint_sql`,
+  `cloud_context` (the active connection's ClickHouse Cloud
+  control-plane picture: warehouse services with state, 30-day cost
+  with a high-burn verdict, answered from the app's live state with
+  freshness stated; on Cloud, `run_query`'s byte cap doubles as a
+  per-query billing ceiling, and the reply says so). There is
+  deliberately no wake or stop tool: service state changes cost money
+  and stay with the user on the connection page.
 - **Draft into the UI, writing nothing**: `propose_migration` fills
   the authoring overlay; `propose_query` fills a query editor tab.
   Both leave review, checks, and saving to the user.

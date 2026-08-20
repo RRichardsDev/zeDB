@@ -235,9 +235,8 @@ impl McpServer {
             "lint_sql" => self.tool_lint_sql(&arguments),
             "check_chain" => self.tool_check_chain().await,
             "regen_preview" => self.tool_regen_preview().await,
-            "propose_migration" | "propose_query" | "navigate" | "highlight_control" => {
-                self.forward_app_tool(name, &arguments).await
-            }
+            "propose_migration" | "propose_query" | "navigate" | "highlight_control"
+            | "cloud_context" => self.forward_app_tool(name, &arguments).await,
             other => Err(format!("unknown tool: {other}")),
         };
         // Tool errors are results with isError, per MCP; protocol errors
@@ -415,6 +414,11 @@ fn tool_definitions(with_app_tools: bool, with_schema_cache: bool) -> Value {
                 "required": ["view"],
             },
         }));
+        items.push(json!({
+            "name": "cloud_context",
+            "description": "ClickHouse Cloud control-plane context for the app's ACTIVE connection, read-only: the warehouse's services with their last-known state (running/idle/stopped, primary flag, tier, size), and the warehouse's 30-day cost figures (today so far, yesterday, median, high-burn verdict) with their freshness. There is deliberately no wake or stop here; the user drives service state from the connection page. Answers honestly when the active connection is not Cloud-linked.",
+            "inputSchema": { "type": "object", "properties": {} },
+        }));
     }
     Value::Array(items)
 }
@@ -473,6 +477,27 @@ mod tests {
         assert!(names.contains(&"fleet_status"));
         assert!(names.contains(&"run_query"));
         assert!(names.contains(&"drift"));
+        // App-hosted tools (cloud_context among them) only exist with
+        // a bridge socket; a bare server must not advertise them.
+        assert!(!names.contains(&"cloud_context"));
+        assert!(!names.contains(&"navigate"));
+    }
+
+    #[test]
+    fn app_bridge_advertises_cloud_context() {
+        let tools = tool_definitions(true, false);
+        let names: Vec<&str> = tools
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.contains(&"cloud_context"));
+        assert!(names.contains(&"navigate"));
+        // The Cloud context is read-only by construction: no wake or
+        // stop tool may ever be advertised.
+        assert!(!names.iter().any(|name| name.contains("wake")));
+        assert!(!names.iter().any(|name| name.contains("stop")));
     }
 
     #[tokio::test]

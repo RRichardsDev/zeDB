@@ -60,6 +60,16 @@ persistent alarm badges.
 
 ## Slice 3 (10.5d): control-plane context for the agent
 
+Status: BUILT (2026-08-20, overnight). One app-forwarded tool,
+`cloud_context`: warehouse services with state (watch map overlaid,
+same truth as the sidebar), cost figures from the status bar's
+warehouse-scoped fetch with freshness stated, an explicit no-wake/
+no-stop statement, and the byte-cap-as-billing-ceiling note. Answers
+honestly when disconnected or not Cloud-linked. Advertised only with
+an app bridge; a test pins that no wake/stop tool is ever advertised.
+Not yet exercised through a live agent session (needs the agent pane
+running); noted for morning verification.
+
 Expose state, tier, and cost read-only to the in-app agent and MCP,
 per the `docs/contracts/ACP-STANDARDS.md` checklist (read-only tool, no server
 writes, no wake). Re-reason the byte caps as billing ceilings using

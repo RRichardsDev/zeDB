@@ -83,6 +83,120 @@ impl Workspace {
         Some(path)
     }
 
+    /// The `cloud_context` reply: the active connection's Cloud
+    /// control-plane picture from the app's live state, freshness
+    /// stated, nothing fetched inline (the bridge is synchronous; the
+    /// caller kicks the background refreshes).
+    pub(crate) fn agent_cloud_context_report(&self) -> String {
+        let Some(connected) = self.connection.connected.as_ref() else {
+            return "no active connection; the user connects in zeDB first".to_string();
+        };
+        let name = connected.name.clone();
+        let Some(cloud) = self
+            .connection
+            .connections
+            .iter()
+            .find(|connection| connection.name == name)
+            .and_then(|connection| connection.cloud.clone())
+        else {
+            return format!(
+                "the active connection ({name}) is not linked to a ClickHouse Cloud \
+                 service; no control-plane context applies"
+            );
+        };
+        let mut lines = vec![format!(
+            "Active connection: {name} (ClickHouse Cloud, organization {})",
+            cloud.org_id
+        )];
+        // Warehouse members with the watch map overlaid: the same
+        // truth the sidebar and dashboard show.
+        let services = &self.connection.cloud.services;
+        let warehouse = services
+            .iter()
+            .find(|(_, service)| service.id == cloud.service_id)
+            .and_then(|(_, service)| service.warehouse_id.clone());
+        let members: Vec<&crate::clickhouse_cloud::CloudService> = services
+            .iter()
+            .filter(|(_, service)| match &warehouse {
+                Some(warehouse) => service.warehouse_id.as_deref() == Some(warehouse.as_str()),
+                None => service.id == cloud.service_id,
+            })
+            .map(|(_, service)| service)
+            .collect();
+        if members.is_empty() {
+            lines.push(
+                "Warehouse services: unknown (the app has not loaded the org's service \
+                 list yet; it refreshes on window focus)"
+                    .to_string(),
+            );
+        } else {
+            lines.push(
+                "Warehouse services (as of the app's last Cloud refresh; refreshes on \
+                 focus and Cloud actions):"
+                    .to_string(),
+            );
+            for service in members {
+                let state = self
+                    .connection
+                    .cloud
+                    .states
+                    .get(&service.id)
+                    .cloned()
+                    .unwrap_or_else(|| service.state.clone());
+                let mut facts = vec![state];
+                if service.is_primary {
+                    facts.push("primary".to_string());
+                }
+                if let Some(tier) = &service.tier {
+                    facts.push(tier.clone());
+                }
+                if let (Some(replicas), Some(min), Some(max)) = (
+                    service.num_replicas,
+                    service.min_total_memory_gb,
+                    service.max_total_memory_gb,
+                ) {
+                    facts.push(format!("{replicas} replicas, {min}-{max} GiB"));
+                }
+                if let Some(idle) = service.idle_timeout_minutes {
+                    facts.push(format!("idles after {idle} min"));
+                }
+                lines.push(format!("- {}: {}", service.name, facts.join("; ")));
+            }
+        }
+        let cost = &self.connection.cost_status;
+        match cost.fetched_at {
+            Some(at) if cost.connection.as_deref() == Some(name.as_str()) => {
+                lines.push(format!(
+                    "Cost (this warehouse, fetched {} min ago): today so far {} CHC; \
+                     yesterday {} CHC; median of the last {} complete days {} CHC/day; \
+                     high burn: {}",
+                    at.elapsed().as_secs() / 60,
+                    crate::format_chc(cost.today),
+                    crate::format_chc(cost.yesterday),
+                    cost.days,
+                    crate::format_chc(cost.median),
+                    if cost.high_burn() { "YES" } else { "no" },
+                ));
+            }
+            _ => lines.push(
+                "Cost: not loaded yet (fetched on connect and hourly; ask again shortly)"
+                    .to_string(),
+            ),
+        }
+        lines.push(
+            "Billing note: run_query's bytes-to-read cap (10 GiB by default) is enforced \
+             server-side; on Cloud, scanned bytes are paid compute, so treat that cap as a \
+             per-query billing ceiling."
+                .to_string(),
+        );
+        lines.push(
+            "Service state changes (wake/stop) are deliberately not available here; the \
+             user drives them from the connection page."
+                .to_string(),
+        );
+        lines.join("\n")
+    }
+
     /// Execute one app tool; narrated in the thread so the UI never
     /// changes unexplained. Returns (reply text, is_error).
     pub(crate) fn agent_handle_bridge_tool(
@@ -109,6 +223,16 @@ impl Workspace {
                     .unwrap_or_default(),
                 false,
             ),
+            // Read-only Cloud control-plane context (Phase 13 slice 3):
+            // answered from the app's live state per call, with the
+            // data's freshness stated, and refreshes kicked so a
+            // follow-up call sees newer figures. Nothing the user sees
+            // changes, so it is not narrated (like repo_root).
+            "cloud_context" => {
+                let report = self.agent_cloud_context_report();
+                self.cost_status_refresh(false, cx);
+                (report, false)
+            }
             "highlight_control" => {
                 const CONTROLS: [&str; 7] = [
                     "lock",

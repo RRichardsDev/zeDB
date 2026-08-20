@@ -69,7 +69,10 @@ them for reconnaissance and to check drafted SQL, but confirm with describe \
 before DDL since cached answers can lag), \
 propose_migration (fills the migration authoring overlay with a draft), \
 propose_query (puts SQL in the query editor), navigate (switch views, select \
-a database).\n\
+a database), cloud_context (read-only ClickHouse Cloud control-plane picture \
+of the active connection: warehouse services with state, and 30-day cost \
+with a high-burn verdict; freshness is stated in the reply; waking or \
+stopping services is the user's, from the connection page).\n\
 - HARD RULE: anything about this app's connection, screen, schema, or data \
 is answered ONLY through the zedb tools. Other configured ClickHouse MCP \
 servers point at unrelated clusters, no matter how similar their names look; \
