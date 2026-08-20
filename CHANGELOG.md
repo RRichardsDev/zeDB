@@ -7,92 +7,79 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.32 - 2026-08-20
 
-- The in-app agent gains `cloud_context`: a read-only picture of the
-  active connection's ClickHouse Cloud warehouse (service states,
-  tier, size) and its 30-day cost with the high-burn verdict, with
-  data freshness stated in the reply. Deliberately no wake or stop
-  tool; service state stays the user's, and on Cloud the reply notes
-  that run_query's byte cap doubles as a per-query billing ceiling.
-- The status bar shows today's ClickHouse Cloud credits for the
-  connected connection's warehouse ("cloud 5.35 CHC today"), quiet
-  and muted; it turns amber with "high burn" only when yesterday
-  exceeded 1.5x the 30-day median (at least 1 CHC, and only with a
-  week of history so young warehouses stay quiet). The tooltip shows
-  the figures and the rule; clicking opens the Cost tab. Absent, not
-  zero, without data.
-- The sidebar's Cloud idle marker judges the linked service's whole
-  warehouse, not just the originally linked service: a connection
-  whose primary is running no longer says "idle" because a stopped
-  secondary was the one linked at setup.
-- The connection page's node rows tell the truth about state: the live
-  connection's active node says "connected", an unprobed node says
-  "not connected" (the old "not tested" implied it had never worked),
-  and "reachable"/"failed" stay for probe results.
-- Connecting to an asleep Cloud service now wakes it and finishes the
-  connect when the service comes up, instead of timing out and telling
-  you to start it yourself. Progress is shown throughout ("waking it,
-  then connecting"); starting a different connect abandons the wait.
-- The connection page's Cloud dashboard manages wake state: idle or
-  stopped services show a Wake button (when the org's API key is
-  linked; an honest disabled button otherwise), a "Wake all" appears
-  when several services are down, the card shows "waking" through the
-  transition, and the dashboard keeps refreshing until the control
-  plane reports the service running. Running services get a stop
-  control (a power icon: green hover wakes, red hover stops) behind a
-  two-click confirm, watched through "stopping" the same way. A
-  warehouse primary's stop is disabled with the reason while
-  secondaries exist (tested: the control plane refuses it in every
-  secondary state; only auto-idle takes a primary down). Wakes,
-  stops, and connects keep the dashboard cards and the sidebar's
-  state markers in step.
+Cloud services you can run from the app, an editor that understands
+your comments and variables, and completions worth using.
+
+### Running your Cloud services
+
+- Connecting to an asleep service now wakes it and finishes the
+  connect when it comes up, instead of timing out and telling you to
+  start it yourself. Progress is shown throughout; starting a
+  different connect abandons the wait.
+- Each service on the connection page's Cloud dashboard gets a power
+  control: hover green to wake, hover red to stop. Stopping takes a
+  second, deliberate click (the state slot says "click again to
+  stop", and abandons itself), and a "Wake all" appears when several
+  services are down.
+- Transitions are watched, not guessed: cards show "waking" or
+  "stopping" and keep refreshing until the control plane agrees.
+  Wakes, stops, and connects stay in step across the dashboard, the
+  sidebar markers, and the Cloud page.
+- A warehouse's primary cannot be stopped while secondary services
+  exist, so its control is disabled with that reason rather than
+  failing at the API.
+- The status bar shows today's credits for the connected warehouse,
+  muted; it turns amber with "high burn" only when yesterday exceeded
+  1.5x the 30-day median. The tooltip explains the figures and the
+  rule; clicking opens the Cost tab.
+
+### Telling the truth about state
+
+- The sidebar's idle marker judges the whole warehouse, so a
+  connection whose primary is running no longer claims to be idle.
+- Node rows say "connected", "reachable", "failed", or "not
+  connected"; the old "not tested" implied a node had never worked.
+
+### The query editor
+
+- Comments no longer break runs. A trailing comment after the last
+  statement is not sent as its own failing statement, a cursor on an
+  end-of-line comment runs the statement it annotates rather than the
+  next one, and `${...}` inside a comment is left alone.
+- `INSERT ... VALUES` with comments between the rows runs: ClickHouse
+  rejects them server-side, so the comments are stripped on the wire
+  while your editor keeps them.
+- Native ClickHouse query parameters work: `SET param_db = 'X'` plus
+  `{db:Identifier}`. Declarations are collected from the buffer and
+  sent with every statement they govern, so they survive zeDB's
+  statement-per-request execution. Both parameter styles coexist.
+- `@set` is position-aware: a redeclaration takes effect from its own
+  line down, an `@set` line is its own statement (running it confirms
+  rather than executing the query below), and a trailing semicolon
+  terminates the line instead of joining the value.
 - Hovering a `${db}` or `{db:Identifier}` placeholder shows the value
-  in effect at that position, the line that declared it, and what the
-  value names in the schema ("Database with 14 objects"); an unset
-  name says how to set it.
-- A placeholder before a dot completes like the name it resolves to:
-  `{db:Identifier}.` and `${db}.` offer that database's tables, using
-  the declaration in effect at the cursor.
-- Typing `:` inside a `{name:...}` query parameter offers the valid
-  parameter types (Identifier, String, UInt64, DateTime, ...) instead
-  of columns and keywords, with Identifier first.
-- Richer editor completions: SQL keywords (GROUP BY, LEFT JOIN, ...)
-  and ~140 common ClickHouse functions with one-glance signatures
-  (toStartOfDay(t), argMax(arg, val), quantile(level)(x), ...) join
-  the schema names. Your own columns and tables always rank first,
-  database names are offered after FROM/JOIN, and vocabulary only
-  appears once you have typed something.
-- Native ClickHouse query parameters work in the editor: `SET
-  param_db = 'X'` plus `{db:Identifier}` placeholders. Each statement
-  runs as its own stateless request, so the app collects the SET
-  lines from the buffer (same nearest-above scoping as `@set`) and
-  sends them as `param_` parameters with every statement they govern.
-  Both styles coexist; `${}` stays for splicing inside literals.
-- An `@set` line is its own statement: running the cursor on it no
-  longer executes the query below it (it confirms "nothing to run"
-  instead), and a trailing semicolon on the value is treated as the
-  line's terminator, not part of the value.
-- Redeclaring a query variable (`@set db=xyz` ... `@set db=abc`) now
-  takes effect from its own line down: each `${db}` use binds to the
-  nearest `@set` above it instead of the last one anywhere in the tab.
-- `INSERT ... VALUES` with comments between the rows now runs:
-  ClickHouse's Values parser rejects them server-side, so the app
-  strips comments from the data section on the wire while the editor
-  keeps the annotated text.
-- SQL comments no longer break query runs: a trailing `-- comment`
-  after the last statement is not sent as its own (failing) statement,
-  a cursor on an end-of-line comment runs the statement it annotates
-  instead of the next one, `${...}` inside comments is left alone by
-  query variables, and grid sort/filter rewrites keep working on
-  statements that end in a line comment.
-- The table details panel has a close button in its header, so getting
-  back to the database overview no longer requires deselecting via the
-  sidebar.
-- Selecting text in the agent pane no longer fights scrolling: drag
-  selects, the wheel scrolls, streaming output stops yanking the view
-  to the bottom mid-selection, and dragging near the top or bottom
-  edge autoscrolls the transcript while selecting.
+  in effect there, the line that declared it, and what the value
+  names in your schema.
+
+### Completions
+
+- SQL keywords and ~140 common ClickHouse functions with one-glance
+  signatures join the schema names, with your own columns and tables
+  always ranked first.
+- Typing `:` inside `{name:...}` offers the valid parameter types,
+  Identifier first; a placeholder before a dot completes like the
+  database it resolves to; database names complete after FROM/JOIN.
+
+### Elsewhere
+
+- The table details panel has a close button.
+- The in-app agent gains `cloud_context`: a read-only view of the
+  active connection's warehouse and its cost, with freshness stated.
+  There is deliberately no wake or stop tool; service state stays
+  yours.
+- Selecting text in the agent pane no longer fights scrolling.
 
 ## v0.1.31 - 2026-08-16
 
