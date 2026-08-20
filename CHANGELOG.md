@@ -9,6 +9,10 @@ GitHub release notes.
 
 ## Unreleased
 
+- A running warehouse primary shows its power control again, muted,
+  with the reason it cannot be stopped in the tooltip; it had gone
+  missing entirely, and the no-API-key variant was drawn in a colour
+  too dark to see.
 - Dropdown buttons (the sidebar's +, ops scope and top-limit, the
   active-node selector, query max-rows, the agent's new thread) no
   longer render as near-black boxes in dark mode: the theme was
