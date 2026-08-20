@@ -675,6 +675,12 @@ impl Workspace {
                                                 .size(px(12.))
                                                 .text_color(theme::disabled()),
                                         )
+                                        // Neutral on hover, never red: the
+                                        // pointer is acknowledged so the
+                                        // tooltip is findable, but nothing
+                                        // promises an action that cannot
+                                        // happen. No pointer cursor either.
+                                        .hover(|button| button.bg(theme::hover()))
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new(
                                                 "ClickHouse Cloud refuses to stop a warehouse's \
@@ -802,6 +808,7 @@ impl Workspace {
                                                 .size(px(12.))
                                                 .text_color(theme::disabled()),
                                         )
+                                        .hover(|button| button.bg(theme::hover()))
                                         .tooltip(|window, cx| {
                                             gpui_component::tooltip::Tooltip::new(
                                                 "Link an API key to manage service state",
