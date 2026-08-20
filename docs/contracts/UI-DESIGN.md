@@ -71,3 +71,38 @@ Before accepting UI work, check that it:
 - Makes the primary action obvious without making every action prominent.
 - Shows destructive or production risk clearly at the moment it matters.
 - Remains legible and useful at dense desktop-window sizes.
+
+## State-facing UI: the review bar
+
+Anything that shows or changes the state of something outside the app
+(a connection, a Cloud service, a running job) is held to these as
+well. Each was learned the expensive way; the parenthetical is the
+incident, kept so the rule does not drift back into a platitude.
+
+- **No label may lie or mislead.** Words carry exact truth ("not
+  tested" became "not connected": the old word implied it had never
+  worked). A state shown optimistically, before the server confirms,
+  must either say so or revert visibly when the server refuses.
+- **One state, every surface.** A transition started anywhere shows
+  everywhere that state appears, immediately, and keeps updating
+  until it settles (dashboard wake buttons went stale while the
+  connect flow was waking the same service).
+- **Transitions are watched, bounded, and abandoned.** Anything
+  in flight polls until it settles, gives up after a stated bound
+  with a message, and stops when a newer action supersedes it.
+- **Confirms must be unmissable.** An armed destructive action says
+  what the next click will do, in plain text where the eye already
+  is, not in a tooltip or a color alone, and disarms itself when
+  abandoned (a red icon and a changed tooltip read as a stuck
+  button).
+- **Disabled means explained.** A control that cannot work (no
+  credential, an upstream rule) renders disabled with the reason in
+  its tooltip; it never lets a click bounce off a 4xx.
+- **Test upstream rules before encoding them.** Vendor docs and
+  plausible theories both got the ClickHouse Cloud primary-stop rule
+  wrong until curl against the live control plane settled it. A rule
+  shipped in the UI cites the live test, not the documentation.
+- **Icons follow the app's grammar.** Quiet utility icons, color set
+  on the svg element and recolored with `group_hover` (parents do not
+  inherit into svgs), hover color announcing intent (green wakes, red
+  stops), and primary actions that cost money keeping their words.

@@ -82,8 +82,8 @@ the transport is still being discovered.
   recorded in the devlog; slice 2's cadence change cites it.
 - The claim about push semantics is verified against the 26.6 dev
   cluster before it appears in any doc or UI copy.
-- Everything in `docs/wip/PHASE-13.md`'s "Review bar" applies here,
-  in particular: no label may lie (the transport indicator must never
-  claim native while falling back), transitions are watched and
+- `docs/contracts/UI-DESIGN.md`'s state-facing review bar applies
+  here, in particular: no label may lie (the transport indicator must
+  never claim native while falling back), transitions are watched and
   bounded (discovery is async: absent, not guessed), and upstream
   behaviour is tested before it is encoded.
