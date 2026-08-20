@@ -7,6 +7,14 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Dropdown buttons (the sidebar's +, ops scope and top-limit, the
+  active-node selector, query max-rows, the agent's new thread) no
+  longer render as near-black boxes in dark mode: the theme was
+  missing a secondary surface color, so they fell back to the UI
+  library's default instead of zeDB's palette.
+
 ## v0.1.32 - 2026-08-20
 
 Cloud services you can run from the app, an editor that understands
