@@ -9,6 +9,10 @@ GitHub release notes.
 
 ## Unreleased
 
+- Closing the last query tab returns you to the cluster overview
+  instead of opening an empty scratch tab, and tab numbering no
+  longer climbs forever: the lowest free number is reused, so closing
+  everything starts again at Tab 1.
 - A running warehouse primary shows its power control again, muted,
   with the reason it cannot be stopped in the tooltip; it had gone
   missing entirely, and the no-API-key variant was drawn in a colour
