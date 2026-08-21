@@ -12,29 +12,70 @@ impl Workspace {
         event: AgentEvent,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let Some(session_id) = event.update_session_id() {
+            let Some(thread) = self.agent.thread.as_ref() else {
+                return true;
+            };
+            if thread.cache_key != cache_key {
+                return true;
+            }
+            if thread.session_id.as_deref() != Some(session_id) {
+                agent_log(
+                    "update_wrong_session",
+                    serde_json::json!({ "session_id_bytes": session_id.len() }),
+                );
+                return true;
+            }
+        }
         match &event {
-            AgentEvent::MessageChunk { text } => {
-                agent_log("chunk", serde_json::json!({ "text": text }));
+            AgentEvent::MessageChunk { text, .. } => {
+                agent_log("chunk", serde_json::json!({ "bytes": text.len() }));
             }
             AgentEvent::ThoughtChunk { .. } => {}
-            AgentEvent::ToolCall { raw, .. } | AgentEvent::ToolCallUpdate { raw, .. } => {
-                agent_log("tool", raw.clone());
-            }
-            AgentEvent::Plan { raw } => agent_log("plan", raw.clone()),
-            AgentEvent::Other { kind, raw } => {
+            AgentEvent::ToolCall {
+                id, title, status, ..
+            } => {
                 agent_log(
-                    "other_update",
-                    serde_json::json!({ "kind": kind, "raw": raw }),
+                    "tool",
+                    serde_json::json!({
+                        "id": id,
+                        "title_bytes": title.len(),
+                        "status": status,
+                    }),
                 );
             }
+            AgentEvent::ToolCallUpdate { id, status, .. } => {
+                agent_log(
+                    "tool_update",
+                    serde_json::json!({ "id": id, "status": status }),
+                );
+            }
+            AgentEvent::Plan { .. } => agent_log("plan", serde_json::json!({})),
+            AgentEvent::Other { kind, .. } => {
+                agent_log("other_update", serde_json::json!({ "kind": kind }));
+            }
             AgentEvent::PermissionRequest { tool_call, .. } => {
-                agent_log("permission_request", tool_call.clone());
+                let title_bytes = tool_call
+                    .get("title")
+                    .and_then(|title| title.as_str())
+                    .map(str::len)
+                    .unwrap_or(0);
+                agent_log(
+                    "permission_request",
+                    serde_json::json!({
+                        "tool_call_id": tool_call.get("toolCallId"),
+                        "title_bytes": title_bytes,
+                    }),
+                );
             }
             AgentEvent::Stderr { line } => {
-                agent_log("stderr", serde_json::json!({ "line": line }));
+                agent_log("stderr", serde_json::json!({ "bytes": line.len() }));
             }
             AgentEvent::Closed { reason } => {
-                agent_log("closed", serde_json::json!({ "reason": reason }));
+                agent_log(
+                    "closed",
+                    serde_json::json!({ "reason_bytes": reason.len() }),
+                );
             }
         }
         let Some(thread) = self.agent.thread.as_mut() else {
@@ -43,14 +84,14 @@ impl Workspace {
         if thread.cache_key != cache_key {
             return true;
         }
+        if thread.entries.len() > MAX_LIVE_TRANSCRIPT_ENTRIES {
+            thread.entries.drain(..100);
+            thread
+                .entries
+                .insert(0, ThreadEntry::Info("(older messages trimmed)".into()));
+        }
         match event {
-            AgentEvent::MessageChunk { text } => {
-                if thread.entries.len() > 600 {
-                    thread.entries.drain(..100);
-                    thread
-                        .entries
-                        .insert(0, ThreadEntry::Info("(older messages trimmed)".into()));
-                }
+            AgentEvent::MessageChunk { text, .. } => {
                 match thread.entries.last_mut() {
                     Some(ThreadEntry::Assistant(existing)) if !thread.break_assistant => {
                         existing.push_str(&text);
@@ -85,59 +126,68 @@ impl Workspace {
             AgentEvent::Plan { .. } => {}
             AgentEvent::Other { .. } => {}
             AgentEvent::PermissionRequest {
+                session_id,
                 tool_call,
                 options,
                 responder,
                 ..
             } => {
+                if thread.pending_permissions.len() >= MAX_PENDING_PERMISSIONS {
+                    agent_log("permission_queue_full", serde_json::json!({}));
+                    let _ = responder.send(PermissionOutcome::Cancelled);
+                    return true;
+                }
+                if thread.session_id.as_deref() != Some(session_id.as_str()) {
+                    agent_log(
+                        "permission_wrong_session",
+                        serde_json::json!({ "session_id_bytes": session_id.len() }),
+                    );
+                    let _ = responder.send(PermissionOutcome::Cancelled);
+                    return true;
+                }
                 let title = tool_call
                     .get("title")
                     .and_then(|title| title.as_str())
                     .unwrap_or("the agent asks for permission")
                     .to_string();
-                // Always-allow memory: auto-approve tools the user has
-                // permanently blessed for this agent.
-                let key = format!("{}|{title}", thread.agent_name);
-                if self.preferences.agent_always_allow.contains(&key) {
-                    let choice = options
-                        .iter()
-                        .find(|option| option.option_id.contains("always"))
-                        .or_else(|| options.iter().find(|option| option.kind.contains("allow")))
-                        .or(options.first())
-                        .map(|option| option.option_id.clone());
-                    if let Some(option_id) = choice {
-                        agent_log(
-                            "permission_auto",
-                            serde_json::json!({ "title": title, "option": option_id }),
-                        );
-                        let _ = responder.send(PermissionOutcome::Selected { option_id });
-                        thread.entries.push(ThreadEntry::Info(format!(
-                            "auto-approved: {title} (always allow)"
-                        )));
-                        cx.notify();
-                        return true;
-                    }
-                }
                 let input = tool_call.get("rawInput").and_then(|raw| {
                     if raw.is_null() || raw == &serde_json::json!({}) {
                         None
                     } else {
                         let mut text = raw.to_string();
                         if text.len() > 240 {
-                            text.truncate(240);
+                            // Byte-indexed truncate panics off a UTF-8
+                            // boundary and the JSON is agent-supplied.
+                            let mut end = 240;
+                            while !text.is_char_boundary(end) {
+                                end -= 1;
+                            }
+                            text.truncate(end);
                             text.push_str("...");
                         }
                         Some(text)
                     }
                 });
+                let option_ids = options
+                    .iter()
+                    .map(|option| option.option_id.clone())
+                    .collect();
+                // Cards and queued responders pair by id: answers land on
+                // the exact card clicked, never "the oldest one".
+                let request_id = thread.next_permission_id;
+                thread.next_permission_id += 1;
                 thread.entries.push(ThreadEntry::Permission {
+                    request_id,
                     title,
                     input,
                     options,
                     answered: None,
                 });
-                // Requests queue; answers pop in arrival order.
-                thread.pending_permissions.push_back(responder);
+                thread.pending_permissions.push_back(PendingPermission {
+                    request_id,
+                    responder,
+                    option_ids,
+                });
             }
             AgentEvent::Stderr { line } => {
                 if thread.session_id.is_none() {
@@ -150,6 +200,7 @@ impl Workspace {
             AgentEvent::Closed { reason } => {
                 thread.running = false;
                 thread.status = Some(reason);
+                self.agent.connections.remove(cache_key);
             }
         }
         cx.notify();

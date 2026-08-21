@@ -167,7 +167,7 @@ impl Workspace {
         let config = connected.client_config.clone();
         let task = rt::tokio().spawn(async move {
             zedb_ch::ChClient::new(config)
-                .query_guarded(&probe, 5, 32, 10 * 1024 * 1024 * 1024)
+                .query_guarded(&probe, 5, 32, 10 * 1024 * 1024 * 1024, 4 * 1024 * 1024)
                 .await
         });
         cx.spawn_in(window, async move |this, cx| {

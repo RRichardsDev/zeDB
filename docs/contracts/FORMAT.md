@@ -71,6 +71,26 @@ refresh_offset_expr = { dummy = "1 HOUR 42 MINUTE", sentinel = "2 HOUR 53 MINUTE
 # interval expressions).
 ```
 
+Tracking database names are plain ClickHouse identifier chunks: an ASCII
+letter or underscore followed by ASCII letters, digits, or underscores.
+Runtime cluster names are not restricted to that grammar (hyphenated cluster
+names are legal and common); where zeDB itself interpolates the cluster into
+DDL (tracking setup) it is backtick-quoted. Migrations that use `${cluster}`
+still require a plain identifier value at render time, as for any built-in
+parameter. Ancestor tracking imports accept a table name in `TABLE` or
+`DATABASE.TABLE` form under the plain-identifier grammar.
+
+Scope names are directory names under `current-state` and must match
+`[a-z0-9_]+`. Absolute paths, separators, parent components, uppercase letters,
+and punctuation are rejected when the repo opens.
+
+A repository is semi-trusted input (often a shared checkout), so opening one
+is bounded: symlinks are never followed (a symlinked directory under
+`migrations/` is skipped, a symlinked config or SQL file is rejected), the
+`migrations/` walk is depth-limited, and no single repo file over 16 MiB is
+read. These are safety limits, not format features; a well-formed repo never
+approaches them.
+
 - `${param}` placeholders may appear in identifier or expression position.
   Identifier-position values must match `[A-Za-z_][A-Za-z0-9_]*` at render
   time; anything else is a hard error (ClickHouse cannot parameterize

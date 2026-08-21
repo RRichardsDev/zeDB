@@ -6,9 +6,10 @@ impl Workspace {
     /// action demands it. Nothing here is skippable.
     pub(super) fn fleet_action_modal(
         &mut self,
-        action: FleetAction,
+        pending: PendingFleetAction,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let action = pending.action.clone();
         let tier = self.fleet_tier();
         let (tier_bg, tier_fg) = Self::tier_colors(tier);
         let tier_label = match tier {
@@ -27,13 +28,23 @@ impl Workspace {
         );
         let phrase = action.required_phrase(tier, irreversible);
         let typed = self.fleet.confirm_input.read(cx).text().trim().to_string();
-        let phrase_ok = phrase
-            .as_ref()
-            .map(|phrase| typed == *phrase)
-            .unwrap_or(true);
-        let ack_ok = !structural || self.fleet.ack_structural;
         let running = self.fleet.action_running;
-        let confirmable = phrase_ok && ack_ok && !running && self.fleet.action_result.is_none();
+        let confirmable = fleet_confirmation_valid(&FleetConfirmation {
+            pending: &pending,
+            current_connection: self
+                .connection
+                .connected
+                .as_ref()
+                .map(|connected| connected.name.as_str()),
+            current_repo: self.fleet.repo.as_ref().map(|repo| repo.root.as_path()),
+            write_unlocked: self.fleet.write_unlocked,
+            running,
+            completed: self.fleet.action_result.is_some(),
+            structural,
+            acknowledged: self.fleet.ack_structural,
+            required_phrase: phrase.as_deref(),
+            typed_phrase: &typed,
+        });
 
         // The dry-run: exactly what would execute, rendered.
         let mut dry_run: Vec<(String, String)> = Vec::new();
@@ -287,6 +298,7 @@ impl Workspace {
                 .child(
                     div()
                         .id("fleet-modal-cancel")
+                        .debug_selector(|| "fleet-modal-cancel".into())
                         .px_3()
                         .py_1()
                         .rounded(px(3.))
@@ -307,6 +319,7 @@ impl Workspace {
                     footer.child(
                         div()
                             .id("fleet-modal-confirm")
+                            .debug_selector(|| "fleet-modal-confirm".into())
                             .px_3()
                             .py_1()
                             .rounded(px(3.))

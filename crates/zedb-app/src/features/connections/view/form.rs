@@ -13,6 +13,8 @@ impl Workspace {
         // Values the Cloud control plane owns render locked: editing
         // them locally would only break the service link.
         let cloud_locked = form.cloud.is_some();
+        let form_busy =
+            self.connection.connecting.is_some() || form.provision == ProvisionStage::Working;
         let endpoint_rows = form
             .nodes
             .iter()
@@ -536,7 +538,7 @@ impl Workspace {
                                         .border_1()
                                         .border_color(theme::border())
                                         .child("Cancel")
-                                        .when(self.connection.connecting.is_none(), |button| {
+                                        .when(!form_busy, |button| {
                                             button
                                                 .hover(|button| {
                                                     button.bg(theme::bg_sidebar()).cursor_pointer()
@@ -555,7 +557,7 @@ impl Workspace {
                                         .border_1()
                                         .border_color(theme::border())
                                         .child("Save without testing")
-                                        .when(self.connection.connecting.is_none(), |button| {
+                                        .when(!form_busy, |button| {
                                             button
                                                 .hover(|button| {
                                                     button.bg(theme::bg_sidebar()).cursor_pointer()
@@ -577,10 +579,12 @@ impl Workspace {
                                         .text_color(theme::primary_foreground())
                                         .child(if self.connection.connecting.is_some() {
                                             "Testing nodes..."
+                                        } else if form.provision == ProvisionStage::Working {
+                                            "Provisioning..."
                                         } else {
                                             "Save & Connect"
                                         })
-                                        .when(self.connection.connecting.is_none(), |button| {
+                                        .when(!form_busy, |button| {
                                             button
                                                 .hover(|button| {
                                                     button

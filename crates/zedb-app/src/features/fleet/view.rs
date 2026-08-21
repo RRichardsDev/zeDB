@@ -14,6 +14,9 @@ mod author;
 mod detail;
 #[path = "view/panel.rs"]
 mod panel;
+#[cfg(test)]
+#[path = "view/security_tests.rs"]
+mod security_tests;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -78,7 +81,11 @@ impl FleetAction {
 
     /// What the operator must type to confirm on a production tier (or
     /// for irreversible work on any tier).
-    fn required_phrase(&self, tier: zedb_core::EnvTier, irreversible: bool) -> Option<String> {
+    pub(super) fn required_phrase(
+        &self,
+        tier: zedb_core::EnvTier,
+        irreversible: bool,
+    ) -> Option<String> {
         if irreversible {
             return Some("irreversible".into());
         }
@@ -93,6 +100,44 @@ impl FleetAction {
             | Self::RemoveTargeted { database, .. } => database.clone(),
         })
     }
+}
+
+/// A confirmation is valid only for the connection and checkout whose dry run
+/// the user reviewed.
+#[derive(Clone)]
+pub struct PendingFleetAction {
+    pub action: FleetAction,
+    pub connection: String,
+    pub repo_root: std::path::PathBuf,
+}
+
+pub(super) struct FleetConfirmation<'a> {
+    pub pending: &'a PendingFleetAction,
+    pub current_connection: Option<&'a str>,
+    pub current_repo: Option<&'a std::path::Path>,
+    pub write_unlocked: bool,
+    pub running: bool,
+    pub completed: bool,
+    pub structural: bool,
+    pub acknowledged: bool,
+    pub required_phrase: Option<&'a str>,
+    pub typed_phrase: &'a str,
+}
+
+pub(super) fn fleet_context_matches(check: &FleetConfirmation<'_>) -> bool {
+    check.write_unlocked
+        && check.current_connection == Some(check.pending.connection.as_str())
+        && check.current_repo == Some(check.pending.repo_root.as_path())
+}
+
+pub(super) fn fleet_confirmation_valid(check: &FleetConfirmation<'_>) -> bool {
+    fleet_context_matches(check)
+        && !check.running
+        && !check.completed
+        && (!check.structural || check.acknowledged)
+        && check
+            .required_phrase
+            .is_none_or(|required| check.typed_phrase.trim() == required)
 }
 
 /// The repo picker's state machine, opened from the folder button
@@ -150,7 +195,7 @@ pub struct FleetState {
     pub write_unlocked: bool,
     /// Cluster names discovered from system.clusters on refresh.
     pub clusters: Vec<String>,
-    pub pending_action: Option<FleetAction>,
+    pub pending_action: Option<PendingFleetAction>,
     pub ack_structural: bool,
     pub confirm_input: Entity<TextInput>,
     pub action_running: bool,

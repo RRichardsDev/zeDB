@@ -145,7 +145,7 @@ impl Workspace {
             cx.notify();
             return;
         };
-        let dest = base.join(zedb_core::git::clone_directory_name(&url));
+        let dest = base.join(crate::managed_checkout::directory_name(&url));
         if dest.join(".git").exists() {
             if !zedb_core::git::has_upstream(&dest) {
                 // Nothing upstream to pull (the remote is still empty);
@@ -312,6 +312,36 @@ impl Workspace {
     pub(crate) fn fleet_refresh(&mut self, cx: &mut Context<Self>) {
         let Some(repo) = self.fleet.repo.clone() else {
             return;
+        };
+        // Refresh means "reflect reality", and that includes the
+        // checkout: a pulled commit or a hand-written migration must
+        // show up here, not only after reopening the repo.
+        let repo = match zedb_core::repo::MigrationRepo::open_root(&repo.root) {
+            Ok(reopened) => {
+                let chain = |repo: &zedb_core::repo::MigrationRepo| -> Vec<(u32, Option<zedb_core::repo::RollbackClass>)> {
+                    repo.migrations
+                        .iter()
+                        .map(|migration| (migration.number, migration.rollback_class))
+                        .collect()
+                };
+                if chain(&reopened) != chain(&repo) {
+                    // A changed chain invalidates the last checks and
+                    // regen verdicts, as reopening the repo would.
+                    self.checks_clean = false;
+                    self.regen_status = None;
+                }
+                let reopened = Arc::new(reopened);
+                self.fleet.git = zedb_core::git::read_git_status(&reopened.root);
+                self.fleet.repo = Some(reopened.clone());
+                reopened
+            }
+            Err(error) => {
+                // A checkout that stopped parsing is a loud stop, not a
+                // silent refresh of stale state.
+                self.fleet.fetch_error = Some(format!("Could not re-read the repo: {error}"));
+                cx.notify();
+                return;
+            }
         };
         let Some(connected) = &self.connection.connected else {
             self.fleet.fetch_error = Some("Connect to a cluster to load fleet status".into());

@@ -96,6 +96,15 @@ impl Workspace {
     }
 
     pub(crate) fn save_form(&mut self, cx: &mut Context<Self>) {
+        if self
+            .connection
+            .form
+            .as_ref()
+            .is_some_and(|form| form.provision == ProvisionStage::Working)
+        {
+            self.flash_warning("Wait for password provisioning to finish", cx);
+            return;
+        }
         let result = self
             .draft_from_form(cx)
             .and_then(|draft| self.persist_draft(&draft, None).map(|_| draft.config.name));
@@ -111,6 +120,15 @@ impl Workspace {
     }
 
     pub(crate) fn save_and_connect(&mut self, cx: &mut Context<Self>) {
+        if self
+            .connection
+            .form
+            .as_ref()
+            .is_some_and(|form| form.provision == ProvisionStage::Working)
+        {
+            self.flash_warning("Wait for password provisioning to finish", cx);
+            return;
+        }
         let draft = match self.draft_from_form(cx) {
             Ok(draft) => draft,
             Err(error) => {

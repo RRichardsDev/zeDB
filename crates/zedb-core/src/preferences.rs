@@ -30,8 +30,9 @@ pub struct Preferences {
     pub fleet_cluster: Option<String>,
     /// User-added ACP agents for the agent pane, beyond the built-ins.
     pub custom_agents: Vec<CustomAgent>,
-    /// Tools the user chose Always Allow for, as "agent|tool" keys;
-    /// matching permission requests auto-approve across sessions.
+    /// Legacy title-based grants retained only for settings compatibility.
+    /// They are ignored by the app and excluded from settings sync because ACP
+    /// display titles are not stable authority identities.
     pub agent_always_allow: Vec<String>,
     /// Agent pane width, remembered across launches.
     pub agent_pane_width: Option<f32>,
@@ -109,7 +110,7 @@ pub fn settings_file_path() -> Result<PathBuf, StoreError> {
 
 pub fn load_preferences() -> Result<Preferences, StoreError> {
     let path = preferences_path()?;
-    let data = match std::fs::read_to_string(&path) {
+    let data = match crate::store::read_bounded_string(&path, crate::store::MAX_LOCAL_STATE_BYTES) {
         Ok(data) => data,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(Preferences::default());
@@ -121,19 +122,11 @@ pub fn load_preferences() -> Result<Preferences, StoreError> {
 
 pub fn save_preferences(preferences: &Preferences) -> Result<(), StoreError> {
     let path = preferences_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| StoreError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
+    // settings.json holds saved SQL, the sync repo URL, and agent command
+    // lines; write it private to the owner.
     let data = serde_json::to_string_pretty(preferences).expect("serializable");
-    let temporary = path.with_extension("json.tmp");
-    std::fs::write(&temporary, data).map_err(|source| StoreError::Io {
-        path: temporary.clone(),
-        source,
-    })?;
-    std::fs::rename(&temporary, &path).map_err(|source| StoreError::Io { path, source })
+    crate::store::write_private_atomic(&path, data.as_bytes())
+        .map_err(|source| StoreError::Io { path, source })
 }
 
 #[cfg(test)]

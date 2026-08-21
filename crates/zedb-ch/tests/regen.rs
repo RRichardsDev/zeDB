@@ -39,6 +39,38 @@ fn copy_fixture(destination: &Path) {
     copy_tree(&fixture(), destination);
 }
 
+#[cfg(unix)]
+#[test]
+fn regen_refuses_directory_symlinks_beneath_current_state() {
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    copy_fixture(dir.path());
+    let repo = MigrationRepo::open_root(dir.path()).unwrap();
+    let mut safe_files = BTreeMap::new();
+    safe_files.insert("db/00000_01_safe.sql".into(), "first\n".into());
+    write_tree(&repo, &safe_files).unwrap();
+    safe_files.insert("db/00000_01_safe.sql".into(), "second\n".into());
+    write_tree(&repo, &safe_files).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("current-state/db/00000_01_safe.sql")).unwrap(),
+        "second\n"
+    );
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("00000_01_outside.sql");
+    std::fs::write(&outside_file, "outside\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("current-state")).unwrap();
+    let linked_scope = dir.path().join("current-state/linked");
+    symlink(outside.path(), &linked_scope).unwrap();
+
+    let mut files = BTreeMap::new();
+    files.insert("linked/00000_01_outside.sql".into(), "changed\n".into());
+    let error = write_tree(&repo, &files).unwrap_err().to_string();
+    assert!(error.contains("symlink"), "{error}");
+    assert_eq!(std::fs::read_to_string(outside_file).unwrap(), "outside\n");
+}
+
 /// Proves, against the real pinned binary, that regen is byte-stable,
 /// that the canonical phase handles ALTER, that data-only migrations
 /// cause zero churn, and that --check catches hand edits. Requires a

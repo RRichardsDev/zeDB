@@ -7,13 +7,17 @@
 //! see docs/contracts/FORMAT.md.
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use regex::Regex;
 use zedb_core::repo::{render, RepoConfig};
+
+use crate::process::output_with_timeout;
+
+const REPLAY_PROCESS_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayError {
@@ -179,23 +183,18 @@ impl LocalReplay {
     fn run_script(&self, script: &str) -> Result<String, ReplayError> {
         // Refresh scheduling stays off: pending initial refreshes of
         // refreshable MVs otherwise keep clickhouse-local from exiting.
-        let mut child = Command::new(&self.binary)
-            .args([
-                "local",
-                "-n",
-                "--",
-                "--stop_refreshable_materialized_views_on_startup=1",
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        child
-            .stdin
-            .as_mut()
-            .expect("stdin was piped")
-            .write_all(script.as_bytes())?;
-        let output = child.wait_with_output()?;
+        let mut command = Command::new(&self.binary);
+        command.args([
+            "local",
+            "-n",
+            "--",
+            "--stop_refreshable_materialized_views_on_startup=1",
+        ]);
+        let output = output_with_timeout(
+            command,
+            Some(script.as_bytes().to_vec()),
+            REPLAY_PROCESS_TIMEOUT,
+        )?;
         if !output.status.success() {
             return Err(ReplayError::Apply(
                 String::from_utf8_lossy(&output.stderr).trim().to_string(),
@@ -321,9 +320,9 @@ impl LocalReplay {
 
     /// Pretty-print one statement with the pinned ClickHouse formatter.
     pub fn format_sql(&self, sql: &str) -> Result<String, ReplayError> {
-        let output = Command::new(&self.binary)
-            .args(["format", "--query", sql])
-            .output()?;
+        let mut command = Command::new(&self.binary);
+        command.args(["format", "--query", sql]);
+        let output = output_with_timeout(command, None, REPLAY_PROCESS_TIMEOUT)?;
         if !output.status.success() {
             return Err(ReplayError::Format {
                 stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),

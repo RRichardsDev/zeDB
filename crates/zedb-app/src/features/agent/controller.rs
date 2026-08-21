@@ -194,6 +194,7 @@ impl Workspace {
             running: false,
             status: Some("starting...".into()),
             pending_permissions: std::collections::VecDeque::new(),
+            next_permission_id: 0,
             generation,
         });
         self.agent.picker_open = false;
@@ -209,10 +210,11 @@ impl Workspace {
         // Handshake: initialize, then open the session in the repo,
         // registering the zedb MCP server (this same executable in a
         // hidden serve mode) so the agent gets the fleet and query
-        // tools. Credentials travel via a 0600 file the server deletes
-        // on read, never argv or env.
+        // tools. Database credentials remain in the app process; the
+        // child receives only a private bridge capability.
         let bridge_socket = self.agent_ensure_bridge(cx);
-        let mcp_servers = self.agent_mcp_server_config(bridge_socket);
+        let bridge_token = self.agent.bridge_token.clone();
+        let mcp_servers = self.agent_mcp_server_config(bridge_socket, bridge_token);
         let handshake_connection = connection.clone();
         let handshake_cwd = cwd.clone().unwrap_or_else(|| "/".into());
         let handle = rt::tokio().spawn(async move {
@@ -249,7 +251,10 @@ impl Workspace {
                         session_ready = true;
                     }
                     Err(error) => {
-                        agent_log("session_failed", serde_json::json!({ "error": error }));
+                        agent_log(
+                            "session_failed",
+                            serde_json::json!({ "error_bytes": error.len() }),
+                        );
                         thread.status = Some(format!(
                             "could not start a session: {error}; if this is an auth \
                              problem, log in with the agent's own CLI first"

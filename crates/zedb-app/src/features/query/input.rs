@@ -200,6 +200,7 @@ impl Workspace {
     pub(crate) fn flash_notice(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
         self.notice = Some(message.into());
         self.notice_warning = false;
+        self.notice_success = false;
         self.notice_flash_id += 1;
         let flash_id = self.notice_flash_id;
         cx.spawn(async move |this, cx| {
@@ -216,9 +217,36 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A green, self-clearing confirmation for outcomes that are easy
+    /// to miss in the neutral status tone ("you are up to date").
+    pub(crate) fn flash_success(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.notice = Some(message.into());
+        self.notice_warning = false;
+        self.notice_success = true;
+        self.notice_flash_id += 1;
+        let flash_id = self.notice_flash_id;
+        // The executor's timer, not Timer::after: same behavior in the
+        // app, but it follows the simulated clock under #[gpui::test].
+        let timer = cx.background_executor().timer(Duration::from_secs(3));
+        cx.spawn(async move |this, cx| {
+            timer.await;
+            this.update(cx, |this, cx| {
+                if this.notice_flash_id == flash_id {
+                    this.notice = None;
+                    this.notice_success = false;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     pub(crate) fn flash_warning(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
         self.notice = Some(message.into());
         self.notice_warning = true;
+        self.notice_success = false;
         self.notice_flash_id += 1;
         let flash_id = self.notice_flash_id;
         cx.spawn(async move |this, cx| {

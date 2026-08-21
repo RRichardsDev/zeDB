@@ -4,6 +4,7 @@
 //! Doc comments on these types are the user-visible `--help` text, so they
 //! read as documentation rather than as notes to the next maintainer.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -47,11 +48,17 @@ pub enum Command {
         #[arg(long, conflicts_with = "pin_version")]
         server: Option<String>,
         /// Server user for discovery.
-        #[arg(long, default_value = "default")]
-        user: String,
-        /// Server password for discovery.
-        #[arg(long, default_value = "")]
-        password: String,
+        #[arg(long, requires = "server", conflicts_with = "pin_version")]
+        user: Option<String>,
+        /// Read the server password for discovery from this file.
+        #[arg(
+            long = "password-file",
+            value_name = "FILE",
+            value_parser = read_secret_file,
+            requires = "server",
+            conflicts_with = "pin_version"
+        )]
+        password: Option<String>,
         /// Pin this exact version instead of discovering one.
         #[arg(long = "version", id = "pin_version")]
         pin_version: Option<String>,
@@ -74,7 +81,7 @@ pub enum Command {
     /// Show each database's chain position.
     Status {
         #[command(flatten)]
-        connection: ConnectionArgs,
+        connection: ReadConnectionArgs,
         #[command(flatten)]
         targets: TargetArgs,
         /// Emit machine-readable JSON.
@@ -137,7 +144,7 @@ pub enum Command {
     /// Diff live schemas against each database's applied chain position.
     Verify {
         #[command(flatten)]
-        connection: ConnectionArgs,
+        connection: ReadConnectionArgs,
         #[command(flatten)]
         targets: TargetArgs,
         /// Emit machine-readable JSON.
@@ -150,10 +157,16 @@ pub enum Command {
         /// Server HTTP URL, e.g. http://localhost:8123.
         #[arg(long)]
         server: Option<String>,
-        #[arg(long, default_value = "default")]
-        user: String,
-        #[arg(long, default_value = "")]
-        password: String,
+        #[arg(long, requires = "server")]
+        user: Option<String>,
+        /// Read the server password from this file.
+        #[arg(
+            long = "password-file",
+            value_name = "FILE",
+            value_parser = read_secret_file,
+            requires = "server"
+        )]
+        password: Option<String>,
         /// Serve schema_search and lint_sql from the zeDB app's schema
         /// cache for this connection name (as shown in the app sidebar).
         #[arg(long)]
@@ -171,14 +184,27 @@ pub enum Command {
 }
 
 #[derive(clap::Args)]
+pub struct ReadConnectionArgs {
+    /// Server HTTP URL, e.g. http://localhost:8123.
+    #[arg(long)]
+    pub server: String,
+    #[arg(long, default_value = "default")]
+    pub user: String,
+    /// Read the server password from this file.
+    #[arg(long = "password-file", value_name = "FILE", value_parser = read_secret_file)]
+    pub password: Option<String>,
+}
+
+#[derive(clap::Args)]
 pub struct ConnectionArgs {
     /// Server HTTP URL, e.g. http://localhost:8123.
     #[arg(long)]
     pub server: String,
     #[arg(long, default_value = "default")]
     pub user: String,
-    #[arg(long, default_value = "")]
-    pub password: String,
+    /// Read the server password from this file.
+    #[arg(long = "password-file", value_name = "FILE", value_parser = read_secret_file)]
+    pub password: Option<String>,
     /// Value for ${cluster}; DDL runs ON CLUSTER as written.
     #[arg(long)]
     pub cluster: Option<String>,
@@ -190,8 +216,14 @@ pub struct ConnectionArgs {
     /// (OPTIMIZE, TRUNCATE, structural ALTER, functions, SYSTEM).
     #[arg(long)]
     pub admin_user: Option<String>,
-    #[arg(long, default_value = "")]
-    pub admin_password: String,
+    /// Read the elevated user's password from this file.
+    #[arg(
+        long = "admin-password-file",
+        value_name = "FILE",
+        value_parser = read_secret_file,
+        requires = "admin_user"
+    )]
+    pub admin_password: Option<String>,
     /// Consent to mutate; without it mutating commands refuse.
     #[arg(long)]
     pub write: bool,
@@ -201,6 +233,31 @@ pub struct ConnectionArgs {
     /// Template parameter override, name=value (repeatable).
     #[arg(long = "param", value_parser = parse_param)]
     pub params: Vec<(String, String)>,
+    /// Read a template parameter from a file, name=FILE (repeatable).
+    #[arg(long = "param-file", value_parser = parse_param_file)]
+    pub param_files: Vec<(String, String)>,
+}
+
+impl ReadConnectionArgs {
+    pub fn options(&self) -> zedb_ch::runner::RunnerOptions {
+        zedb_ch::runner::RunnerOptions {
+            server: zedb_ch::ChConfig {
+                url: self.server.clone(),
+                user: self.user.clone(),
+                password: self.password.clone(),
+                database: None,
+                read_only: true,
+                driver: Default::default(),
+                native_port: None,
+            },
+            admin: None,
+            cluster: None,
+            no_cluster: false,
+            write: false,
+            dry_run: false,
+            overrides: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(clap::Args)]
@@ -217,18 +274,68 @@ pub struct TargetArgs {
 }
 
 fn parse_param(text: &str) -> Result<(String, String), String> {
-    text.split_once('=')
-        .map(|(name, value)| (name.to_string(), value.to_string()))
-        .ok_or_else(|| format!("expected name=value, got {text:?}"))
+    let (name, value) = text
+        .split_once('=')
+        .ok_or_else(|| format!("expected name=value, got {text:?}"))?;
+    validate_param_name(name)?;
+    Ok((name.to_string(), value.to_string()))
+}
+
+fn parse_param_file(text: &str) -> Result<(String, String), String> {
+    let (name, path) = text
+        .split_once('=')
+        .ok_or_else(|| format!("expected name=FILE, got {text:?}"))?;
+    validate_param_name(name)?;
+    Ok((name.to_string(), read_secret_file(path)?))
+}
+
+fn validate_param_name(name: &str) -> Result<(), String> {
+    if !name.is_empty()
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "parameter name {name:?} must contain only ASCII letters, digits, and underscores"
+        ))
+    }
+}
+
+fn read_secret_file(path: &str) -> Result<String, String> {
+    const MAX_SECRET_BYTES: usize = 64 * 1024;
+
+    let bytes = std::fs::read(path).map_err(|error| format!("cannot read {path:?}: {error}"))?;
+    if bytes.len() > MAX_SECRET_BYTES {
+        return Err(format!(
+            "secret file {path:?} is too large (maximum {MAX_SECRET_BYTES} bytes)"
+        ));
+    }
+    let secret =
+        String::from_utf8(bytes).map_err(|_| format!("secret file {path:?} is not valid UTF-8"))?;
+    let secret = secret.trim_end_matches(['\r', '\n']).to_string();
+    if secret.is_empty() {
+        return Err(format!("secret file {path:?} is empty"));
+    }
+    Ok(secret)
 }
 
 impl ConnectionArgs {
-    pub fn options(&self) -> zedb_ch::runner::RunnerOptions {
-        zedb_ch::runner::RunnerOptions {
+    pub fn options(&self) -> Result<zedb_ch::runner::RunnerOptions, String> {
+        let mut overrides = BTreeMap::new();
+        for (name, value) in self.params.iter().chain(&self.param_files) {
+            if overrides.insert(name.clone(), value.clone()).is_some() {
+                return Err(format!(
+                    "template parameter {name:?} was supplied more than once"
+                ));
+            }
+        }
+        Ok(zedb_ch::runner::RunnerOptions {
             server: zedb_ch::ChConfig {
                 url: self.server.clone(),
                 user: self.user.clone(),
-                password: (!self.password.is_empty()).then(|| self.password.clone()),
+                password: self.password.clone(),
                 database: None,
                 read_only: false,
                 driver: Default::default(),
@@ -237,7 +344,7 @@ impl ConnectionArgs {
             admin: self.admin_user.as_ref().map(|user| zedb_ch::ChConfig {
                 url: self.server.clone(),
                 user: user.clone(),
-                password: (!self.admin_password.is_empty()).then(|| self.admin_password.clone()),
+                password: self.admin_password.clone(),
                 database: None,
                 read_only: false,
                 driver: Default::default(),
@@ -247,8 +354,8 @@ impl ConnectionArgs {
             no_cluster: self.no_cluster,
             write: self.write,
             dry_run: self.dry_run,
-            overrides: self.params.iter().cloned().collect(),
-        }
+            overrides,
+        })
     }
 }
 
@@ -331,19 +438,24 @@ mod tests {
     }
 
     #[test]
-    fn empty_passwords_become_none_not_an_empty_credential() {
+    fn omitted_password_files_become_none() {
         let cli = parse(&["zedb", "status", "--server", "http://h:8123", "--all"]);
         let Command::Status { connection, .. } = cli.command else {
             panic!("expected status");
         };
         let options = connection.options();
         assert_eq!(options.server.password, None);
+        assert!(options.server.read_only);
         assert!(options.admin.is_none());
         assert!(!options.write);
     }
 
     #[test]
     fn connection_args_carry_admin_and_overrides_through() {
+        let directory = tempfile::tempdir().unwrap();
+        let password = directory.path().join("admin-password");
+        std::fs::write(&password, "s3cret\n").unwrap();
+        let password = password.to_str().unwrap();
         let cli = parse(&[
             "zedb",
             "upgrade",
@@ -353,8 +465,8 @@ mod tests {
             "--write",
             "--admin-user",
             "root",
-            "--admin-password",
-            "s3cret",
+            "--admin-password-file",
+            password,
             "--param",
             "db=analytics",
             "--param",
@@ -363,7 +475,7 @@ mod tests {
         let Command::Upgrade { connection, .. } = cli.command else {
             panic!("expected upgrade");
         };
-        let options = connection.options();
+        let options = connection.options().unwrap();
         assert!(options.write);
         let admin = options.admin.expect("admin configured");
         assert_eq!(admin.user, "root");
@@ -376,6 +488,54 @@ mod tests {
             options.overrides.get("shard").map(String::as_str),
             Some("01")
         );
+    }
+
+    #[test]
+    fn duplicate_parameter_names_are_rejected_across_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let secret = directory.path().join("secret");
+        std::fs::write(&secret, "second\n").unwrap();
+        let secret_arg = format!("token={}", secret.display());
+        let cli = parse(&[
+            "zedb",
+            "upgrade",
+            "--server",
+            "u",
+            "--all",
+            "--param",
+            "token=first",
+            "--param-file",
+            &secret_arg,
+        ]);
+        let Command::Upgrade { connection, .. } = cli.command else {
+            panic!("expected upgrade");
+        };
+        let error = match connection.options() {
+            Ok(_) => panic!("duplicate parameter should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            "template parameter \"token\" was supplied more than once"
+        );
+    }
+
+    #[test]
+    fn secret_files_are_bounded_nonempty_utf8_and_trim_line_endings() {
+        let directory = tempfile::tempdir().unwrap();
+        let secret = directory.path().join("secret");
+        std::fs::write(&secret, "value\r\n").unwrap();
+        assert_eq!(
+            read_secret_file(secret.to_str().unwrap()),
+            Ok("value".into())
+        );
+
+        std::fs::write(&secret, "\n").unwrap();
+        assert!(read_secret_file(secret.to_str().unwrap()).is_err());
+        std::fs::write(&secret, [0xff]).unwrap();
+        assert!(read_secret_file(secret.to_str().unwrap()).is_err());
+        std::fs::write(&secret, vec![b'x'; 64 * 1024 + 1]).unwrap();
+        assert!(read_secret_file(secret.to_str().unwrap()).is_err());
     }
 
     #[test]
@@ -404,6 +564,78 @@ mod tests {
             assert!(
                 Cli::try_parse_from(&args).is_err(),
                 "should have been rejected: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn credentials_require_the_endpoint_or_identity_that_uses_them() {
+        for args in [
+            vec!["zedb", "pin", "--version", "24.1.1.1", "--user", "root"],
+            vec!["zedb", "mcp", "--user", "root"],
+            vec![
+                "zedb",
+                "upgrade",
+                "--server",
+                "u",
+                "--all",
+                "--admin-password-file",
+                "missing",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "should have been rejected: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_password_arguments_are_not_part_of_the_interface() {
+        for args in [
+            vec![
+                "zedb",
+                "status",
+                "--server",
+                "u",
+                "--all",
+                "--password",
+                "secret",
+            ],
+            vec![
+                "zedb",
+                "upgrade",
+                "--server",
+                "u",
+                "--all",
+                "--admin-user",
+                "root",
+                "--admin-password",
+                "secret",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(&args).is_err());
+        }
+    }
+
+    #[test]
+    fn read_commands_do_not_accept_write_or_admin_options() {
+        for args in [
+            vec!["zedb", "status", "--server", "u", "--all", "--write"],
+            vec!["zedb", "verify", "--server", "u", "--all", "--dry-run"],
+            vec![
+                "zedb",
+                "status",
+                "--server",
+                "u",
+                "--all",
+                "--admin-user",
+                "root",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "read command should reject unused authority: {args:?}"
             );
         }
     }

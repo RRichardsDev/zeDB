@@ -8,9 +8,20 @@ use security_framework::passwords::{
 };
 
 const SERVICE: &str = "dev.zedb.app.protected-credentials";
+/// Plain (non-presence-protected) tokens live in their own service so a
+/// connection name can never collide with a token account and read, migrate,
+/// or delete it through the password path.
+const PLAIN_SERVICE: &str = "dev.zedb.app.tokens";
 const LEGACY_SERVICE: &str = "zedb";
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
+
+/// Every legacy plain-token account shipped by zeDB uses this prefix. The
+/// old service also held connection passwords, so password migration must
+/// refuse this reserved namespace until token reads have moved the item.
+fn is_legacy_plain_account(name: &str) -> bool {
+    name.starts_with("zedb-")
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
@@ -72,6 +83,12 @@ pub fn get_password(connection_name: &str) -> Result<Option<String>, SecretError
         return Ok(Some(password));
     }
 
+    // Legacy plain tokens and passwords once shared a service. Never treat a
+    // reserved token account as a connection password, even before its lazy
+    // token migration has run.
+    if is_legacy_plain_account(connection_name) {
+        return Ok(None);
+    }
     let Some(password) = read(connection_name, false)? else {
         return Ok(None);
     };
@@ -92,22 +109,55 @@ pub fn get_password(connection_name: &str) -> Result<Option<String>, SecretError
 /// protection: for tokens read silently at every launch (e.g. the GitHub
 /// OAuth token), where a biometric prompt would be wrong and where the
 /// protected keychain is unavailable to unprovisioned dev builds.
+///
+/// Tokens live in their own [`PLAIN_SERVICE`] namespace, disjoint from the
+/// per-connection password accounts, so a connection named like a token
+/// account cannot reach a token through the password path.
 pub fn set_plain(name: &str, value: &str) -> Result<(), SecretError> {
-    set_generic_password_options(value.as_bytes(), options(name, false))?;
+    set_generic_password_options(
+        value.as_bytes(),
+        PasswordOptions::new_generic_password(PLAIN_SERVICE, name),
+    )?;
     Ok(())
 }
 
 pub fn get_plain(name: &str) -> Result<Option<String>, SecretError> {
-    read(name, false)
+    match generic_password(PasswordOptions::new_generic_password(PLAIN_SERVICE, name)) {
+        Ok(value) => return Ok(Some(String::from_utf8(value)?)),
+        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+        Err(error) => return Err(error.into()),
+    }
+    // Migrate a token written by an older build into the shared legacy
+    // service, moving it into its own namespace on first read.
+    let Some(value) = read(name, false)? else {
+        return Ok(None);
+    };
+    if set_plain(name, &value).is_ok() {
+        let _ = delete(name, false);
+    }
+    Ok(Some(value))
 }
 
 pub fn delete_plain(name: &str) -> Result<(), SecretError> {
+    match delete_generic_password_options(PasswordOptions::new_generic_password(
+        PLAIN_SERVICE,
+        name,
+    )) {
+        Ok(()) => {}
+        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+        Err(error) => return Err(error.into()),
+    }
+    // Also clear any un-migrated legacy copy.
     delete(name, false)
 }
 
 pub fn delete_password(connection_name: &str) -> Result<(), SecretError> {
     delete(connection_name, true)?;
-    delete(connection_name, false)
+    if is_legacy_plain_account(connection_name) {
+        Ok(())
+    } else {
+        delete(connection_name, false)
+    }
 }
 
 /// Move a stored password when a connection is renamed.
@@ -117,4 +167,17 @@ pub fn rename(old_name: &str, new_name: &str) -> Result<(), SecretError> {
         delete_password(old_name)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_legacy_plain_account;
+
+    #[test]
+    fn legacy_plain_token_namespace_is_never_a_password_namespace() {
+        assert!(is_legacy_plain_account("zedb-github-oauth"));
+        assert!(is_legacy_plain_account("zedb-git-elevated-github.com"));
+        assert!(is_legacy_plain_account("zedb-clickhouse-cloud-org-1"));
+        assert!(!is_legacy_plain_account("production"));
+    }
 }

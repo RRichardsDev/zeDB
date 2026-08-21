@@ -39,27 +39,29 @@ fn history_path() -> Result<PathBuf, StoreError> {
 }
 
 /// Missing or unreadable history is an empty history, never an error:
-/// nothing here is worth blocking launch over.
+/// nothing here is worth blocking launch over. The cap is re-applied on
+/// load so a hand-edited or oversized file cannot outgrow it in memory.
 pub fn load_history() -> Vec<HistoryEntry> {
     let Ok(path) = history_path() else {
         return Vec::new();
     };
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+    let mut entries: Vec<HistoryEntry> =
+        crate::store::read_bounded_string(&path, crate::store::MAX_LOCAL_STATE_BYTES)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
+    entries.truncate(HISTORY_CAP);
+    entries
 }
 
 pub fn save_history(entries: &[HistoryEntry]) -> Result<(), StoreError> {
     let path = history_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| StoreError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
+    // History records every statement run, including DDL that embeds
+    // credentials; keep it private to the owner and write atomically so a
+    // torn write cannot silently erase the file.
     let json = serde_json::to_string_pretty(entries).expect("history serializes");
-    std::fs::write(&path, json).map_err(|source| StoreError::Io { path, source })
+    crate::store::write_private_atomic(&path, json.as_bytes())
+        .map_err(|source| StoreError::Io { path, source })
 }
 
 /// Prepend newest-first; re-running the identical statement on the

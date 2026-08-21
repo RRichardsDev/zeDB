@@ -16,9 +16,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
+
+const MAX_ACP_FRAME_BYTES: usize = 2 * 1024 * 1024;
+const MAX_STDERR_LINE_BYTES: usize = 64 * 1024;
+const MAX_PENDING_REQUESTS: usize = 64;
+const OUTGOING_CAPACITY: usize = 64;
+const EVENT_CAPACITY: usize = 256;
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 pub use protocol::{
     AgentEvent, ContentBlock, EnvVariable, InitializeResult, McpServerConfig, NewSessionResult,
@@ -35,6 +43,10 @@ pub enum AcpError {
     Rpc { code: i64, message: String },
     #[error("malformed agent response: {0}")]
     Protocol(String),
+    #[error("agent resource limit exceeded: {0}")]
+    Limit(&'static str),
+    #[error("agent request timed out: {0}")]
+    Timeout(&'static str),
 }
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, AcpError>>>>>;
@@ -43,10 +55,10 @@ type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, AcpError>>>>
 /// process; `events()` yields the conversation as it streams.
 pub struct AgentConnection {
     child: Child,
-    outgoing: mpsc::UnboundedSender<String>,
+    outgoing: mpsc::Sender<String>,
     pending: Pending,
     next_id: AtomicU64,
-    events: Option<mpsc::UnboundedReceiver<AgentEvent>>,
+    events: Option<mpsc::Receiver<AgentEvent>>,
 }
 
 impl AgentConnection {
@@ -78,8 +90,8 @@ impl AgentConnection {
         let stderr = child.stderr.take().expect("stderr was piped");
 
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<String>();
+        let (event_tx, event_rx) = mpsc::channel(EVENT_CAPACITY);
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<String>(OUTGOING_CAPACITY);
 
         // Writer pump: everything the client sends goes through one
         // task so requests and responses never interleave mid-line.
@@ -97,11 +109,24 @@ impl AgentConnection {
         });
 
         // Stderr pump: agents talk auth problems here; surface them.
+        // Awaiting the send gives real backpressure: a momentarily busy
+        // consumer delays stderr instead of silently losing it.
         let stderr_events = event_tx.clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if stderr_events.send(AgentEvent::Stderr { line }).is_err() {
+            let mut reader = BufReader::new(stderr);
+            loop {
+                let line = match read_bounded_line(&mut reader, MAX_STDERR_LINE_BYTES).await {
+                    Ok(BoundedLine::Line(line)) => String::from_utf8_lossy(&line).into_owned(),
+                    Ok(BoundedLine::TooLarge) => {
+                        "agent stderr line exceeded the 64 KiB safety limit".into()
+                    }
+                    Ok(BoundedLine::Eof) | Err(_) => break,
+                };
+                if stderr_events
+                    .send(AgentEvent::Stderr { line })
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -112,21 +137,37 @@ impl AgentConnection {
         let reader_pending = pending.clone();
         let reader_outgoing = outgoing_tx.clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let Ok(message) = serde_json::from_str::<Value>(&line) else {
+            let mut reader = BufReader::new(stdout);
+            let close_reason = loop {
+                let line = match read_bounded_line(&mut reader, MAX_ACP_FRAME_BYTES).await {
+                    Ok(BoundedLine::Line(line)) => line,
+                    Ok(BoundedLine::TooLarge) => {
+                        break "agent frame exceeded the 2 MiB safety limit";
+                    }
+                    Ok(BoundedLine::Eof) => break "agent process ended",
+                    Err(_) => break "could not read agent output",
+                };
+                let Ok(message) = serde_json::from_slice::<Value>(&line) else {
                     continue;
                 };
-                route_message(message, &reader_pending, &reader_outgoing, &event_tx);
-            }
+                if !route_message(message, &reader_pending, &reader_outgoing, &event_tx).await {
+                    break "agent event consumer stopped";
+                }
+            };
             // Fail everything still in flight, then tell the consumer.
-            let mut pending = reader_pending.lock().expect("pending lock");
-            for (_, responder) in pending.drain() {
-                let _ = responder.send(Err(AcpError::Closed));
+            {
+                let mut pending = reader_pending.lock().expect("pending lock");
+                for (_, responder) in pending.drain() {
+                    let _ = responder.send(Err(AcpError::Closed));
+                }
             }
-            let _ = event_tx.send(AgentEvent::Closed {
-                reason: "agent process ended".into(),
-            });
+            // Awaited so the terminal event survives a full queue; the
+            // consumer relies on it to stop spinners and evict caches.
+            let _ = event_tx
+                .send(AgentEvent::Closed {
+                    reason: close_reason.into(),
+                })
+                .await;
         });
 
         Ok(Self {
@@ -139,26 +180,64 @@ impl AgentConnection {
     }
 
     /// Take the event stream; exactly one consumer may hold it.
-    pub fn take_events(&mut self) -> mpsc::UnboundedReceiver<AgentEvent> {
+    pub fn take_events(&mut self) -> mpsc::Receiver<AgentEvent> {
         self.events.take().expect("events already taken")
     }
 
-    async fn request(&self, method: &str, params: Value) -> Result<Value, AcpError> {
+    async fn request(
+        &self,
+        method: &'static str,
+        params: Value,
+        deadline: std::time::Duration,
+    ) -> Result<Value, AcpError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().expect("pending lock").insert(id, tx);
+        {
+            let mut pending = self.pending.lock().expect("pending lock");
+            if pending.len() >= MAX_PENDING_REQUESTS {
+                return Err(AcpError::Limit("too many pending requests"));
+            }
+            pending.insert(id, tx);
+        }
         let message = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        self.outgoing
-            .send(message.to_string())
-            .map_err(|_| AcpError::Closed)?;
-        rx.await.map_err(|_| AcpError::Closed)?
+        let message = message.to_string();
+        if message.len() > MAX_ACP_FRAME_BYTES {
+            self.pending.lock().expect("pending lock").remove(&id);
+            return Err(AcpError::Limit("outgoing frame exceeds 2 MiB"));
+        }
+        match tokio::time::timeout(deadline, self.outgoing.send(message)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                self.pending.lock().expect("pending lock").remove(&id);
+                return Err(AcpError::Closed);
+            }
+            Err(_) => {
+                self.pending.lock().expect("pending lock").remove(&id);
+                return Err(AcpError::Timeout(method));
+            }
+        }
+        match tokio::time::timeout(deadline, rx).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(_)) => Err(AcpError::Closed),
+            Err(_) => {
+                self.pending.lock().expect("pending lock").remove(&id);
+                Err(AcpError::Timeout(method))
+            }
+        }
     }
 
     fn notify(&self, method: &str, params: Value) -> Result<(), AcpError> {
         let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        let message = message.to_string();
+        if message.len() > MAX_ACP_FRAME_BYTES {
+            return Err(AcpError::Limit("outgoing frame exceeds 2 MiB"));
+        }
         self.outgoing
-            .send(message.to_string())
-            .map_err(|_| AcpError::Closed)
+            .try_send(message)
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => AcpError::Limit("outgoing queue is full"),
+                mpsc::error::TrySendError::Closed(_) => AcpError::Closed,
+            })
     }
 
     pub async fn initialize(&self) -> Result<InitializeResult, AcpError> {
@@ -170,6 +249,7 @@ impl AgentConnection {
             .request(
                 "initialize",
                 serde_json::to_value(params).expect("serialize"),
+                HANDSHAKE_TIMEOUT,
             )
             .await?;
         serde_json::from_value(result).map_err(|error| AcpError::Protocol(error.to_string()))
@@ -188,6 +268,7 @@ impl AgentConnection {
             .request(
                 "session/new",
                 serde_json::to_value(params).expect("serialize"),
+                HANDSHAKE_TIMEOUT,
             )
             .await?;
         serde_json::from_value(result).map_err(|error| AcpError::Protocol(error.to_string()))
@@ -206,6 +287,7 @@ impl AgentConnection {
             .request(
                 "session/prompt",
                 serde_json::to_value(params).expect("serialize"),
+                PROMPT_TIMEOUT,
             )
             .await?;
         serde_json::from_value(result).map_err(|error| AcpError::Protocol(error.to_string()))
@@ -223,20 +305,26 @@ impl AgentConnection {
     }
 }
 
-fn route_message(
+/// Route one incoming message. Sends into the bounded event and outgoing
+/// queues await free space (backpressure through the pipe) rather than
+/// dropping; `false` means the consumer is gone and the reader should stop.
+async fn route_message(
     message: Value,
     pending: &Pending,
-    outgoing: &mpsc::UnboundedSender<String>,
-    events: &mpsc::UnboundedSender<AgentEvent>,
-) {
+    outgoing: &mpsc::Sender<String>,
+    events: &mpsc::Sender<AgentEvent>,
+) -> bool {
+    if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return true;
+    }
     let id = message.get("id");
     let method = message.get("method").and_then(Value::as_str);
     match (id, method) {
         // A response to one of our requests.
         (Some(id), None) => {
-            let Some(id) = id.as_u64() else { return };
+            let Some(id) = id.as_u64() else { return true };
             let Some(responder) = pending.lock().expect("pending lock").remove(&id) else {
-                return;
+                return true;
             };
             let outcome = if let Some(error) = message.get("error") {
                 Err(AcpError::Rpc {
@@ -251,6 +339,7 @@ fn route_message(
                 Ok(message.get("result").cloned().unwrap_or(Value::Null))
             };
             let _ = responder.send(outcome);
+            true
         }
         // An agent-initiated request we must answer.
         (Some(id), Some("session/request_permission")) => {
@@ -276,21 +365,26 @@ fn route_message(
             let respond_via = outgoing.clone();
             tokio::spawn(async move {
                 // No answer (consumer dropped the responder) counts as
-                // cancelled; the agent must never hang on us.
+                // cancelled; the agent must never hang on us. Awaited:
+                // a momentarily full writer queue delays the answer, it
+                // must never swallow it.
                 let outcome = rx.await.unwrap_or(PermissionOutcome::Cancelled);
                 let response = json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": outcome.to_result_value(),
                 });
-                let _ = respond_via.send(response.to_string());
+                let _ = respond_via.send(response.to_string()).await;
             });
-            let _ = events.send(AgentEvent::PermissionRequest {
-                session_id,
-                tool_call,
-                options,
-                responder: tx,
-            });
+            events
+                .send(AgentEvent::PermissionRequest {
+                    session_id,
+                    tool_call,
+                    options,
+                    responder: tx,
+                })
+                .await
+                .is_ok()
         }
         // Any other agent request: politely refuse rather than hang it.
         (Some(id), Some(method)) => {
@@ -299,16 +393,90 @@ fn route_message(
                 "id": id,
                 "error": { "code": -32601, "message": format!("method not supported: {method}") },
             });
-            let _ = outgoing.send(response.to_string());
+            outgoing.send(response.to_string()).await.is_ok()
         }
         // A notification.
         (None, Some("session/update")) => {
             if let Some(params) = message.get("params") {
                 if let Some(event) = protocol::decode_session_update(params) {
-                    let _ = events.send(event);
+                    return events.send(event).await.is_ok();
                 }
             }
+            true
         }
-        (None, _) => {}
+        (None, _) => true,
+    }
+}
+
+enum BoundedLine {
+    Line(Vec<u8>),
+    TooLarge,
+    Eof,
+}
+
+/// Read and fully consume one newline-delimited frame without ever retaining
+/// more than `limit` bytes. Oversized frames are drained so the next call
+/// starts on a clean boundary.
+async fn read_bounded_line<R>(reader: &mut R, limit: usize) -> std::io::Result<BoundedLine>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut line = Vec::new();
+    let mut too_large = false;
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok(if too_large {
+                BoundedLine::TooLarge
+            } else if line.is_empty() {
+                BoundedLine::Eof
+            } else {
+                BoundedLine::Line(line)
+            });
+        }
+        let consumed = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        let ended = available.get(consumed.saturating_sub(1)) == Some(&b'\n');
+        if !too_large {
+            if line.len().saturating_add(consumed) > limit {
+                too_large = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(&available[..consumed]);
+            }
+        }
+        reader.consume(consumed);
+        if ended {
+            return Ok(if too_large {
+                BoundedLine::TooLarge
+            } else {
+                BoundedLine::Line(line)
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bounded_lines_drain_an_oversized_frame() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let (reader, mut writer) = tokio::io::duplex(64);
+        writer.write_all(b"0123456789\n{}\n").await.unwrap();
+        drop(writer);
+        let mut reader = BufReader::new(reader);
+        assert!(matches!(
+            read_bounded_line(&mut reader, 8).await.unwrap(),
+            BoundedLine::TooLarge
+        ));
+        let BoundedLine::Line(line) = read_bounded_line(&mut reader, 8).await.unwrap() else {
+            panic!("expected the next bounded frame");
+        };
+        assert_eq!(line, b"{}\n");
     }
 }

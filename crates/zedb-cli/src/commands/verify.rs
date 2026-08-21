@@ -5,12 +5,12 @@ use std::path::Path;
 
 use zedb_ch::runner::Runner;
 
-use super::{open_repo, pinned_binary, runtime};
-use crate::cli::{ConnectionArgs, TargetArgs};
+use super::{open_repo, pinned_binary, runtime, terminal_field, terminal_text};
+use crate::cli::{ReadConnectionArgs, TargetArgs};
 
 pub fn verify(
     root: &Path,
-    connection: ConnectionArgs,
+    connection: ReadConnectionArgs,
     target_args: TargetArgs,
     json: bool,
 ) -> Result<(), String> {
@@ -54,16 +54,16 @@ pub fn verify(
             .map(|head| format!("{head:05}"))
             .unwrap_or_else(|| "none".into());
         if drift.findings.is_empty() {
-            println!("{}: clean at {head}", drift.database);
+            println!("{}: clean at {head}", terminal_field(&drift.database));
         } else {
             drifted = true;
             println!(
                 "{}: {} drift finding(s) at {head}",
-                drift.database,
+                terminal_field(&drift.database),
                 drift.findings.len()
             );
             for finding in &drift.findings {
-                println!("  {finding}");
+                println!("  {}", terminal_text(finding));
             }
         }
     }

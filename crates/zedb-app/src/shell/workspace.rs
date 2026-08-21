@@ -810,6 +810,8 @@ impl Workspace {
             .text_xs()
             .text_color(if self.notice_warning {
                 theme::danger()
+            } else if self.notice_success {
+                theme::success()
             } else {
                 theme::text_dim()
             })

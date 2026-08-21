@@ -1,59 +1,159 @@
 use super::*;
 
+const MAX_BRIDGE_FRAME_BYTES: usize = 2 * 1024 * 1024;
+const BRIDGE_QUEUE_CAPACITY: usize = 64;
+const BRIDGE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How many bridge capabilities stay valid at once. Each thread start
+/// mints a fresh one, but MCP children of reused agent processes hold
+/// the token they were spawned with; a small live set keeps them
+/// working while anything older still expires.
+const BRIDGE_LIVE_TOKENS: usize = 4;
+
+fn bridge_capability() -> Option<String> {
+    use std::fmt::Write as _;
+    use std::io::Read as _;
+    let mut bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .ok()?
+        .read_exact(&mut bytes)
+        .ok()?;
+    let mut token = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut token, "{byte:02x}").ok()?;
+    }
+    Some(token)
+}
+
 impl Workspace {
     /// Bind the app-tool bridge socket once; returns its path.
     pub(crate) fn agent_ensure_bridge(
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<std::path::PathBuf> {
-        if let Some(path) = &self.agent.bridge_socket {
-            return Some(path.clone());
+        if let Some(path) = self.agent.bridge_socket.clone() {
+            let token = bridge_capability()?;
+            let token_state = self.agent.bridge_token_state.as_ref()?;
+            {
+                // Newest first; older tokens stay valid up to the cap so
+                // MCP children of reused agent processes keep working.
+                let mut tokens = token_state.lock().ok()?;
+                tokens.push_front(token.clone());
+                tokens.truncate(BRIDGE_LIVE_TOKENS);
+            }
+            self.agent.bridge_token = Some(token);
+            return Some(path);
         }
         let dir = dirs::data_local_dir()?.join("zedb").join("mcp");
         std::fs::create_dir_all(&dir).ok()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok()?;
+        }
         let path = dir.join(format!("app-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
+        let token = bridge_capability()?;
         let _runtime = rt::tokio().enter();
         let listener = tokio::net::UnixListener::bind(&path).ok()?;
-        let (requests_tx, mut requests_rx) = tokio::sync::mpsc::unbounded_channel();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok()?;
+        }
+        let (requests_tx, mut requests_rx) = tokio::sync::mpsc::channel(BRIDGE_QUEUE_CAPACITY);
+        let active_connections =
+            std::sync::Arc::new(tokio::sync::Semaphore::new(BRIDGE_QUEUE_CAPACITY));
+        let token_state =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from([
+                token.clone(),
+            ])));
+        let listener_token_state = token_state.clone();
         rt::tokio().spawn(async move {
-            use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+            use tokio::io::{AsyncWriteExt, BufReader};
+            use zedb_ch::mcp::{read_bounded_line, BoundedLine};
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
                     break;
                 };
+                let Ok(active_connection) = active_connections.clone().try_acquire_owned() else {
+                    continue;
+                };
                 let requests_tx = requests_tx.clone();
+                let expected_token_state = listener_token_state.clone();
                 tokio::spawn(async move {
+                    let _active_connection = active_connection;
                     let (read_half, mut write_half) = stream.into_split();
-                    let mut line = String::new();
-                    if BufReader::new(read_half)
-                        .read_line(&mut line)
-                        .await
-                        .is_err()
+                    let line = match tokio::time::timeout(
+                        BRIDGE_READ_TIMEOUT,
+                        read_bounded_line(&mut BufReader::new(read_half), MAX_BRIDGE_FRAME_BYTES),
+                    )
+                    .await
                     {
+                        Ok(Ok(BoundedLine::Line(line))) => line,
+                        Ok(Ok(BoundedLine::TooLarge)) => {
+                            let reply = serde_json::json!({
+                                "text": "app bridge frame exceeds 2 MiB",
+                                "isError": true,
+                            });
+                            let _ = write_half.write_all(reply.to_string().as_bytes()).await;
+                            let _ = write_half.write_all(b"\n").await;
+                            return;
+                        }
+                        Ok(Ok(BoundedLine::Eof)) | Ok(Err(_)) | Err(_) => return,
+                    };
+                    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&line) else {
+                        return;
+                    };
+                    let valid_token = expected_token_state.lock().is_ok_and(|expected| {
+                        value
+                            .get("token")
+                            .and_then(|value| value.as_str())
+                            .is_some_and(|token| expected.iter().any(|live| live == token))
+                    });
+                    if !valid_token {
                         return;
                     }
-                    let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-                        return;
+                    let tool = value
+                        .get("tool")
+                        .and_then(|tool| tool.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let arguments = value
+                        .get("arguments")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    // The reply deadline follows the effective tool, in
+                    // step with the child's own wait: drift replays the
+                    // chain and gets minutes, everything else seconds.
+                    let effective_tool = if tool == "mcp_call" {
+                        arguments
+                            .get("name")
+                            .and_then(|name| name.as_str())
+                            .unwrap_or(tool.as_str())
+                            .to_string()
+                    } else {
+                        tool.clone()
                     };
                     let (respond_tx, respond_rx) = oneshot::channel();
                     let request = BridgeRequest {
-                        tool: value
-                            .get("tool")
-                            .and_then(|tool| tool.as_str())
+                        token: value
+                            .get("token")
+                            .and_then(|token| token.as_str())
                             .unwrap_or_default()
                             .to_string(),
-                        arguments: value
-                            .get("arguments")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null),
+                        tool,
+                        arguments,
                         respond: respond_tx,
                     };
-                    if requests_tx.send(request).is_err() {
+                    if requests_tx.try_send(request).is_err() {
                         return;
                     }
-                    let (text, is_error) =
-                        respond_rx.await.unwrap_or(("app closed".to_string(), true));
+                    let deadline = zedb_ch::mcp::bridge_reply_deadline(&effective_tool);
+                    let (text, is_error) = match tokio::time::timeout(deadline, respond_rx).await {
+                        Ok(Ok(reply)) => reply,
+                        Ok(Err(_)) => ("app closed".to_string(), true),
+                        Err(_) => ("app bridge reply deadline exceeded".to_string(), true),
+                    };
                     let reply = serde_json::json!({ "text": text, "isError": is_error });
                     let _ = write_half.write_all(reply.to_string().as_bytes()).await;
                     let _ = write_half.write_all(b"\n").await;
@@ -65,12 +165,26 @@ impl Workspace {
                 let live = this
                     .update(cx, |this, cx| {
                         let BridgeRequest {
+                            token,
                             tool,
                             arguments,
                             respond,
                         } = request;
-                        let outcome = this.agent_handle_bridge_tool(&tool, &arguments, cx);
-                        let _ = respond.send(outcome);
+                        let live = this.agent.bridge_token_state.as_ref().is_some_and(|state| {
+                            state
+                                .lock()
+                                .is_ok_and(|tokens| tokens.iter().any(|live| *live == token))
+                        });
+                        if !live {
+                            let _ = respond.send(("stale app bridge capability".into(), true));
+                            return;
+                        }
+                        if tool == "mcp_call" {
+                            this.agent_handle_mcp_call(arguments, respond);
+                        } else {
+                            let outcome = this.agent_handle_bridge_tool(&tool, &arguments, cx);
+                            let _ = respond.send(outcome);
+                        }
                     })
                     .is_ok();
                 if !live {
@@ -80,7 +194,87 @@ impl Workspace {
         })
         .detach();
         self.agent.bridge_socket = Some(path.clone());
+        self.agent.bridge_token = Some(token);
+        self.agent.bridge_token_state = Some(token_state);
         Some(path)
+    }
+
+    /// Execute connection-dependent MCP tools inside the app process. The
+    /// agent-spawned MCP child receives only this bounded read capability, not
+    /// the underlying ClickHouse credential.
+    fn agent_handle_mcp_call(
+        &self,
+        arguments: serde_json::Value,
+        respond: oneshot::Sender<(String, bool)>,
+    ) {
+        let Some(name) = arguments
+            .get("name")
+            .and_then(|name| name.as_str())
+            .map(str::to_string)
+        else {
+            let _ = respond.send(("MCP tool name required".into(), true));
+            return;
+        };
+        if !zedb_ch::mcp::CONNECTION_TOOLS.contains(&name.as_str()) {
+            let _ = respond.send((format!("tool is not bridgeable: {name}"), true));
+            return;
+        }
+        let tool_arguments = arguments
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let repo_root = self.fleet.repo.as_ref().map(|repo| repo.root.clone());
+        let config = self.connection.connected.as_ref().map(|connected| {
+            let mut config = connected.client_config.clone();
+            config.read_only = true;
+            config
+        });
+        rt::tokio().spawn(async move {
+            // Opening the repo reads every migration's SQL from disk;
+            // keep that off the async workers.
+            let repo = match repo_root {
+                Some(root) => tokio::task::spawn_blocking(move || {
+                    zedb_core::repo::MigrationRepo::open_root(&root).ok()
+                })
+                .await
+                .ok()
+                .flatten(),
+                None => None,
+            };
+            let server = zedb_ch::mcp::McpServer::new(repo, config, Default::default());
+            let request = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": { "name": name, "arguments": tool_arguments },
+            });
+            let Some(reply) = server.handle(request).await else {
+                let _ = respond.send(("MCP tool returned no reply".into(), true));
+                return;
+            };
+            if let Some(error) = reply
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(|message| message.as_str())
+            {
+                let _ = respond.send((error.to_string(), true));
+                return;
+            }
+            let result = reply.get("result").cloned().unwrap_or_default();
+            let text = result
+                .get("content")
+                .and_then(|content| content.as_array())
+                .and_then(|content| content.first())
+                .and_then(|content| content.get("text"))
+                .and_then(|text| text.as_str())
+                .unwrap_or("(no reply)")
+                .to_string();
+            let is_error = result
+                .get("isError")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            let _ = respond.send((text, is_error));
+        });
     }
 
     /// The `cloud_context` reply: the active connection's Cloud
@@ -251,11 +445,34 @@ impl Workspace {
                 if !CONTROLS.contains(&control.as_str()) {
                     return (format!("unknown control: {control}"), true);
                 }
+                // A highlight nothing renders is an invisible UI change,
+                // which the bridge must never make: refuse honestly when
+                // the control is not on screen and cannot be brought
+                // there without choosing for the user.
+                if control == "rollback" && self.fleet.selected.is_none() {
+                    return (
+                        "rollback is a per-database control on the fleet detail panel and no \
+                         database is selected; navigate to a database first (view=fleet with a \
+                         database), then highlight again"
+                            .into(),
+                        true,
+                    );
+                }
+                // The remaining controls live in the fleet view itself;
+                // pointing at one means bringing it on screen, visibly.
+                if !self.show_fleet {
+                    self.show_fleet = true;
+                    self.show_query_editor = false;
+                    narrate(self, "agent: opened fleet view".into(), cx);
+                }
                 self.control_highlight = Some(control.clone());
                 self.control_highlight_generation += 1;
                 let generation = self.control_highlight_generation;
+                let timer = cx
+                    .background_executor()
+                    .timer(std::time::Duration::from_secs(4));
                 cx.spawn(async move |this, cx| {
-                    gpui::Timer::after(std::time::Duration::from_secs(4)).await;
+                    timer.await;
                     this.update(cx, |this, cx| {
                         if this.control_highlight_generation == generation {
                             this.control_highlight = None;
@@ -455,15 +672,14 @@ impl Workspace {
     /// The zedb MCP server registration for a new session, when there
     /// is anything to serve (an open repo, a connection, or both).
     ///
-    /// Config travels in the server's environment, not argv (argv is
-    /// world-readable; env is same-user-only on macOS) and not a file:
-    /// agent runtimes respawn MCP servers at will, and the old
-    /// delete-on-read credentials file killed every respawn with "No
-    /// such file or directory", silently costing the session its zedb
-    /// tools.
+    /// Non-secret config and the private bridge capability travel in
+    /// the server's environment, not argv. Agent runtimes may respawn
+    /// MCP servers, so this registration must remain reusable. Live
+    /// database credentials never enter the ACP session configuration.
     pub(crate) fn agent_mcp_server_config(
         &self,
         bridge_socket: Option<std::path::PathBuf>,
+        bridge_token: Option<String>,
     ) -> Vec<zedb_acp::McpServerConfig> {
         let variable = |name: &str, value: String| zedb_acp::EnvVariable {
             name: name.to_string(),
@@ -473,25 +689,14 @@ impl Workspace {
         if let Some(repo) = &self.fleet.repo {
             env.push(variable("ZEDB_MCP_REPO", repo.root.display().to_string()));
         }
-        if let Some(connected) = &self.connection.connected {
-            env.push(variable(
-                "ZEDB_MCP_URL",
-                connected.client_config.url.clone(),
-            ));
-            env.push(variable(
-                "ZEDB_MCP_USER",
-                connected.client_config.user.clone(),
-            ));
-            env.push(variable(
-                "ZEDB_MCP_PASSWORD",
-                connected.client_config.password.clone().unwrap_or_default(),
-            ));
-        }
         if let Some(socket) = bridge_socket {
             env.push(variable(
                 "ZEDB_MCP_APP_SOCKET",
                 socket.display().to_string(),
             ));
+        }
+        if let Some(token) = bridge_token {
+            env.push(variable("ZEDB_MCP_APP_TOKEN", token));
         }
         if let Some(cache) = &self.schema.cache {
             env.push(variable(

@@ -1,3 +1,162 @@
+## 2026-08-21: pin-cache continuity digest
+
+- The Aug 20 hardening made `cached_binary` recompute the at-rest file
+  against the trust manifest; on macOS that can never pass, because the
+  OS rewrites adhoc linker-signed binaries in place on first execution
+  (proven: the 26.3.12.3 asset hashes f69ad394... on download and
+  8c552906... after one `local --version`). Every fleet
+  verify/check/regen was silently deleting and re-downloading ~850 MB.
+- Fix: `ensure_exact_binary` now records the binary's at-rest digest
+  after its first (in-flow) execution, and `verify_cached_binary`
+  checks continuity against that record instead of recomputing the
+  manifest digest. The manifest still anchors the download stream
+  itself, unknown payloads are still rejected before anything
+  executes, and the Linux tarball path (where the OS does not rewrite
+  binaries) keeps its manifest-anchored archive check unchanged.
+- Found because the user noticed fleet checks "feel slower" after the
+  security review; the window-test session's e2e tier had already
+  isolated the mechanism.
+
+## 2026-08-21: mouse-driven window tests
+
+- Window tests can now click real elements: view code tags targets with
+  gpui's `.debug_selector(...)` (a no-op in release builds), and the
+  harness's `bounds`/`click` helpers force a fresh frame, hover, and
+  click through the window's actual hitboxes. First tagged elements:
+  the fleet modal's Cancel and Confirm buttons.
+- Proof test: Cancel clicks away a pending action; a click on the
+  unsatisfied Confirm (whose handler is only attached when confirmable)
+  does nothing; after typing the phrase the same click executes.
+- Two determinism lessons folded into the harness and README: force a
+  redraw before reading bounds (the test executor's task shuffling
+  means run_until_parked alone may not have repainted), and assert
+  that an action started rather than is still running (dead-endpoint
+  runners fail in microseconds on the real tokio runtime).
+- The four remaining seams (Cloud/GitHub HTTP fakes, a Keychain seam,
+  simulated time, pixels) are now the Phase 15 backlog
+  (docs/wip/PHASE-15.md).
+
+## 2026-08-21: end-to-end tier on a real ClickHouse
+
+- zedb-ch grew a `test-support` feature: `any_cached_binary` (the
+  helper the integration tests had been copy-pasting), `e2e_binary`
+  (same, plus an explicit `ZEDB_E2E_DOWNLOAD=1` opt-in that repairs an
+  empty or stale cache through the verified `ensure_binary` download at
+  the newest trusted version), and a blocking `http_query` for
+  ephemeral-server assertions. The app's window-test harness now uses
+  the existing `EphemeralServer` (the lifecycle-check fixture: real
+  config, port allocation outside the kernel's ephemeral range,
+  identity check, log tail on failure) instead of a duplicate.
+- First end-to-end window test: a confirmed fleet upgrade against an
+  ephemeral server actually applies the fixture migration; the pending
+  list is seeded through `fleet.rows` exactly as the app holds it after
+  a refresh. Skips when no trusted binary is cached; never downloads
+  without the opt-in.
+- Test fixtures aim at port 1 (root-only, never listening) rather than
+  8123/9000, so a test that gets past a gate can never reach a real
+  local ClickHouse.
+- Found while wiring this up, recorded in BUGS.md: macOS rewrites
+  adhoc linker-signed binaries on first execution, so the pin cache
+  never re-verifies on Apple Silicon and every verify re-downloads.
+
+## 2026-08-21: UI regression suites
+
+- The gpui window-test framework grew into a regression net across the
+  main surfaces, 23 tests in all. New suites: connections form (tab-key
+  focus cycling, typed input, validation, duplicate names, sandboxed
+  save, cancel), command palette (cmd-shift-p chord, typed filtering,
+  arrow selection with wraparound, enter runs, escape closes), query
+  tabs (add/close, the leave-the-view-on-last-close invariant across a
+  real redraw, close-others, action dispatch through the window), export
+  dialog (no-result refusal, CSV default path, clean cancel), schema
+  in-place apply (read-only diversion to a query tab, large-table
+  confirmation, stale-context refusal), and fleet structural/irreversible
+  rollback gating.
+- Harness upgrades: the window root is now a gpui_component Root as in
+  production; `ZEDB_CONFIG_DIR` points at a per-process temp dir so no
+  test can touch real config files; the keystroke interceptor moved into
+  `install_keystroke_interceptor`, shared by `new` and `new_for_test`,
+  so chords and form tab cycling run the real routing; fixtures for
+  saved connections, selected schema objects, and migration repos with
+  declared rollback classes.
+
+## 2026-08-21: zedb-app lib/bin split
+
+- zedb-app is now a library crate plus a thin `zedb` binary whose main only
+  calls `zedb_app::run()` (the former `fn main`, hidden askpass and MCP-serve
+  modes included). Nothing else moved: modules, visibility, and the window
+  tests are unchanged, and unit tests now run in the library test target.
+- This unblocks linking app types from integration tests or future binaries
+  without touching the crate-private Workspace surface.
+
+## 2026-08-21: gpui window-test framework
+
+- zedb-app now has `#[gpui::test]` window tests: the real Workspace in a
+  headless test window on gpui's deterministic executor, with the app theme
+  and key bindings installed. `src/test_harness.rs` holds the shared
+  scaffolding (headless workspace, fixture migration repo, fixture connected
+  cluster); suites live in a `gpui_tests.rs` next to their feature.
+- `Workspace::new` was split: the field assembly moved into a shared
+  `build` (also removing the duplicated Ok/Err struct literals), and a
+  test-only `new_for_test` builds a Workspace with no disk, Keychain, or
+  network side effects.
+- First suite covers the fleet safety ladder end to end: write-lock
+  refusal, the production typed phrase (driven by simulated keystrokes into
+  the rendered modal input), and confirmation invalidation when the
+  connection changes under a pending action.
+
+## 2026-08-20: dependency advisory gate
+
+- CI now runs cargo-deny against the all-features graph for the supported macOS
+  and Linux targets. Vulnerabilities, unsoundness advisories, and yanked crates
+  fail the build. Unmaintained transitive crates remain visible as warnings
+  while upstream replacements are evaluated.
+- The first remediation updated the shipped HTTP/2 graph from vulnerable
+  `h2 0.4.15` to patched `h2 0.4.16`.
+
+## 2026-08-20: RowBinary decoder budgets
+
+- The RowBinary boundary now caps materialized input, retained partial stream
+  data, header fields, values, collection counts, total decoded values, tuple
+  width, and recursive nesting. Wire lengths and reader offsets use checked
+  conversions and arithmetic.
+- Type strings are bounded before parsing. `FixedString`, `DateTime64`, and
+  Decimal parameters are validated before they can control reads or numeric
+  operations.
+- Adversarial regressions cover oversized declarations, offset overflow,
+  zero-column non-progress, invalid numeric parameters, and excessive type and
+  JSON nesting.
+
+## 2026-08-20: transport deadlines
+
+- The shared ClickHouse HTTP client now has a five-minute whole-request
+  deadline in addition to its connect timeout. Native connect, materialized
+  query, and execute calls have total deadlines, while long-lived native
+  streams enforce an idle deadline and close the socket on expiry.
+- A loopback peer that accepts an HTTP request and then remains silent is
+  covered by a bounded regression test.
+- Release downloads enforce an idle deadline in addition to their total
+  deadline. Replay, formatting, binary verification, and smoke checks use a
+  shared process runner that drains output, then kills and reaps timed-out
+  children.
+
+## 2026-08-20: secret persistence minimization
+
+- Tracking records no longer store resolved template values. Durable errors
+  redact every custom parameter value, and audit endpoints retain only scheme,
+  host, and port.
+- Unix audit files are forced to mode `0600`, including older files, and native
+  pool identity keys use a process-salted digest for passwords and driver
+  setting values.
+
+## 2026-08-20: ClickHouse artifact trust manifest
+
+- Added a checked-in manifest containing the exact size and SHA-256 digest of
+  every supported platform asset for the reviewed 26.3.12.3 LTS release.
+- Cache validation and downloads use the manifest as their authority. GitHub
+  metadata must agree but cannot replace the checked-in digest, fallback
+  selection uses only reviewed versions, and unknown versions fail closed.
+
 ## 2026-08-16: the flaky-suite saga, solved
 
 Server-backed tests had been flaky for days ("missing: ${db}.events",

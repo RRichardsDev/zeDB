@@ -85,11 +85,9 @@ impl Workspace {
             let database = database.clone();
             let table = table.clone();
             let connection_name = connection_name.clone();
-            // Globally-unique trial-table name so concurrent trials (even
-            // two tables in the same database) never drop each other's.
-            static TRIAL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let seq = TRIAL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let trial_name = format!("_zedb_codec_trial_{seq}");
+            // Include wall-clock time and the process-local sequence. A
+            // collision makes CREATE fail and never authorizes a DROP.
+            let trial_name = zedb_core::new_local_id("_zedb_codec_trial");
             let task_database = database.clone();
             let task_table = table.clone();
             let task = rt::tokio().spawn(async move {

@@ -13,6 +13,7 @@ impl ChClient {
         row_limit: usize,
         mut on_event: impl FnMut(QueryStreamEvent),
     ) -> Result<QueryStreamSummary> {
+        self.ensure_acceptable_endpoint()?;
         let mut request = self
             .http
             .post(&self.cfg.url)
@@ -60,10 +61,18 @@ impl ChClient {
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse().ok());
         if !status.is_success() {
-            let bytes = response.bytes().await?;
+            let bytes = collect_response_bounded(response, MAX_ERROR_RESPONSE_BYTES).await?;
             return Err(ChError::Server {
                 code,
                 message: String::from_utf8_lossy(&bytes).trim().to_string(),
+            });
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_MATERIALIZED_RESPONSE_BYTES)
+        {
+            return Err(ChError::ResponseTooLarge {
+                limit: MAX_MATERIALIZED_RESPONSE_BYTES,
             });
         }
 
@@ -71,7 +80,7 @@ impl ChClient {
         let mut sent_columns = false;
         let mut sent_rows = 0;
         let mut pending_rows = Vec::new();
-        let mut received_bytes = 0;
+        let mut received_bytes: u64 = 0;
         let mut body = response.bytes_stream();
         loop {
             tokio::select! {
@@ -80,7 +89,16 @@ impl ChClient {
                         break;
                     };
                     let chunk = chunk?;
-                    received_bytes += chunk.len() as u64;
+                    received_bytes = received_bytes
+                        .checked_add(chunk.len() as u64)
+                        .ok_or(ChError::ResponseTooLarge {
+                            limit: MAX_MATERIALIZED_RESPONSE_BYTES,
+                        })?;
+                    if received_bytes > MAX_MATERIALIZED_RESPONSE_BYTES {
+                        return Err(ChError::ResponseTooLarge {
+                            limit: MAX_MATERIALIZED_RESPONSE_BYTES,
+                        });
+                    }
                     let mut rows = decoder.push(&chunk)?;
                     if !sent_columns {
                         if let Some(columns) = decoder.columns() {

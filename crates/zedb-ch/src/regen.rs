@@ -39,6 +39,8 @@ pub enum RegenError {
     Track(String),
     #[error("internal: {0}")]
     Internal(String),
+    #[error("unsafe current-state path: {0}")]
+    UnsafePath(String),
 }
 
 const CHAIN_SIDE: &str = "zz_chain";

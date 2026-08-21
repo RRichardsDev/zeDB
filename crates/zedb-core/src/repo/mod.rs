@@ -36,6 +36,25 @@ pub enum RepoError {
     MissingParam(String),
 }
 
+/// Largest single file zeDB reads from a migration repo. A shared checkout
+/// is semi-trusted input, so an outsized SQL or marker file must fail loudly
+/// at open time rather than exhaust memory.
+pub(crate) const MAX_REPO_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read a repo file as UTF-8, refusing symlinks, special files, and content
+/// over [`MAX_REPO_FILE_BYTES`]. The shared bounded reader checks and reads
+/// one open descriptor, so a concurrent rename cannot bypass the limit.
+pub(crate) fn read_repo_file(path: &Path) -> Result<String, RepoError> {
+    crate::store::read_bounded_string(path, MAX_REPO_FILE_BYTES).map_err(|error| {
+        let kind = if error.kind() == std::io::ErrorKind::InvalidData {
+            "repo limit: "
+        } else {
+            ""
+        };
+        RepoError::Layout(format!("{}: {kind}{error}", path.display()))
+    })
+}
+
 /// A parsed migration repo: config, ordered chain, and exclusions.
 #[derive(Debug)]
 pub struct MigrationRepo {

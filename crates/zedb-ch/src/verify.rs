@@ -18,7 +18,7 @@ use zedb_core::repo::MigrationRepo;
 
 use crate::checks::dummy_params;
 use crate::replay::{decluster, LocalReplay, ReplaySide};
-use crate::runner::{Runner, RunnerError, Targets};
+use crate::runner::{quote, Runner, RunnerError, Targets};
 
 #[derive(Debug, thiserror::Error)]
 pub enum VerifyError {
@@ -140,7 +140,8 @@ impl<'a> Verifier<'a> {
             .client()
             .query(&format!(
                 "SELECT name, create_table_query FROM system.tables \
-                 WHERE database = '{database}' AND name NOT LIKE '.%' ORDER BY name",
+                 WHERE database = {} AND name NOT LIKE '.%' ORDER BY name",
+                quote(database)
             ))
             .await
             .map_err(|error| VerifyError::Runner(RunnerError::Server(error.to_string())))?;

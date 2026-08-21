@@ -112,11 +112,12 @@ pub struct PermissionOption {
 #[derive(Debug)]
 pub enum AgentEvent {
     /// A chunk of the agent's visible reply.
-    MessageChunk { text: String },
+    MessageChunk { session_id: String, text: String },
     /// A chunk of the agent's reasoning, when it streams any.
-    ThoughtChunk { text: String },
+    ThoughtChunk { session_id: String, text: String },
     /// A tool call started (or was announced).
     ToolCall {
+        session_id: String,
         id: String,
         title: String,
         status: String,
@@ -124,14 +125,19 @@ pub enum AgentEvent {
     },
     /// A tool call changed state.
     ToolCallUpdate {
+        session_id: String,
         id: String,
         status: String,
         raw: Value,
     },
     /// The agent published or revised a plan.
-    Plan { raw: Value },
+    Plan { session_id: String, raw: Value },
     /// An update kind this client does not know; carried, not dropped.
-    Other { kind: String, raw: Value },
+    Other {
+        session_id: String,
+        kind: String,
+        raw: Value,
+    },
     /// The agent asks the user to approve something; exactly one call
     /// of `respond` answers it.
     PermissionRequest {
@@ -144,6 +150,21 @@ pub enum AgentEvent {
     Stderr { line: String },
     /// The agent process ended or the pipe closed.
     Closed { reason: String },
+}
+
+impl AgentEvent {
+    /// Session identity carried by ACP `session/update` notifications.
+    pub fn update_session_id(&self) -> Option<&str> {
+        match self {
+            Self::MessageChunk { session_id, .. }
+            | Self::ThoughtChunk { session_id, .. }
+            | Self::ToolCall { session_id, .. }
+            | Self::ToolCallUpdate { session_id, .. }
+            | Self::Plan { session_id, .. }
+            | Self::Other { session_id, .. } => Some(session_id),
+            Self::PermissionRequest { .. } | Self::Stderr { .. } | Self::Closed { .. } => None,
+        }
+    }
 }
 
 /// The user's answer to a permission request.
@@ -168,10 +189,12 @@ impl PermissionOutcome {
 
 /// Decode one `session/update` notification into events.
 pub(crate) fn decode_session_update(params: &Value) -> Option<AgentEvent> {
+    let session_id = params.get("sessionId")?.as_str()?.to_string();
     let update = params.get("update")?;
     let kind = update.get("sessionUpdate").and_then(Value::as_str)?;
     let event = match kind {
         "agent_message_chunk" => AgentEvent::MessageChunk {
+            session_id,
             text: update
                 .get("content")
                 .and_then(text_of)
@@ -179,6 +202,7 @@ pub(crate) fn decode_session_update(params: &Value) -> Option<AgentEvent> {
                 .to_string(),
         },
         "agent_thought_chunk" => AgentEvent::ThoughtChunk {
+            session_id,
             text: update
                 .get("content")
                 .and_then(text_of)
@@ -186,6 +210,7 @@ pub(crate) fn decode_session_update(params: &Value) -> Option<AgentEvent> {
                 .to_string(),
         },
         "tool_call" => AgentEvent::ToolCall {
+            session_id,
             id: update
                 .get("toolCallId")
                 .and_then(Value::as_str)
@@ -204,6 +229,7 @@ pub(crate) fn decode_session_update(params: &Value) -> Option<AgentEvent> {
             raw: update.clone(),
         },
         "tool_call_update" => AgentEvent::ToolCallUpdate {
+            session_id,
             id: update
                 .get("toolCallId")
                 .and_then(Value::as_str)
@@ -217,12 +243,33 @@ pub(crate) fn decode_session_update(params: &Value) -> Option<AgentEvent> {
             raw: update.clone(),
         },
         "plan" => AgentEvent::Plan {
+            session_id,
             raw: update.clone(),
         },
         other => AgentEvent::Other {
+            session_id,
             kind: other.to_string(),
             raw: update.clone(),
         },
     };
     Some(event)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_updates_retain_their_session_identity() {
+        let event = decode_session_update(&serde_json::json!({
+            "sessionId": "session-7",
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": "hello" },
+            },
+        }))
+        .unwrap();
+        assert_eq!(event.update_session_id(), Some("session-7"));
+        assert!(matches!(event, AgentEvent::MessageChunk { text, .. } if text == "hello"));
+    }
 }

@@ -7,6 +7,11 @@
 
 use crate::error::{ChError, Result};
 
+const MAX_TYPE_STRING_BYTES: usize = 64 * 1024;
+const MAX_TYPE_DEPTH: usize = 64;
+const MAX_FIXED_STRING_BYTES: usize = 64 * 1024 * 1024;
+const MAX_TUPLE_ITEMS: usize = 4096;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChType {
     UInt8,
@@ -58,9 +63,16 @@ pub enum ChType {
 }
 
 pub fn parse_type(input: &str) -> Result<ChType> {
+    if input.len() > MAX_TYPE_STRING_BYTES {
+        return Err(ChError::TypeParse {
+            input: "<type string omitted>".into(),
+            reason: format!("type string exceeds {MAX_TYPE_STRING_BYTES} byte limit"),
+        });
+    }
     let mut p = Parser {
         input,
         chars: input.char_indices().peekable(),
+        depth: 0,
     };
     let ty = p.parse()?;
     p.skip_ws();
@@ -73,6 +85,7 @@ pub fn parse_type(input: &str) -> Result<ChType> {
 struct Parser<'a> {
     input: &'a str,
     chars: std::iter::Peekable<std::str::CharIndices<'a>>,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -174,6 +187,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse(&mut self) -> Result<ChType> {
+        if self.depth >= MAX_TYPE_DEPTH {
+            return Err(self.err(format!("type nesting exceeds limit of {MAX_TYPE_DEPTH}")));
+        }
+        self.depth += 1;
+        let result = self.parse_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_inner(&mut self) -> Result<ChType> {
         let name = self.ident();
         match name.as_str() {
             "UInt8" => Ok(ChType::UInt8),
@@ -197,8 +220,13 @@ impl<'a> Parser<'a> {
             "IPv6" => Ok(ChType::Ipv6),
             "FixedString" => {
                 self.eat('(')?;
-                let n = self.number()?;
+                let n: usize = self.number()?;
                 self.eat(')')?;
+                if n > MAX_FIXED_STRING_BYTES {
+                    return Err(self.err(format!(
+                        "FixedString length exceeds limit of {MAX_FIXED_STRING_BYTES}"
+                    )));
+                }
                 Ok(ChType::FixedString(n))
             }
             "DateTime" => {
@@ -221,6 +249,9 @@ impl<'a> Parser<'a> {
                     None
                 };
                 self.eat(')')?;
+                if precision > 9 {
+                    return Err(self.err("DateTime64 precision must be at most 9".into()));
+                }
                 Ok(ChType::DateTime64 { precision, tz })
             }
             "Decimal" => {
@@ -229,6 +260,9 @@ impl<'a> Parser<'a> {
                 self.eat(',')?;
                 let scale: u8 = self.number()?;
                 self.eat(')')?;
+                if precision == 0 || precision > 38 || scale > precision {
+                    return Err(self.err("invalid Decimal precision or scale".into()));
+                }
                 Ok(ChType::Decimal { precision, scale })
             }
             "Decimal32" | "Decimal64" | "Decimal128" => {
@@ -240,6 +274,9 @@ impl<'a> Parser<'a> {
                     "Decimal64" => 18,
                     _ => 38,
                 };
+                if scale > precision {
+                    return Err(self.err("Decimal scale exceeds precision".into()));
+                }
                 Ok(ChType::Decimal { precision, scale })
             }
             "Enum8" => Ok(ChType::Enum8(self.enum_entries()?)),
@@ -274,6 +311,11 @@ impl<'a> Parser<'a> {
                 self.eat('(')?;
                 let mut items = Vec::new();
                 loop {
+                    if items.len() >= MAX_TUPLE_ITEMS {
+                        return Err(self.err(format!(
+                            "tuple item count exceeds limit of {MAX_TUPLE_ITEMS}"
+                        )));
+                    }
                     items.push(self.tuple_element()?);
                     match self.peek_char() {
                         Some(',') => {
@@ -312,7 +354,14 @@ impl<'a> Parser<'a> {
         let mut depth = 1usize;
         while let Some((_, c)) = self.chars.next() {
             match c {
-                '(' => depth += 1,
+                '(' => {
+                    if depth >= MAX_TYPE_DEPTH {
+                        return Err(self.err(format!(
+                            "JSON argument nesting exceeds limit of {MAX_TYPE_DEPTH}"
+                        )));
+                    }
+                    depth += 1;
+                }
                 ')' => {
                     depth -= 1;
                     if depth == 0 {
@@ -467,5 +516,34 @@ mod tests {
             parse_type("AggregateFunction(sum, UInt64)"),
             Err(ChError::UnsupportedType(_))
         ));
+    }
+
+    #[test]
+    fn rejects_unsafe_numeric_parameters() {
+        assert!(parse_type("DateTime64(10)").is_err());
+        assert!(parse_type("Decimal(0, 0)").is_err());
+        assert!(parse_type("Decimal(9, 10)").is_err());
+        assert!(parse_type("Decimal32(10)").is_err());
+        assert!(parse_type("FixedString(67108865)").is_err());
+    }
+
+    #[test]
+    fn rejects_excessive_type_size_and_nesting() {
+        let oversized = "X".repeat(MAX_TYPE_STRING_BYTES + 1);
+        assert!(parse_type(&oversized).is_err());
+
+        let nested = format!(
+            "{}UInt8{}",
+            "Array(".repeat(MAX_TYPE_DEPTH),
+            ")".repeat(MAX_TYPE_DEPTH)
+        );
+        assert!(parse_type(&nested).is_err());
+
+        let json = format!(
+            "JSON({}x{})",
+            "(".repeat(MAX_TYPE_DEPTH),
+            ")".repeat(MAX_TYPE_DEPTH)
+        );
+        assert!(parse_type(&json).is_err());
     }
 }

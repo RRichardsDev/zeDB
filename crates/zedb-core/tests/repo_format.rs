@@ -69,6 +69,39 @@ fn copy_fixture(destination: &Path) {
     copy_tree(&fixture(), destination);
 }
 
+#[cfg(unix)]
+#[test]
+fn symlinked_migration_directories_are_not_followed() {
+    // A shared checkout adds a symlink under migrations/. The walk must not
+    // follow it: a loop would overflow the stack, and an outward link would
+    // pull files from outside the repo into the chain. Opening must succeed
+    // and see only the real migrations.
+    let dir = tempfile::tempdir().unwrap();
+    copy_fixture(dir.path());
+    let loop_link = dir.path().join("migrations/2026/08/loop");
+    std::os::unix::fs::symlink(dir.path().join("migrations"), &loop_link).unwrap();
+
+    let repo = MigrationRepo::open_root(dir.path()).expect("symlink is skipped, not followed");
+    assert!(
+        !repo.migrations.is_empty(),
+        "the real migrations still load"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn oversized_migration_sql_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_fixture(dir.path());
+    let upgrade = dir.path().join("migrations/2026/08/00100/upgrade.sql");
+    // Well over the 16 MiB repo file cap.
+    std::fs::write(&upgrade, vec![b'-'; 17 * 1024 * 1024]).unwrap();
+    let error = MigrationRepo::open_root(dir.path())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("repo limit"), "{error}");
+}
+
 #[test]
 fn duplicate_numbers_are_rejected() {
     let dir = tempfile::tempdir().unwrap();
@@ -96,6 +129,23 @@ fn misordered_months_are_rejected() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("dated before"), "{error}");
+}
+
+#[test]
+fn unsafe_scope_names_are_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_fixture(dir.path());
+    let config_path = dir.path().join("zedb.toml");
+    let config = std::fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("global = { }", "\"../escape\" = { }");
+    std::fs::write(config_path, config).unwrap();
+
+    let error = MigrationRepo::open_root(dir.path())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("scope name"), "{error}");
+    assert!(error.contains("unsafe"), "{error}");
 }
 
 #[test]
@@ -193,6 +243,32 @@ fn init_and_scaffold_round_trip() {
     assert_eq!(
         repo.migrations[1].headline().unwrap(),
         "migration 00100: pilot flag"
+    );
+}
+
+#[test]
+fn scaffold_refuses_description_content_that_can_escape_the_sql_comment() {
+    let directory = tempfile::tempdir().unwrap();
+    init_repo(directory.path()).unwrap();
+    let repo = MigrationRepo::open_root(directory.path()).unwrap();
+
+    for description in ["", "   ", "safe\nDROP DATABASE prod", "escape\u{1b}[2J"] {
+        let result = scaffold_migration(
+            &repo,
+            &ScaffoldOptions {
+                description: description.into(),
+                targeted: false,
+                with_rollback: true,
+            },
+        );
+        assert!(result.is_err(), "should reject {description:?}");
+    }
+    assert_eq!(
+        std::fs::read_dir(directory.path().join("migrations"))
+            .unwrap()
+            .count(),
+        0,
+        "validation must happen before creating a migration directory"
     );
 }
 

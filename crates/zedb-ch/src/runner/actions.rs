@@ -27,7 +27,11 @@ impl Runner<'_> {
                 })
                 .collect();
             if pending.is_empty() {
-                println!("{database}: up to date ({} applied)", applied.len());
+                println!(
+                    "{}: up to date ({} applied)",
+                    terminal_field(&database),
+                    applied.len()
+                );
                 continue;
             }
             for migration in pending {
@@ -69,13 +73,15 @@ impl Runner<'_> {
     async fn roll(&self, database: &str, migration: &Migration) -> Result<(), RunnerError> {
         match migration.rollback_class {
             Some(RollbackClass::Structural) => println!(
-                "{database}: WARNING: {:05} rollback is structural: schema is \
+                "{}: WARNING: {:05} rollback is structural: schema is \
                  restored but newer data may be lost",
+                terminal_field(database),
                 migration.number
             ),
             Some(RollbackClass::Irreversible) => println!(
-                "{database}: WARNING: {:05} rollback is declared IRREVERSIBLE and \
+                "{}: WARNING: {:05} rollback is declared IRREVERSIBLE and \
                  does not restore the previous state",
+                terminal_field(database),
                 migration.number
             ),
             _ => {}
@@ -114,7 +120,10 @@ impl Runner<'_> {
                 .filter(|number| *number > floor && fleet.contains_key(number))
                 .collect();
             if todo.is_empty() {
-                println!("{database}: already at or below {floor:05}");
+                println!(
+                    "{}: already at or below {floor:05}",
+                    terminal_field(&database)
+                );
                 continue;
             }
             // Refuse before touching anything if the walk cannot complete.
@@ -158,10 +167,16 @@ impl Runner<'_> {
                     .await?
                     .contains(&number)
                 {
-                    println!("{database}: customisation {number:05} not applied, skipping");
+                    println!(
+                        "{}: customisation {number:05} not applied, skipping",
+                        terminal_field(&database)
+                    );
                     continue;
                 }
-                println!("{database}: WARNING: removing customisation {number:05}");
+                println!(
+                    "{}: WARNING: removing customisation {number:05}",
+                    terminal_field(&database)
+                );
                 self.roll(&database, migration).await?;
             }
             return Ok(());
@@ -170,7 +185,10 @@ impl Runner<'_> {
         for database in self.target_databases(targets).await? {
             let applied = self.applied_migrations(&database).await?;
             if !applied.contains(&number) {
-                println!("{database}: {number:05} not applied, skipping");
+                println!(
+                    "{}: {number:05} not applied, skipping",
+                    terminal_field(&database)
+                );
                 continue;
             }
             let top = *applied.iter().next_back().expect("applied is non-empty");
@@ -195,6 +213,13 @@ impl Runner<'_> {
         }
         self.ensure_tracking().await?;
         for database in self.target_databases(targets).await? {
+            if self.options.dry_run {
+                println!(
+                    "{}: would stamp through {number:05}",
+                    terminal_field(&database)
+                );
+                continue;
+            }
             let applied = self.applied_migrations(&database).await?;
             for migration in &fleet {
                 if migration.number <= number && !applied.contains(&migration.number) {
@@ -210,7 +235,7 @@ impl Runner<'_> {
                     .await?;
                 }
             }
-            println!("{database}: stamped through {number:05}");
+            println!("{}: stamped through {number:05}", terminal_field(&database));
         }
         Ok(())
     }
@@ -221,6 +246,13 @@ impl Runner<'_> {
     /// refuses when zedb_migrations already has rows.
     pub async fn import_tracking(&self, source_table: &str) -> Result<u64, RunnerError> {
         self.require_write("import-tracking")?;
+        validate_qualified_table(source_table)?;
+        if self.options.dry_run {
+            // Dry runs deliberately make no network request (tested), so
+            // the already-has-rows refusal below is NOT evaluated here;
+            // callers must present this as unchecked, not as a promise.
+            return Ok(0);
+        }
         self.ensure_tracking().await?;
         let existing = self
             .client
@@ -316,7 +348,10 @@ impl Runner<'_> {
                 .await?
                 .contains(&number)
             {
-                println!("{database}: customisation {number:05} already applied, skipping");
+                println!(
+                    "{}: customisation {number:05} already applied, skipping",
+                    terminal_field(&database)
+                );
                 continue;
             }
             let sql = migration

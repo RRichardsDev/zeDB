@@ -9,7 +9,12 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::{template, RepoConfig, RepoError};
+use super::{read_repo_file, template, RepoConfig, RepoError};
+
+/// The `migrations/` walk should only ever descend `YYYY/MM/NNNNN`; a bound
+/// well past that turns a crafted deep or symlink-looped tree into a loud
+/// error instead of a stack overflow.
+const MAX_MIGRATION_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RollbackClass {
@@ -62,23 +67,25 @@ impl Migration {
     }
 
     pub fn upgrade_sql(&self) -> Result<String, RepoError> {
-        Ok(std::fs::read_to_string(self.upgrade_path())?)
+        read_repo_file(&self.upgrade_path())
     }
 
     pub fn rollback_sql(&self) -> Result<Option<String>, RepoError> {
         match self.rollback_path() {
-            Some(path) => Ok(Some(std::fs::read_to_string(path)?)),
+            Some(path) => Ok(Some(read_repo_file(&path)?)),
             None => Ok(None),
         }
     }
 
     /// First comment line of upgrade.sql, conventionally
-    /// `-- migration NNNNN: description`.
+    /// `-- migration NNNNN: description`. Control characters are stripped
+    /// so a crafted first line cannot smuggle terminal escapes into a CLI
+    /// or log that renders the headline.
     pub fn headline(&self) -> Option<String> {
-        let text = std::fs::read_to_string(self.upgrade_path()).ok()?;
+        let text = read_repo_file(&self.upgrade_path()).ok()?;
         let first = text.lines().next()?;
         let comment = first.strip_prefix("--")?.trim();
-        Some(comment.to_string())
+        Some(comment.chars().filter(|c| !c.is_control()).collect())
     }
 }
 
@@ -99,7 +106,7 @@ pub fn discover_chain(
 ) -> Result<Vec<Migration>, RepoError> {
     let mut found = Vec::new();
     if migrations_root.is_dir() {
-        collect(migrations_root, migrations_root, &mut found)?;
+        collect(migrations_root, migrations_root, 0, &mut found)?;
     }
     found.sort_by_key(|migration: &Migration| migration.number);
 
@@ -124,7 +131,7 @@ pub fn discover_chain(
             .into_iter()
             .flatten()
         {
-            let sql = std::fs::read_to_string(&path)?;
+            let sql = read_repo_file(&path)?;
             let unknown = template::undeclared_placeholders(&sql, &declared);
             if let Some(name) = unknown.first() {
                 return Err(RepoError::Layout(format!(
@@ -138,17 +145,32 @@ pub fn discover_chain(
     Ok(found)
 }
 
-fn collect(root: &Path, dir: &Path, found: &mut Vec<Migration>) -> Result<(), RepoError> {
+fn collect(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    found: &mut Vec<Migration>,
+) -> Result<(), RepoError> {
+    if depth > MAX_MIGRATION_DEPTH {
+        return Err(RepoError::Layout(format!(
+            "{}: migrations nested deeper than {MAX_MIGRATION_DEPTH} levels",
+            dir.display()
+        )));
+    }
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        let path = entry.path();
-        if !path.is_dir() {
+        // file_type() comes from readdir without following the link, so a
+        // symlinked directory is never descended: no loop can overflow the
+        // stack, and no link can walk the chain outside the repo.
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() || !file_type.is_dir() {
             continue;
         }
+        let path = entry.path();
         if path.join("upgrade.sql").is_file() {
             found.push(parse_migration(root, &path)?);
         } else {
-            collect(root, &path, found)?;
+            collect(root, &path, depth + 1, found)?;
         }
     }
     Ok(())
@@ -188,7 +210,7 @@ fn parse_migration(root: &Path, directory: &Path) -> Result<Migration, RepoError
 
     let rollback_path = directory.join("rollback.sql");
     let rollback_class = if rollback_path.is_file() {
-        let text = std::fs::read_to_string(&rollback_path)?;
+        let text = read_repo_file(&rollback_path)?;
         Some(parse_rollback_class(&rollback_path, &text)?)
     } else {
         None
@@ -196,7 +218,7 @@ fn parse_migration(root: &Path, directory: &Path) -> Result<Migration, RepoError
 
     let targeted_path = directory.join("targeted.toml");
     let targeted = if targeted_path.is_file() {
-        let text = std::fs::read_to_string(&targeted_path)?;
+        let text = read_repo_file(&targeted_path)?;
         let marker: TargetedMarker = toml::from_str(&text).map_err(|error| RepoError::Config {
             path: targeted_path.clone(),
             message: error.to_string(),

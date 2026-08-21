@@ -7,6 +7,8 @@ mod controller_persistence;
 #[path = "controller/probe.rs"]
 mod controller_probe;
 mod cost_status;
+#[cfg(test)]
+mod gpui_tests;
 mod model;
 mod usage;
 mod view;

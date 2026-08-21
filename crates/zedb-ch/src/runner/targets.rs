@@ -35,6 +35,7 @@ impl<'a> Runner<'a> {
     }
 
     pub(super) fn require_write(&self, action: &str) -> Result<(), RunnerError> {
+        self.validate_sql_identifiers()?;
         if self.options.server.read_only || !self.options.write {
             return Err(RunnerError::Refused(format!(
                 "{action} mutates the server and this connection is read-only; \
@@ -42,6 +43,15 @@ impl<'a> Runner<'a> {
             )));
         }
         Ok(())
+    }
+
+    /// The tracking database is interpolated into SQL as a bare
+    /// identifier, so it must be a plain identifier chunk. The cluster
+    /// name is NOT validated here: where the runner itself interpolates
+    /// it (tracking DDL) it is backtick-quoted, and hyphenated cluster
+    /// names are legal and common, so read paths must not reject them.
+    pub(super) fn validate_sql_identifiers(&self) -> Result<(), RunnerError> {
+        validate_identifier(&self.repo.config.tracking.database, "tracking database")
     }
 
     /// The fleet chain: every non-targeted migration in order.
@@ -55,6 +65,7 @@ impl<'a> Runner<'a> {
 
     /// Resolve targets without side effects; `All` reports skips.
     pub async fn resolve_targets(&self, targets: &Targets) -> Result<ResolvedTargets, RunnerError> {
+        self.validate_sql_identifiers()?;
         match targets {
             Targets::Databases(databases) => {
                 let mut unique = Vec::new();
@@ -137,7 +148,9 @@ impl<'a> Runner<'a> {
         let resolved = self.resolve_targets(targets).await?;
         for (database, group) in &resolved.skipped {
             eprintln!(
-                "skipping excluded database {database} (group {group}); target it with --db/--group"
+                "skipping excluded database {} (group {}); target it with --db/--group",
+                terminal_field(database),
+                terminal_field(group)
             );
         }
         Ok(resolved.databases)

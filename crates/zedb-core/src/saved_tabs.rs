@@ -73,10 +73,12 @@ pub fn load_saved_tabs() -> Vec<SavedTab> {
 }
 
 fn load_at(path: &Path) -> Vec<SavedTab> {
-    let Ok(raw) = std::fs::read_to_string(path) else {
+    let Ok(raw) = crate::store::read_bounded_string(path, crate::store::MAX_LOCAL_STATE_BYTES)
+    else {
         return Vec::new();
     };
-    if let Ok(tabs) = serde_json::from_str::<Vec<SavedTab>>(&raw) {
+    if let Ok(mut tabs) = serde_json::from_str::<Vec<SavedTab>>(&raw) {
+        tabs.truncate(SAVED_TAB_CAP);
         return tabs;
     }
 
@@ -110,19 +112,10 @@ pub fn save_saved_tabs(tabs: &[SavedTab]) -> Result<(), StoreError> {
 }
 
 fn save_at(tabs: &[SavedTab], path: PathBuf) -> Result<(), StoreError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| StoreError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
+    // Saved tabs hold working SQL that can carry secrets; private mode.
     let json = serde_json::to_string_pretty(tabs).expect("saved tabs serialize");
-    let temporary = path.with_extension("json.tmp");
-    std::fs::write(&temporary, json).map_err(|source| StoreError::Io {
-        path: temporary.clone(),
-        source,
-    })?;
-    std::fs::rename(&temporary, &path).map_err(|source| StoreError::Io { path, source })
+    crate::store::write_private_atomic(&path, json.as_bytes())
+        .map_err(|source| StoreError::Io { path, source })
 }
 
 #[cfg(test)]

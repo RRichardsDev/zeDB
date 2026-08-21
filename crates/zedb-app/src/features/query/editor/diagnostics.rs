@@ -19,6 +19,13 @@ impl Workspace {
         let Some(connected) = &self.connection.connected else {
             return;
         };
+        if !apply_in_place_allowed(connected.client_config.read_only, self.active_tier()) {
+            self.flash_warning(
+                "Apply in place is available only on writable development or staging connections",
+                cx,
+            );
+            return;
+        }
         let connection_name = connected.name.clone();
         let config = connected.client_config.clone();
         let Some(selected) = &mut self.schema.selected_object else {

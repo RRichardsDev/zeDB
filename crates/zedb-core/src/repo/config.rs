@@ -110,7 +110,7 @@ pub struct ParamConfig {
 
 impl RepoConfig {
     pub fn load(path: &Path) -> Result<Self, RepoError> {
-        let text = std::fs::read_to_string(path)?;
+        let text = super::read_repo_file(path)?;
         let config: RepoConfig = toml::from_str(&text).map_err(|error| RepoError::Config {
             path: path.to_path_buf(),
             message: error.to_string(),
@@ -132,6 +132,20 @@ impl RepoConfig {
                     config.engine.kind
                 ),
             });
+        }
+        for scope in config.scopes.keys() {
+            if scope.is_empty()
+                || !scope
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+            {
+                return Err(RepoError::Config {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "scope name {scope:?} is unsafe; use one lowercase ASCII path component"
+                    ),
+                });
+            }
         }
         Ok(config)
     }

@@ -67,10 +67,51 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), RepoError> {
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let target = to.join(entry.file_name());
-        if entry.path().is_dir() {
+        let metadata = std::fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() {
+            return Err(RepoError::Layout(format!(
+                "import source contains symlink: {}",
+                entry.path().display()
+            )));
+        }
+        if metadata.is_dir() {
             copy_tree(&entry.path(), &target)?;
-        } else {
+        } else if metadata.is_file() {
             std::fs::copy(entry.path(), target)?;
+        } else {
+            return Err(RepoError::Layout(format!(
+                "import source contains a non-file entry: {}",
+                entry.path().display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_tree(root: &Path) -> Result<(), RepoError> {
+    let metadata = std::fs::symlink_metadata(root)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(RepoError::Layout(format!(
+            "import source must be a real directory: {}",
+            root.display()
+        )));
+    }
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let metadata = std::fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() {
+            return Err(RepoError::Layout(format!(
+                "import source contains symlink: {}",
+                entry.path().display()
+            )));
+        }
+        if metadata.is_dir() {
+            validate_tree(&entry.path())?;
+        } else if !metadata.is_file() {
+            return Err(RepoError::Layout(format!(
+                "import source contains a non-file entry: {}",
+                entry.path().display()
+            )));
         }
     }
     Ok(())
@@ -79,11 +120,24 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), RepoError> {
 /// Parse `CH_VERSION = "..."` from the ancestor's pin.py.
 fn pinned_version(ancestor: &Path) -> Result<String, RepoError> {
     let pin = ancestor.join("clickhouse_ddl/pin.py");
+    for path in [ancestor.join("clickhouse_ddl"), pin.clone()] {
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| RepoError::Config {
+            path: path.clone(),
+            message: format!("cannot inspect the ancestor's pinned version path: {error}"),
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(RepoError::Layout(format!(
+                "import source contains symlink: {}",
+                path.display()
+            )));
+        }
+    }
     let text = std::fs::read_to_string(&pin).map_err(|error| RepoError::Config {
         path: pin.clone(),
         message: format!("cannot read the ancestor's pinned version: {error}"),
     })?;
-    text.lines()
+    let version = text
+        .lines()
         .find_map(|line| {
             let rest = line.trim().strip_prefix("CH_VERSION")?.trim_start();
             let rest = rest.strip_prefix('=')?.trim();
@@ -92,7 +146,19 @@ fn pinned_version(ancestor: &Path) -> Result<String, RepoError> {
         .ok_or_else(|| RepoError::Config {
             path: pin,
             message: "no CH_VERSION assignment found".into(),
-        })
+        })?;
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() != 4
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err(RepoError::Config {
+            path: ancestor.join("clickhouse_ddl/pin.py"),
+            message: format!("unsafe ClickHouse version {version:?}; expected N.N.N.N"),
+        });
+    }
+    Ok(version)
 }
 
 /// Convert `ancestor` into a fresh format-1 repo at `destination`.
@@ -101,26 +167,78 @@ fn pinned_version(ancestor: &Path) -> Result<String, RepoError> {
 /// and `zedb regen` derives it under this tooling's own naming, with
 /// `zedb check equivalence` proving the result matches the chain.
 pub fn import_repo(ancestor: &Path, destination: &Path) -> Result<ImportReport, RepoError> {
-    if destination.join("zedb.toml").exists() {
-        return Err(RepoError::AlreadyARepo(destination.to_path_buf()));
+    match std::fs::symlink_metadata(destination) {
+        Ok(_) => {
+            return Err(RepoError::Layout(format!(
+                "import destination must not already exist: {}",
+                destination.display()
+            )))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let canonical_ancestor = std::fs::canonicalize(ancestor)?;
+    let destination_name = destination.file_name().ok_or_else(|| {
+        RepoError::Layout(format!(
+            "import destination needs a final directory name: {}",
+            destination.display()
+        ))
+    })?;
+    let destination_parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let canonical_parent = std::fs::canonicalize(destination_parent).map_err(|error| {
+        RepoError::Layout(format!(
+            "import destination parent must already exist ({}): {error}",
+            destination_parent.display()
+        ))
+    })?;
+    let resolved_destination = canonical_parent.join(destination_name);
+    if resolved_destination.starts_with(&canonical_ancestor) {
+        return Err(RepoError::Layout(format!(
+            "import destination must be outside the ancestor repository: {}",
+            destination.display()
+        )));
     }
     let migrations_from = ancestor.join("migrations");
-    if !migrations_from.is_dir() {
+    if std::fs::symlink_metadata(&migrations_from)
+        .map(|metadata| metadata.file_type().is_symlink() || !metadata.is_dir())
+        .unwrap_or(true)
+    {
         return Err(RepoError::Config {
             path: ancestor.to_path_buf(),
             message: "no migrations/ directory; is this an analytics-clickhouse-ddl repo?".into(),
         });
     }
+    validate_tree(&migrations_from)?;
     let engine_version = pinned_version(ancestor)?;
+
+    let exclusions_from = ancestor.join("exceptions.toml");
+    let exclusions = match std::fs::symlink_metadata(&exclusions_from) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(RepoError::Layout(format!(
+                "import source contains symlink: {}",
+                exclusions_from.display()
+            )))
+        }
+        Ok(metadata) if metadata.is_file() => Some(std::fs::read_to_string(&exclusions_from)?),
+        Ok(_) => {
+            return Err(RepoError::Layout(format!(
+                "import source contains a non-file entry: {}",
+                exclusions_from.display()
+            )))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
 
     std::fs::create_dir_all(destination)?;
     copy_tree(&migrations_from, &destination.join("migrations"))?;
     std::fs::create_dir_all(destination.join("current-state"))?;
 
-    let exclusions_from = ancestor.join("exceptions.toml");
     let mut exclusion_groups = 0;
-    if exclusions_from.is_file() {
-        let text = std::fs::read_to_string(&exclusions_from)?;
+    if let Some(text) = exclusions {
         exclusion_groups = text
             .lines()
             .filter(|line| line.trim_start().starts_with("[groups."))

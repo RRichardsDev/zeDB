@@ -4,11 +4,14 @@ use std::path::Path;
 
 use zedb_core::repo::{init_repo, scaffold_migration, ScaffoldOptions};
 
-use super::open_repo;
+use super::{open_repo, terminal_field, terminal_text};
 
 pub fn init(path: &Path) -> Result<(), String> {
     let config = init_repo(path).map_err(|error| error.to_string())?;
-    println!("Initialized migration repo: {}", config.display());
+    println!(
+        "Initialized migration repo: {}",
+        terminal_field(&config.display().to_string())
+    );
     Ok(())
 }
 
@@ -28,7 +31,10 @@ pub fn scaffold(
         },
     )
     .map_err(|error| error.to_string())?;
-    println!("Scaffolded {}", directory.display());
+    println!(
+        "Scaffolded {}",
+        terminal_field(&directory.display().to_string())
+    );
     Ok(())
 }
 
@@ -51,7 +57,10 @@ pub fn ls(root: &Path) -> Result<(), String> {
         let headline = migration.headline().unwrap_or_default();
         println!(
             "{:05}  {:04}/{:02}  {class:<12}{targeted}  {headline}",
-            migration.number, migration.year, migration.month
+            migration.number,
+            migration.year,
+            migration.month,
+            headline = terminal_field(&headline)
         );
     }
     Ok(())
@@ -63,7 +72,10 @@ pub fn show(root: &Path, number: u32) -> Result<(), String> {
         .migration(number)
         .ok_or_else(|| format!("no migration {number:05} in the chain"))?;
     println!("migration {:05}", migration.number);
-    println!("directory: {}", migration.directory.display());
+    println!(
+        "directory: {}",
+        terminal_field(&migration.directory.display().to_string())
+    );
     match migration.rollback_class {
         Some(class) => println!("rollback-class: {}", class.as_str()),
         None => println!("rollback-class: none (treated as irreversible)"),
@@ -76,12 +88,12 @@ pub fn show(root: &Path, number: u32) -> Result<(), String> {
         }
     }
     let upgrade = migration.upgrade_sql().map_err(|error| error.to_string())?;
-    println!("\n-- upgrade.sql\n{upgrade}");
+    println!("\n-- upgrade.sql\n{}", terminal_text(&upgrade));
     if let Some(rollback) = migration
         .rollback_sql()
         .map_err(|error| error.to_string())?
     {
-        println!("-- rollback.sql\n{rollback}");
+        println!("-- rollback.sql\n{}", terminal_text(&rollback));
     }
     Ok(())
 }
@@ -92,7 +104,7 @@ pub fn import(ancestor: &Path, destination: &Path) -> Result<(), String> {
     println!(
         "imported {} migration(s) into {} (ClickHouse {}, {} exclusion group(s))",
         report.migrations,
-        report.destination.display(),
+        terminal_field(&report.destination.display().to_string()),
         report.engine_version,
         report.exclusion_groups
     );

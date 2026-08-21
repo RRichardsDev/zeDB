@@ -126,11 +126,13 @@ pub(super) fn render_entry(
             .child(format!("{title} ({status})"))
             .into_any_element(),
         ThreadEntry::Permission {
+            request_id,
             title,
             input,
             options,
             answered,
         } => {
+            let request_id = *request_id;
             let mut card = div()
                 .p_2()
                 .rounded(px(4.))
@@ -185,7 +187,11 @@ pub(super) fn render_entry(
                                 .child(label)
                                 .hover(|button| button.bg(theme::hover()).cursor_pointer())
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.agent_answer_permission(Some(option_id.clone()), cx);
+                                    this.agent_answer_permission(
+                                        request_id,
+                                        Some(option_id.clone()),
+                                        cx,
+                                    );
                                 })),
                         );
                     }

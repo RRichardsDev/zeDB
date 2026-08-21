@@ -12,6 +12,24 @@ use gpui::prelude::*;
 use crate::clickhouse_cloud::{self, CloudOrg, CloudService};
 use crate::*;
 
+fn password_provision_start_allowed(
+    stage: ProvisionStage,
+    cloud: Option<&zedb_core::CloudProvenance>,
+) -> bool {
+    stage == ProvisionStage::Confirm && cloud.is_some()
+}
+
+fn password_provision_completion_matches(
+    stage: ProvisionStage,
+    current_cloud: Option<&zedb_core::CloudProvenance>,
+    expected_cloud: &zedb_core::CloudProvenance,
+    password_input_matches: bool,
+) -> bool {
+    stage == ProvisionStage::Working
+        && current_cloud == Some(expected_cloud)
+        && password_input_matches
+}
+
 pub(crate) struct CloudLinkState {
     pub(crate) open: bool,
     pub(crate) key_id: Option<Entity<TextInput>>,
@@ -930,9 +948,14 @@ impl Workspace {
         let Some(form) = self.connection.form.as_ref() else {
             return;
         };
+        if !password_provision_start_allowed(form.provision, form.cloud.as_ref()) {
+            return;
+        }
         let Some(cloud) = form.cloud.clone() else {
             return;
         };
+        let expected_cloud = cloud.clone();
+        let password_input = form.password.clone();
         // The warehouse shares one set of users, and the control
         // plane only rotates the password on the primary service:
         // aiming at a secondary compute is a 400. Resolve the
@@ -973,11 +996,23 @@ impl Workspace {
                 .await
                 .unwrap_or_else(|_| Err("Provisioning stopped".into()));
             this.update(cx, |this, cx| {
-                let Some(form) = this.connection.form.as_mut() else {
+                let same_form = this.connection.form.as_ref().is_some_and(|form| {
+                    password_provision_completion_matches(
+                        form.provision,
+                        form.cloud.as_ref(),
+                        &expected_cloud,
+                        form.password == password_input,
+                    )
+                });
+                if !same_form {
+                    this.flash_warning(
+                        "The Cloud password was rotated after its form changed; rotate it again to capture the new value",
+                        cx,
+                    );
                     return;
-                };
+                }
+                let form = this.connection.form.as_mut().expect("form checked above");
                 form.provision = ProvisionStage::Idle;
-                let password_input = form.password.clone();
                 match outcome {
                     Ok(password) => {
                         password_input.update(cx, |input, cx| input.set_text(password, cx));
@@ -2076,6 +2111,10 @@ impl Workspace {
             .into_any_element()
     }
 }
+
+#[cfg(test)]
+#[path = "cloud/security_tests.rs"]
+mod security_tests;
 
 #[cfg(test)]
 mod tests {

@@ -81,7 +81,11 @@ impl Workspace {
         full_text.push_str(&text);
         agent_log(
             "prompt",
-            serde_json::json!({ "session_id": session_id, "text": full_text }),
+            serde_json::json!({
+                "session_id": session_id,
+                "bytes": full_text.len(),
+                "included_context": include_context,
+            }),
         );
         let handle =
             rt::tokio().spawn(async move { connection.prompt(&session_id, &full_text).await });
@@ -112,7 +116,10 @@ impl Workspace {
                         }
                     }
                     Err(error) => {
-                        agent_log("turn_error", serde_json::json!({ "error": error }));
+                        agent_log(
+                            "turn_error",
+                            serde_json::json!({ "error_bytes": error.len() }),
+                        );
                         thread.status = Some(error);
                     }
                 }
@@ -263,60 +270,86 @@ impl Workspace {
     }
 
     pub(crate) fn agent_cancel(&mut self, cx: &mut Context<Self>) {
-        let Some(thread) = self.agent.thread.as_ref() else {
+        let Some(thread) = self.agent.thread.as_mut() else {
             return;
         };
         if let Some(session_id) = &thread.session_id {
             let _ = thread.connection.cancel(session_id);
+        }
+        // Cancelled responders leave their cards behind; mark them so no
+        // card keeps live buttons for a request that no longer exists.
+        for pending in thread.pending_permissions.drain(..) {
+            let cancelled_id = pending.request_id;
+            let _ = pending.responder.send(PermissionOutcome::Cancelled);
+            for entry in thread.entries.iter_mut() {
+                if let ThreadEntry::Permission {
+                    request_id,
+                    answered,
+                    ..
+                } = entry
+                {
+                    if *request_id == cancelled_id && answered.is_none() {
+                        *answered = Some("cancelled".into());
+                    }
+                }
+            }
         }
         cx.notify();
     }
 
     pub(crate) fn agent_answer_permission(
         &mut self,
+        request_id: u64,
         option_id: Option<String>,
         cx: &mut Context<Self>,
     ) {
         let Some(thread) = self.agent.thread.as_mut() else {
             return;
         };
-        let Some(responder) = thread.pending_permissions.pop_front() else {
+        // Answer the exact request whose card was clicked; requests are
+        // never answered positionally.
+        let Some(position) = thread
+            .pending_permissions
+            .iter()
+            .position(|pending| pending.request_id == request_id)
+        else {
             return;
         };
+        let pending = thread
+            .pending_permissions
+            .remove(position)
+            .expect("position was just found");
         let outcome = match &option_id {
-            Some(option_id) => PermissionOutcome::Selected {
-                option_id: option_id.clone(),
-            },
-            None => PermissionOutcome::Cancelled,
+            Some(option_id) if pending.option_ids.contains(option_id) => {
+                PermissionOutcome::Selected {
+                    option_id: option_id.clone(),
+                }
+            }
+            Some(_) | None => PermissionOutcome::Cancelled,
+        };
+        // The card records what was actually sent, not what was clicked.
+        let sent = match &outcome {
+            PermissionOutcome::Selected { option_id } => option_id.clone(),
+            _ => "cancelled".into(),
         };
         agent_log(
             "permission_answer",
-            serde_json::json!({ "option": option_id }),
+            serde_json::json!({ "selected": matches!(outcome, PermissionOutcome::Selected { .. }) }),
         );
-        let _ = responder.send(outcome);
-        // Mark the OLDEST unanswered card (queue order), and remember
-        // permanent grants across sessions.
-        let agent_name = thread.agent_name.clone();
-        let mut remember: Option<String> = None;
+        let _ = pending.responder.send(outcome);
+        // ACP tool titles are display text, not authority identities, so
+        // approvals are never reused by title.
         for entry in thread.entries.iter_mut() {
             if let ThreadEntry::Permission {
-                title, answered, ..
+                request_id: card_id,
+                answered,
+                ..
             } = entry
             {
-                if answered.is_none() {
-                    let chosen = option_id.clone().unwrap_or_else(|| "cancelled".into());
-                    if chosen.contains("always") {
-                        remember = Some(format!("{agent_name}|{title}"));
-                    }
-                    *answered = Some(chosen);
+                if *card_id == request_id {
+                    *answered = Some(sent);
                     break;
                 }
-            }
-        }
-        if let Some(key) = remember {
-            if !self.preferences.agent_always_allow.contains(&key) {
-                self.preferences.agent_always_allow.push(key);
-                let _ = zedb_core::save_preferences(&self.preferences);
             }
         }
         cx.notify();

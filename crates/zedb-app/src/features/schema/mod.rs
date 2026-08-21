@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod gpui_tests;
 mod loading;
 mod model;
 mod relationships;
@@ -11,6 +13,6 @@ mod view_relationships;
 mod workload;
 
 pub(crate) use model::{
-    database_nodes_from_cache, schema_object_from_cache, DatabaseNode, ObjectInspectorTab,
-    SchemaState, SelectedSchemaObject,
+    apply_in_place_allowed, database_nodes_from_cache, schema_object_from_cache, DatabaseNode,
+    ObjectInspectorTab, PendingApply, SchemaState, SelectedSchemaObject,
 };

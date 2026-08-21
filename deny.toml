@@ -1,0 +1,14 @@
+# Security policy for the dependency graph. CI runs the advisories check with
+# unmaintained crates reported as warnings; vulnerabilities, unsoundness, and
+# yanked releases retain cargo-deny's failing defaults.
+[graph]
+all-features = true
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+]
+
+[advisories]
+ignore = []

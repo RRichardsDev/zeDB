@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{BuildHasher, Hasher};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,7 @@ const RETRY_AFTER: Duration = Duration::from_secs(300);
 /// long-lived native connection has to outlive any one client: it lives
 /// here, process-wide, keyed by the connection's identity.
 static POOL: OnceLock<Mutex<HashMap<String, PoolEntry>>> = OnceLock::new();
+static POOL_KEY_SALT: OnceLock<[u8; 32]> = OnceLock::new();
 
 fn pool() -> &'static Mutex<HashMap<String, PoolEntry>> {
     POOL.get_or_init(|| Mutex::new(HashMap::new()))
@@ -28,6 +30,34 @@ fn pool() -> &'static Mutex<HashMap<String, PoolEntry>> {
 /// Kill switch: `ZEDB_NATIVE=0` keeps everything on HTTP.
 fn disabled() -> bool {
     std::env::var("ZEDB_NATIVE").is_ok_and(|value| value.trim() == "0")
+}
+
+fn pool_key_salt() -> &'static [u8; 32] {
+    POOL_KEY_SALT.get_or_init(|| {
+        let state = std::collections::hash_map::RandomState::new();
+        let mut salt = [0u8; 32];
+        for (index, chunk) in salt.chunks_exact_mut(8).enumerate() {
+            let mut hasher = state.build_hasher();
+            hasher.write_usize(index);
+            chunk.copy_from_slice(&hasher.finish().to_le_bytes());
+        }
+        salt
+    })
+}
+
+fn session_digest(cfg: &ChConfig) -> String {
+    use sha2::{Digest as _, Sha256};
+
+    let mut digest = Sha256::new();
+    digest.update(pool_key_salt());
+    digest.update(cfg.password.as_deref().unwrap_or("").as_bytes());
+    for setting in &cfg.driver.settings {
+        digest.update([0]);
+        digest.update(setting.name.trim().as_bytes());
+        digest.update([b'=']);
+        digest.update(setting.value.trim().as_bytes());
+    }
+    format!("{:x}", digest.finalize())
 }
 
 /// The connection identity a pooled socket serves. Everything that shapes
@@ -41,20 +71,17 @@ fn pool_key(cfg: &ChConfig) -> Option<String> {
     if endpoint.is_empty() {
         return None;
     }
-    let settings: Vec<String> = cfg
-        .driver
-        .settings
-        .iter()
-        .map(|setting| format!("{}={}", setting.name.trim(), setting.value.trim()))
-        .collect();
+    let parsed = reqwest::Url::parse(endpoint).ok()?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
     Some(format!(
-        "{endpoint}|{:?}|{}|{}|{}|{}|{}",
+        "{endpoint}|{:?}|{}|{}|{}|{}",
         cfg.native_port,
         cfg.user,
-        cfg.password.as_deref().unwrap_or(""),
         cfg.database.as_deref().unwrap_or(""),
         cfg.read_only,
-        settings.join(",")
+        session_digest(cfg)
     ))
 }
 
@@ -111,8 +138,9 @@ pub async fn connect_pooled(cfg: &ChConfig) -> Result<NativeClient> {
             "native transport disabled (ZEDB_NATIVE=0)".into(),
         ));
     }
-    let key = pool_key(cfg)
-        .ok_or_else(|| ChError::NativeTransport(format!("no host in URL {:?}", cfg.url)))?;
+    let key = pool_key(cfg).ok_or_else(|| {
+        ChError::NativeTransport("invalid or credential-bearing native endpoint".into())
+    })?;
     if let Ok(entries) = pool().lock() {
         if let Some(PoolEntry::Ready(client)) = entries.get(&key) {
             if !client.is_closed() {
@@ -136,8 +164,9 @@ pub async fn connect_pooled(cfg: &ChConfig) -> Result<NativeClient> {
     }
 }
 
-/// Whether a statement is safe to route over the native read path: reads
-/// re-run harmlessly on HTTP fallback, anything else must not run twice.
+/// Whether a statement is safe to route over the native read path. This is a
+/// deliberately narrow first-keyword allowlist. In particular, `WITH` is not
+/// enough to prove the eventual statement is a read.
 pub fn is_read_statement(sql: &str) -> bool {
     let first = sql
         .split_whitespace()
@@ -146,7 +175,7 @@ pub fn is_read_statement(sql: &str) -> bool {
         .to_ascii_uppercase();
     matches!(
         first.as_str(),
-        "SELECT" | "WITH" | "SHOW" | "DESCRIBE" | "DESC" | "EXPLAIN" | "EXISTS"
+        "SELECT" | "SHOW" | "DESCRIBE" | "DESC" | "EXPLAIN" | "EXISTS"
     )
 }
 
@@ -156,7 +185,10 @@ mod tests {
     #[test]
     fn read_statements_are_recognized() {
         assert!(is_read_statement("  select 1"));
-        assert!(is_read_statement("WITH x AS (SELECT 1) SELECT * FROM x"));
+        assert!(!is_read_statement("WITH x AS (SELECT 1) SELECT * FROM x"));
+        assert!(!is_read_statement(
+            "WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x"
+        ));
         assert!(is_read_statement("SHOW TABLES"));
         assert!(is_read_statement("EXPLAIN SELECT 1"));
         assert!(!is_read_statement("INSERT INTO t VALUES (1)"));
@@ -180,6 +212,27 @@ mod tests {
         let two = pool_key(&node("http://localhost:8124")).unwrap();
         assert_ne!(one, two);
         assert!(pool_key(&node("  ")).is_none());
+        assert!(pool_key(&node("https://user:secret@db.example.com:8443")).is_none());
+    }
+
+    #[test]
+    fn pool_key_does_not_retain_passwords_or_setting_values() {
+        let mut cfg = crate::ChConfig {
+            url: "http://localhost:8123".into(),
+            user: "zedb".into(),
+            password: Some("super-secret-password".into()),
+            database: None,
+            read_only: false,
+            driver: Default::default(),
+            native_port: None,
+        };
+        cfg.driver.settings.push(zedb_core::DriverSetting {
+            name: "api_token".into(),
+            value: "super-secret-token".into(),
+        });
+        let key = pool_key(&cfg).unwrap();
+        assert!(!key.contains("super-secret-password"));
+        assert!(!key.contains("super-secret-token"));
     }
 
     #[test]
@@ -190,6 +243,7 @@ mod tests {
             "ch.example.com"
         );
         assert!(host_of("http://").is_none());
+        assert_eq!(host_of("https://[::1]:9440/path").as_deref(), Some("::1"));
     }
 
     #[test]

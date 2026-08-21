@@ -94,6 +94,15 @@ impl Workspace {
     }
 
     pub(crate) fn cancel_form(&mut self, cx: &mut Context<Self>) {
+        if self
+            .connection
+            .form
+            .as_ref()
+            .is_some_and(|form| form.provision == ProvisionStage::Working)
+        {
+            self.flash_warning("Wait for password provisioning to finish", cx);
+            return;
+        }
         self.connection.form = None;
         self.notice = None;
         cx.notify();

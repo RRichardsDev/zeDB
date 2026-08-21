@@ -17,6 +17,7 @@ pub mod lifecycle;
 pub mod mcp;
 pub mod native;
 pub mod pin;
+mod process;
 pub mod regen;
 pub mod replay;
 mod rowbinary;
@@ -24,6 +25,8 @@ pub mod runner;
 mod schema;
 pub mod schema_cache;
 pub mod schema_intelligence;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 mod types;
 pub mod verify;
 pub mod workload;
@@ -33,7 +36,8 @@ pub use client::{
 };
 pub use error::{ChError, Result};
 pub use pin::{
-    binary_cache_dir, cached_binary, discover_server_version, ensure_binary, smoke_replay, PinError,
+    binary_cache_dir, cached_binary, cached_binary_or_fallback, discover_server_version,
+    ensure_binary, smoke_replay, PinError,
 };
 pub use schema::{
     distributed_sharding_key, ColumnInfo, DatabaseMeta, MergeInfo, MvDependency,

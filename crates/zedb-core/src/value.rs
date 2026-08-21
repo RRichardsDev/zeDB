@@ -55,7 +55,15 @@ impl fmt::Display for Value {
                 if scale == 0 {
                     return write!(f, "{value}");
                 }
-                let divisor = 10i128.pow(scale);
+                // `scale` is server-controlled (a native-protocol decimal
+                // can claim any u8). 10^scale overflows i128 past scale 38,
+                // which panics in debug and, worse, wraps to a zero divisor
+                // in release. Fall back to scientific notation rather than
+                // divide by that, so a malformed column never crashes the
+                // grid formatting it.
+                let Some(divisor) = 10i128.checked_pow(scale) else {
+                    return write!(f, "{value}e-{scale}");
+                };
                 let int = value / divisor;
                 let frac = (value % divisor).unsigned_abs();
                 let sign = if *value < 0 && int == 0 { "-" } else { "" };
@@ -140,5 +148,15 @@ mod tests {
         assert_eq!(d(-56, 4), "-0.0056");
         assert_eq!(d(5, 0), "5");
         assert_eq!(d(10, 1), "1.0");
+    }
+
+    #[test]
+    fn decimal_display_survives_out_of_range_scale() {
+        // A server-supplied scale beyond i128's reach must not panic
+        // (debug overflow) or divide by a wrapped-zero divisor (release).
+        for scale in [39u8, 128, 200, 255] {
+            let rendered = Value::Decimal { value: 123, scale }.to_string();
+            assert!(rendered.contains("123"), "scale {scale}: {rendered}");
+        }
     }
 }

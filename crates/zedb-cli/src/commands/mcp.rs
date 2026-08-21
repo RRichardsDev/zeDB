@@ -7,16 +7,16 @@ use super::runtime;
 pub fn serve(
     root: &Path,
     server: Option<String>,
-    user: String,
-    password: String,
+    user: Option<String>,
+    password: Option<String>,
     cache_connection: Option<String>,
 ) -> Result<(), String> {
     // The repo is optional here: query tools alone are useful.
     let repo = zedb_core::repo::MigrationRepo::open(root).ok();
     let config = server.map(|url| zedb_ch::ChConfig {
         url,
-        user,
-        password: (!password.is_empty()).then_some(password),
+        user: user.unwrap_or_else(|| "default".into()),
+        password,
         database: None,
         read_only: true,
         driver: Default::default(),

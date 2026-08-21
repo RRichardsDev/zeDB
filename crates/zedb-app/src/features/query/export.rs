@@ -69,9 +69,23 @@ pub struct ExportState {
     pub started_at: Option<std::time::Instant>,
     /// Abort handle for a running download; Cancel kills and closes.
     pub abort: Option<tokio::task::AbortHandle>,
+    /// Exact path opened by the active download. Editable form state must
+    /// never decide which partial file cancellation removes.
+    pub active_path: Option<std::path::PathBuf>,
     pub error: Option<String>,
     pub generation: u64,
 }
+
+fn partial_export_path(
+    running: bool,
+    active_path: Option<&std::path::Path>,
+) -> Option<&std::path::Path> {
+    running.then_some(active_path).flatten()
+}
+
+#[cfg(test)]
+#[path = "export/security_tests.rs"]
+mod security_tests;
 
 fn default_path(format: ExportFormat) -> String {
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
@@ -116,6 +130,7 @@ impl Workspace {
             progress_bytes: 0,
             started_at: None,
             abort: None,
+            active_path: None,
             error: None,
             generation: 0,
         });
@@ -199,10 +214,11 @@ impl Workspace {
         export.error = None;
         export.progress_bytes = 0;
         export.started_at = Some(std::time::Instant::now());
+        let path_buf = std::path::PathBuf::from(path.clone());
+        export.active_path = Some(path_buf.clone());
         export.generation += 1;
         let generation = export.generation;
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<u64>();
-        let path_buf = std::path::PathBuf::from(path.clone());
         let task = rt::tokio().spawn(async move {
             let client = zedb_ch::ChClient::new(config);
             client
@@ -244,6 +260,7 @@ impl Workspace {
                     return;
                 }
                 export.running = false;
+                export.active_path = None;
                 match outcome {
                     Ok(Ok(written)) => {
                         this.export = None;
@@ -272,11 +289,8 @@ impl Workspace {
             if let Some(abort) = export.abort {
                 abort.abort();
             }
-            if export.running {
-                let path = export.path_input.read(cx).text().trim().to_string();
-                if !path.is_empty() {
-                    let _ = std::fs::remove_file(path);
-                }
+            if let Some(path) = partial_export_path(export.running, export.active_path.as_deref()) {
+                let _ = std::fs::remove_file(path);
             }
         }
         cx.notify();

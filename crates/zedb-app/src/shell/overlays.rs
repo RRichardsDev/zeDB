@@ -24,10 +24,15 @@ impl Workspace {
                         }
                     }
                     None => {
-                        this.notice = Some(format!(
-                            "No newer release found; you are on v{}",
-                            env!("CARGO_PKG_VERSION")
-                        ));
+                        // Green and self-clearing: the "nothing to do"
+                        // outcome is the easiest one to miss.
+                        this.flash_success(
+                            format!(
+                                "No newer release found; you are on v{}",
+                                env!("CARGO_PKG_VERSION")
+                            ),
+                            cx,
+                        );
                     }
                 }
                 this.notice_warning = false;

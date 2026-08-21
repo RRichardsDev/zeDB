@@ -63,36 +63,17 @@ fn first_port(result: Result<QueryResult>) -> Option<u16> {
 
 /// The host of a ClickHouse HTTP URL (`http(s)://host:port/...` -> `host`).
 pub fn host_of(url: &str) -> Option<String> {
-    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let authority = after_scheme
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(after_scheme);
-    let host_port = authority
-        .rsplit_once('@')
-        .map(|(_, host)| host)
-        .unwrap_or(authority);
-    let host = host_port
-        .rsplit_once(':')
-        .map(|(host, _)| host)
-        .unwrap_or(host_port);
-    (!host.is_empty()).then(|| host.to_string())
+    let parsed = reqwest::Url::parse(url).ok()?;
+    parsed.host_str().map(|host| {
+        host.trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string()
+    })
 }
 
 /// The explicit port of a ClickHouse HTTP URL, if one is written.
 pub fn port_of(url: &str) -> Option<u16> {
-    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let authority = after_scheme
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(after_scheme);
-    let host_port = authority
-        .rsplit_once('@')
-        .map(|(_, host)| host)
-        .unwrap_or(authority);
-    host_port
-        .rsplit_once(':')
-        .and_then(|(_, port)| port.parse().ok())
+    reqwest::Url::parse(url).ok()?.port()
 }
 
 /// A `SET` right-hand side: numeric values go bare, anything else quoted.
