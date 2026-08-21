@@ -8,6 +8,15 @@ they leave the list when shipped.
   that column (~20 MB); the number should size the actual rewrite
   (truthful labels) or users learn to ignore it (seen 2026-08-21 on
   tenant_01.events, at-column codec advice)
+- agent highlight_control claims success for controls that are not
+  rendered: "rollback" lives in the fleet detail panel, so with no row
+  selected (or the fleet view closed) the bridge sets a highlight
+  nothing shows, returns "highlighted for a few seconds", and the
+  agent tells the user it flashed. Violates the ACP "no invisible UI
+  changes" clause; the tool should either make the control visible
+  (show fleet, and say so) or answer honestly that it is not on
+  screen and what would put it there (seen 2026-08-21, prompt "show
+  me where I'd roll back a migration" with no database selected)
 - while a storage suggestion is applying, the advice button should
   show a loading state once the mutation runs longer than ~2s; today
   there is no feedback on the button itself (seen 2026-08-21 applying
