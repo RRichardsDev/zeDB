@@ -1,9 +1,54 @@
 //! Persistence for connection configs: a JSON file in the platform config
 //! directory. Secrets never touch this file; see [`crate::secrets`].
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::connection::ConnectionConfig;
+
+/// Create `dir` (and parents) private to the owner. On unix the mode is
+/// set at creation time so there is no world-readable window, and also
+/// re-applied in case the directory already existed with looser bits.
+pub(crate) fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    match builder.create(dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
+/// Write `data` to `path` atomically and private to the owner: the parent
+/// directory is created 0700, the payload is written to a sibling temp file
+/// created 0600 (mode applied at open time, no chmod race), then renamed
+/// over `path`. Used for every local file that can hold SQL, endpoints, or
+/// other material a co-resident user should not read.
+pub(crate) fn write_private_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        create_private_dir(parent)?;
+    }
+    let temporary = path.with_extension("tmp");
+    {
+        use std::io::Write as _;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&temporary, path)
+}
 
 #[cfg(test)]
 pub(crate) static CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -48,19 +93,8 @@ pub fn load_connections() -> Result<Vec<ConnectionConfig>, StoreError> {
 
 pub fn save_connections(connections: &[ConnectionConfig]) -> Result<(), StoreError> {
     let path = config_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| StoreError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
     let data = serde_json::to_string_pretty(connections).expect("serializable");
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, data).map_err(|source| StoreError::Io {
-        path: tmp.clone(),
-        source,
-    })?;
-    std::fs::rename(&tmp, &path).map_err(|source| StoreError::Io { path, source })
+    write_private_atomic(&path, data.as_bytes()).map_err(|source| StoreError::Io { path, source })
 }
 
 #[cfg(test)]

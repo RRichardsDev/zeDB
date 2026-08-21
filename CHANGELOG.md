@@ -9,6 +9,23 @@ GitHub release notes.
 
 ## Unreleased
 
+- Settings sync is secure by default: a pulled payload may add connections but
+  never repoints an existing connection's endpoint or weakens its read-only
+  posture or tier (the connection name is its Keychain key, so an endpoint swap
+  would have sent its password to the new host). Per-connection repo paths and
+  the fleet cluster value now also stay on the machine that set them, and the
+  sync payload has a size limit.
+- Git operations against a migration or settings repo no longer run programs
+  the repo's own git config could name (hooks, fsmonitor), bound their
+  runtime, refuse remote URLs that look like git options, and no longer hand a
+  stored git token to a look-alike host embedded in a URL.
+- Opening a migration repository is now bounded against hostile content:
+  symlinks are not followed, the migrations walk is depth-limited, and
+  oversized files are rejected instead of read into memory.
+- Query history, saved tabs, the launch session, saved connections, and
+  settings are written private to the owner (0600) so working SQL that embeds
+  credentials is not left world-readable.
+- A malformed decimal value from a server can no longer crash the results grid.
 - Hyphenated cluster names work everywhere again: where zeDB interpolates the
   cluster into tracking DDL it is backtick-quoted instead of rejected, and
   read-only commands no longer validate a cluster name they never use.

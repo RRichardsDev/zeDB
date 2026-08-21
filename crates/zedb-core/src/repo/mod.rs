@@ -36,6 +36,32 @@ pub enum RepoError {
     MissingParam(String),
 }
 
+/// Largest single file zeDB reads from a migration repo. A shared checkout
+/// is semi-trusted input, so an outsized SQL or marker file must fail loudly
+/// at open time rather than exhaust memory.
+pub(crate) const MAX_REPO_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read a repo file as UTF-8, refusing a symlink (which could point outside
+/// the repo) and any file over [`MAX_REPO_FILE_BYTES`]. Every read of
+/// semi-trusted repo content goes through here.
+pub(crate) fn read_repo_file(path: &Path) -> Result<String, RepoError> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(RepoError::Layout(format!(
+            "{}: symlinks are not allowed inside a migration repo",
+            path.display()
+        )));
+    }
+    if metadata.len() > MAX_REPO_FILE_BYTES {
+        return Err(RepoError::Layout(format!(
+            "{}: file is {} bytes, over the {MAX_REPO_FILE_BYTES} byte repo limit",
+            path.display(),
+            metadata.len()
+        )));
+    }
+    Ok(std::fs::read_to_string(path)?)
+}
+
 /// A parsed migration repo: config, ordered chain, and exclusions.
 #[derive(Debug)]
 pub struct MigrationRepo {

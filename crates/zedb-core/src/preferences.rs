@@ -122,19 +122,11 @@ pub fn load_preferences() -> Result<Preferences, StoreError> {
 
 pub fn save_preferences(preferences: &Preferences) -> Result<(), StoreError> {
     let path = preferences_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| StoreError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
+    // settings.json holds saved SQL, the sync repo URL, and agent command
+    // lines; write it private to the owner.
     let data = serde_json::to_string_pretty(preferences).expect("serializable");
-    let temporary = path.with_extension("json.tmp");
-    std::fs::write(&temporary, data).map_err(|source| StoreError::Io {
-        path: temporary.clone(),
-        source,
-    })?;
-    std::fs::rename(&temporary, &path).map_err(|source| StoreError::Io { path, source })
+    crate::store::write_private_atomic(&path, data.as_bytes())
+        .map_err(|source| StoreError::Io { path, source })
 }
 
 #[cfg(test)]

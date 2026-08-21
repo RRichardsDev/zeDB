@@ -30,7 +30,7 @@ impl Exclusions {
         if !path.is_file() {
             return Ok(Self::default());
         }
-        let text = std::fs::read_to_string(path)?;
+        let text = super::read_repo_file(path)?;
         toml::from_str(&text).map_err(|error| RepoError::Config {
             path: path.to_path_buf(),
             message: error.to_string(),

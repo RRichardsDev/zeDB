@@ -33,12 +33,72 @@ pub struct Payload {
 pub fn sanitized_preferences(preferences: &Preferences) -> Preferences {
     let mut preferences = preferences.clone();
     preferences.fleet_repo = None;
+    // Per-connection checkout paths and the rendered cluster value are
+    // machine-local like fleet_repo: they name paths and DDL substitutions
+    // that only make sense on the machine that set them.
+    preferences.fleet_repos.clear();
+    preferences.fleet_cluster = None;
     preferences.settings_sync_url = None;
     preferences.settings_sync_repo = None;
     preferences.custom_agents.clear();
     preferences.agent_always_allow.clear();
     preferences.last_agent = None;
     preferences
+}
+
+/// Whether an endpoint is one zeDB is willing to accept from a synced
+/// payload: an `http(s)` URL. A synced connection that names anything else
+/// (a file, an ssh command, a `-`-leading option) is dropped rather than
+/// connected to.
+fn is_syncable_endpoint(endpoint: &str) -> bool {
+    let endpoint = endpoint.trim();
+    (endpoint.starts_with("http://") || endpoint.starts_with("https://"))
+        && endpoint.len() > "https://".len()
+}
+
+/// Merge a pulled connection list into the local one, secure by default.
+///
+/// A connection's name is its Keychain key, so a pulled payload must never
+/// repoint or weaken an existing connection: for a name already present
+/// locally, the endpoints, `read_only`, `tier`, and Cloud provenance stay
+/// exactly as they are on this machine (only a local edit changes them).
+/// New connections are accepted only when every endpoint is a plain
+/// `http(s)` URL, and duplicate names in the payload collapse to the first.
+pub fn merge_synced_connections(
+    local: &[ConnectionConfig],
+    pulled: &[ConnectionConfig],
+) -> Vec<ConnectionConfig> {
+    use std::collections::HashSet;
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut merged = Vec::new();
+    for incoming in pulled {
+        if incoming.name.is_empty() || !seen.insert(incoming.name.as_str()) {
+            continue;
+        }
+        match local.iter().find(|existing| existing.name == incoming.name) {
+            Some(existing) => {
+                // Keep the credential-routing and safety fields local; take
+                // only cosmetic fields (user, database, driver) from sync.
+                let mut connection = incoming.clone();
+                connection.nodes = existing.nodes.clone();
+                connection.read_only = existing.read_only;
+                connection.tier = existing.tier;
+                connection.cloud = existing.cloud.clone();
+                merged.push(connection);
+            }
+            None => {
+                if incoming
+                    .nodes
+                    .iter()
+                    .all(|node| is_syncable_endpoint(&node.endpoint))
+                    && !incoming.nodes.is_empty()
+                {
+                    merged.push(incoming.clone());
+                }
+            }
+        }
+    }
+    merged
 }
 
 pub fn build_payload(
@@ -76,8 +136,25 @@ pub fn payload_hash(payload: &Payload) -> String {
     content_hash(&payload.preferences, &payload.connections)
 }
 
+/// Largest settings payload zeDB will read from a sync repo. The payload is
+/// remote input (a compromised account can push anything); an outsized file
+/// must fail loudly, not be slurped into memory on every tick.
+const MAX_PAYLOAD_BYTES: u64 = 5 * 1024 * 1024;
+
 pub fn read_payload(root: &Path) -> Result<Option<Payload>, String> {
     let path = root.join(PAYLOAD_FILE);
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.len() > MAX_PAYLOAD_BYTES => {
+            return Err(format!(
+                "{} is {} bytes, over the {MAX_PAYLOAD_BYTES} byte sync limit",
+                path.display(),
+                metadata.len()
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("could not read {}: {error}", path.display())),
+    }
     let data = match std::fs::read_to_string(&path) {
         Ok(data) => data,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -91,9 +168,7 @@ pub fn read_payload(root: &Path) -> Result<Option<Payload>, String> {
 pub fn write_payload(root: &Path, payload: &Payload) -> Result<(), String> {
     let path = root.join(PAYLOAD_FILE);
     let data = serde_json::to_string_pretty(payload).expect("serializable");
-    let temporary = path.with_extension("json.tmp");
-    std::fs::write(&temporary, data)
-        .and_then(|()| std::fs::rename(&temporary, &path))
+    crate::store::write_private_atomic(&path, data.as_bytes())
         .map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
@@ -126,13 +201,8 @@ pub fn load_state() -> SyncState {
 
 pub fn save_state(state: &SyncState) {
     let Some(path) = state_path() else { return };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(
-        path,
-        serde_json::to_string_pretty(state).expect("serializable"),
-    );
+    let data = serde_json::to_string_pretty(state).expect("serializable");
+    let _ = crate::store::write_private_atomic(&path, data.as_bytes());
 }
 
 /// What a sync tick should do, decided from the three hashes.
@@ -272,6 +342,8 @@ pub fn reconcile(
 pub fn apply_preferences(local: &Preferences, pulled: &Preferences) -> Preferences {
     let mut merged = pulled.clone();
     merged.fleet_repo = local.fleet_repo.clone();
+    merged.fleet_repos = local.fleet_repos.clone();
+    merged.fleet_cluster = local.fleet_cluster.clone();
     merged.settings_sync_url = local.settings_sync_url.clone();
     merged.settings_sync_repo = local.settings_sync_repo.clone();
     merged.custom_agents = local.custom_agents.clone();
@@ -380,6 +452,107 @@ mod tests {
         assert_eq!(reconcile("b", Some("a"), Some("a")), PushLocal);
         assert_eq!(reconcile("b", Some("c"), Some("a")), PushLocalConflict);
         assert_eq!(reconcile("b", Some("c"), None), PushLocalConflict);
+    }
+
+    #[test]
+    fn sanitize_and_apply_pin_fleet_repos_and_cluster() {
+        let mut local = Preferences {
+            fleet_cluster: Some("local-cluster".into()),
+            ..Preferences::default()
+        };
+        local
+            .fleet_repos
+            .insert("prod".into(), "/local/prod-checkout".into());
+
+        // Machine-local repo paths and the rendered cluster never leave.
+        let sanitized = sanitized_preferences(&local);
+        assert!(sanitized.fleet_repos.is_empty());
+        assert_eq!(sanitized.fleet_cluster, None);
+
+        // A pulled payload cannot set them either.
+        let mut pulled = Preferences::default();
+        pulled
+            .fleet_repos
+            .insert("prod".into(), "/attacker/path".into());
+        pulled.fleet_cluster = Some("attacker-cluster".into());
+        let merged = apply_preferences(&local, &pulled);
+        assert_eq!(
+            merged.fleet_repos.get("prod").map(String::as_str),
+            Some("/local/prod-checkout")
+        );
+        assert_eq!(merged.fleet_cluster.as_deref(), Some("local-cluster"));
+    }
+
+    #[test]
+    fn merge_preserves_local_endpoint_and_safety_for_existing_names() {
+        let local = vec![ConnectionConfig {
+            name: "prod".into(),
+            nodes: vec![ConnectionNode {
+                name: "Node 1".into(),
+                endpoint: "https://real-prod.example:8443".into(),
+                native_port: None,
+            }],
+            user: "default".into(),
+            database: None,
+            tier: EnvTier::Production,
+            read_only: true,
+            driver: Default::default(),
+            cloud: None,
+        }];
+        // A hostile payload keeps the name but repoints the endpoint,
+        // weakens read_only, and downgrades the tier.
+        let pulled = vec![ConnectionConfig {
+            name: "prod".into(),
+            nodes: vec![ConnectionNode {
+                name: "Node 1".into(),
+                endpoint: "https://attacker.example:8123".into(),
+                native_port: None,
+            }],
+            user: "default".into(),
+            database: None,
+            tier: EnvTier::Dev,
+            read_only: false,
+            driver: Default::default(),
+            cloud: None,
+        }];
+        let merged = merge_synced_connections(&local, &pulled);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(
+            merged[0].nodes[0].endpoint,
+            "https://real-prod.example:8443"
+        );
+        assert!(merged[0].read_only, "read-only must not be weakened");
+        assert_eq!(merged[0].tier, EnvTier::Production, "tier must not weaken");
+    }
+
+    #[test]
+    fn merge_dedupes_and_rejects_unsafe_new_endpoints() {
+        let local: Vec<ConnectionConfig> = Vec::new();
+        let node = |endpoint: &str| ConnectionNode {
+            name: "Node 1".into(),
+            endpoint: endpoint.into(),
+            native_port: None,
+        };
+        let conn = |name: &str, endpoint: &str| ConnectionConfig {
+            name: name.into(),
+            nodes: vec![node(endpoint)],
+            user: "default".into(),
+            database: None,
+            tier: EnvTier::Dev,
+            read_only: true,
+            driver: Default::default(),
+            cloud: None,
+        };
+        let pulled = vec![
+            conn("a", "https://ok.example:8123"),
+            conn("a", "https://second.example:8123"), // duplicate name
+            conn("evil", "file:///etc/passwd"),       // non-http endpoint
+            conn("dash", "--upload-pack=x"),          // option-like
+        ];
+        let merged = merge_synced_connections(&local, &pulled);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].name, "a");
+        assert_eq!(merged[0].nodes[0].endpoint, "https://ok.example:8123");
     }
 
     #[test]

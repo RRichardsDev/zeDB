@@ -84,6 +84,13 @@ Scope names are directory names under `current-state` and must match
 `[a-z0-9_]+`. Absolute paths, separators, parent components, uppercase letters,
 and punctuation are rejected when the repo opens.
 
+A repository is semi-trusted input (often a shared checkout), so opening one
+is bounded: symlinks are never followed (a symlinked directory under
+`migrations/` is skipped, a symlinked config or SQL file is rejected), the
+`migrations/` walk is depth-limited, and no single repo file over 16 MiB is
+read. These are safety limits, not format features; a well-formed repo never
+approaches them.
+
 - `${param}` placeholders may appear in identifier or expression position.
   Identifier-position values must match `[A-Za-z_][A-Za-z0-9_]*` at render
   time; anything else is a hard error (ClickHouse cannot parameterize

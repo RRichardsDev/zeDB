@@ -1,11 +1,109 @@
 //! Read-only git awareness for migration repos.
 //!
-//! Shells out to the user's `git`, so configuration, auth, and worktree
-//! semantics are exactly theirs. Everything here observes; nothing here
-//! mutates a repo.
+//! Shells out to the user's `git`, so auth and worktree semantics are
+//! theirs. One exception is deliberate: a migration/settings repo can be a
+//! shared checkout, and its `.git/config` can name a `core.fsmonitor` or
+//! hooks program that git would run on ordinary commands. Because zeDB runs
+//! `git status` automatically when a repo is opened or watched, every
+//! invocation here disables fsmonitor and hooks and bounds its runtime, so
+//! merely pointing zeDB at a repo cannot execute code it carries.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+/// Local git operations (status, config, commit): fast, but bounded so a
+/// wedged or malicious child cannot pin a blocking-pool thread forever.
+const GIT_LOCAL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Network operations (clone, ls-remote, push, pull) get a longer budget.
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
+/// Cap captured git output; a repo with millions of entries cannot balloon
+/// memory, and the child is killed by the timeout once its pipe backs up.
+const MAX_GIT_OUTPUT: u64 = 16 * 1024 * 1024;
+
+/// A git `Command` with the repo-local execution vectors neutralized:
+/// fsmonitor and hooks (both nameable in a shared `.git/config`) are off,
+/// and optional index locks are skipped so a read cannot fight a writer.
+fn git_command(root: Option<&Path>) -> Command {
+    let mut command = Command::new("git");
+    if let Some(root) = root {
+        command.arg("-C").arg(root);
+    }
+    command.args([
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+    ]);
+    command.env("GIT_OPTIONAL_LOCKS", "0");
+    command
+}
+
+/// Run `command` to completion within `timeout`, capturing bounded output.
+/// stdout/stderr are drained on threads so a full pipe cannot deadlock the
+/// wait, and the child is killed if it overruns.
+fn run_capture(mut command: Command, timeout: Duration) -> std::io::Result<Output> {
+    use std::io::Read as _;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let mut out_pipe = child.stdout.take().expect("stdout piped");
+    let mut err_pipe = child.stderr.take().expect("stderr piped");
+    let out_reader = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = out_pipe
+            .by_ref()
+            .take(MAX_GIT_OUTPUT)
+            .read_to_end(&mut buffer);
+        buffer
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = err_pipe
+            .by_ref()
+            .take(MAX_GIT_OUTPUT)
+            .read_to_end(&mut buffer);
+        buffer
+    });
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let stdout = out_reader.join().unwrap_or_default();
+            let stderr = err_reader.join().unwrap_or_default();
+            return Ok(Output {
+                status,
+                stdout,
+                stderr,
+            });
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = out_reader.join();
+            let _ = err_reader.join();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "git timed out",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Drop control characters (including embedded newlines and terminal escape
+/// sequences) from a git-reported branch or path before it reaches the UI
+/// or a line-based parser.
+fn strip_controls(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// Reject a URL that git would parse as an option (leading `-`), closing
+/// argument-injection like `--upload-pack=<cmd>` masquerading as a remote.
+fn is_option_like(url: &str) -> bool {
+    url.trim_start().starts_with('-')
+}
 
 /// A snapshot of a checkout's git state, from `git status --porcelain=v2`.
 ///
@@ -74,12 +172,9 @@ impl GitStatus {
 /// "nothing to show", not an error, because a migration repo does not
 /// have to be a git checkout to be opened.
 pub fn read_git_status(root: &Path) -> Option<GitStatus> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["status", "--porcelain=v2", "--branch"])
-        .output()
-        .ok()?;
+    let mut command = git_command(Some(root));
+    command.args(["status", "--porcelain=v2", "--branch"]);
+    let output = run_capture(command, GIT_LOCAL_TIMEOUT).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -89,12 +184,9 @@ pub fn read_git_status(root: &Path) -> Option<GitStatus> {
 /// Paths with uncommitted changes (staged, unstaged, or untracked),
 /// relative to the repo root. None outside a git work tree.
 pub fn changed_paths(root: &Path) -> Option<Vec<String>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["status", "--porcelain=v2"])
-        .output()
-        .ok()?;
+    let mut command = git_command(Some(root));
+    command.args(["status", "--porcelain=v2"]);
+    let output = run_capture(command, GIT_LOCAL_TIMEOUT).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -117,8 +209,10 @@ pub fn changed_paths(root: &Path) -> Option<Vec<String>> {
         } else {
             None
         };
+        // A path can carry control bytes; strip them before it reaches the
+        // commit panel or any other display.
         if let Some(path) = path {
-            paths.push(path);
+            paths.push(strip_controls(&path));
         }
     }
     paths.sort();
@@ -146,11 +240,21 @@ fn auth_envs(url: &str) -> Vec<(String, String)> {
     if !url.starts_with("https://") {
         return Vec::new();
     }
-    let host = url
+    // Extract the real host from the authority, not the first `@`-or-`/`
+    // token: for `https://github.com@evil.com/x.git` the authority is
+    // `github.com@evil.com` and git connects to `evil.com` (the part after
+    // the userinfo). Splitting on the first delimiter would read the host
+    // as `github.com` and hand the broker's github.com token to evil.com.
+    let authority = url
         .trim_start_matches("https://")
-        .split(['/', '@'])
+        .split('/')
         .next()
         .unwrap_or_default();
+    let host_port = authority.rsplit('@').next().unwrap_or_default();
+    let host = host_port
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(host_port);
     if host != "github.com" && host != "gitlab.com" {
         return Vec::new();
     }
@@ -164,11 +268,9 @@ fn auth_envs(url: &str) -> Vec<(String, String)> {
 
 /// The auth envs for a checkout, from its origin URL.
 fn auth_envs_for_root(root: &Path) -> Vec<(String, String)> {
-    let url = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["config", "--get", "remote.origin.url"])
-        .output()
+    let mut command = git_command(Some(root));
+    command.args(["config", "--get", "remote.origin.url"]);
+    let url = run_capture(command, GIT_LOCAL_TIMEOUT)
         .ok()
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
         .unwrap_or_default();
@@ -180,8 +282,7 @@ fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git_env(root: &Path, args: &[&str], envs: &[(String, String)]) -> Result<String, String> {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(root);
+    let mut command = git_command(Some(root));
     if !envs.is_empty() {
         // Configured credential helpers (macOS ships osxkeychain)
         // outrank GIT_ASKPASS and answer with whatever account they
@@ -189,13 +290,11 @@ fn run_git_env(root: &Path, args: &[&str], envs: &[(String, String)]) -> Result<
         // only voice for this run.
         command.args(["-c", "credential.helper="]);
     }
-    let output = command
-        .args(args)
-        .envs(
-            envs.iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
-        .output()
+    command.args(args).envs(
+        envs.iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+    let output = run_capture(command, GIT_NETWORK_TIMEOUT)
         .map_err(|error| format!("could not run git: {error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -237,11 +336,17 @@ pub fn push(root: &Path) -> Result<String, String> {
 /// auth (ssh keys, credential helpers). Never prompts: batch-mode ssh
 /// and disabled terminal prompts make an auth wall read as "no".
 pub fn remote_exists(url: &str) -> bool {
-    Command::new("git")
-        .args(["ls-remote", "--exit-code", url, "HEAD"])
+    if is_option_like(url) {
+        return false;
+    }
+    let mut command = git_command(None);
+    // `--` before the URL so a value like `--upload-pack=<cmd>` cannot be
+    // parsed as an ls-remote option and run a command.
+    command
+        .args(["ls-remote", "--exit-code", "--", url, "HEAD"])
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes -oConnectTimeout=5")
-        .output()
+        .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes -oConnectTimeout=5");
+    run_capture(command, GIT_NETWORK_TIMEOUT)
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
@@ -359,6 +464,9 @@ pub fn managed_repos_dir() -> Option<std::path::PathBuf> {
 /// auth: ssh agent, credential helper). Git's message comes back
 /// verbatim on failure.
 pub fn clone_repo(url: &str, dest: &Path) -> Result<(), String> {
+    if is_option_like(url) {
+        return Err("refusing a remote URL that begins with '-'".into());
+    }
     if dest.exists() {
         return Err(format!("{} already exists", dest.display()));
     }
@@ -418,20 +526,18 @@ fn clone_once(url: &str, dest: &Path) -> Result<(), String> {
         envs.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(),
         AUTH_BROKER.get(),
     ));
-    let mut command = Command::new("git");
+    let mut command = git_command(None);
     if !envs.is_empty() {
         // See run_git_env: the broker must outrank osxkeychain.
         command.args(["-c", "credential.helper="]);
     }
-    let output = command
-        .arg("clone")
-        .arg(url)
-        .arg(dest)
-        .envs(
-            envs.iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
-        .output()
+    // `--` before the URL so a `-`-leading value cannot become a clone
+    // option such as `--upload-pack`.
+    command.arg("clone").arg("--").arg(url).arg(dest).envs(
+        envs.iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    );
+    let output = run_capture(command, GIT_NETWORK_TIMEOUT)
         .map_err(|error| format!("could not run git: {error}"))?;
     git_debug(&format!(
         "clone_once status={:?} stderr={}",
@@ -457,7 +563,9 @@ fn parse_porcelain_v2(text: &str) -> GitStatus {
     for line in text.lines() {
         if let Some(head) = line.strip_prefix("# branch.head ") {
             if head != "(detached)" {
-                branch = Some(head.to_string());
+                // A branch name can carry control bytes; strip them before
+                // it reaches a status chip or deploy warning.
+                branch = Some(strip_controls(head));
             }
         } else if let Some(ab) = line.strip_prefix("# branch.ab ") {
             let mut parts = ab.split_whitespace();
@@ -501,6 +609,44 @@ mod tests_auth {
             .iter()
             .any(|(key, value)| key == "ZEDB_GIT_HOST" && value == "gitlab.com"));
         assert!(envs.iter().any(|(key, _)| key == "GIT_ASKPASS"));
+    }
+
+    #[test]
+    fn broker_refuses_userinfo_host_spoofing() {
+        set_auth_broker(Some(std::path::PathBuf::from("/usr/local/bin/zedb")));
+        // git connects to evil.com here (github.com is userinfo); the
+        // broker token must not be offered to it.
+        assert_eq!(auth_envs("https://github.com@evil.com/x.git"), Vec::new());
+        assert_eq!(
+            auth_envs("https://github.com:pass@evil.com/x.git"),
+            Vec::new()
+        );
+        // A port on the real host is fine and still matches.
+        let envs = auth_envs("https://github.com:443/me/repo.git");
+        assert!(envs
+            .iter()
+            .any(|(key, value)| key == "ZEDB_GIT_HOST" && value == "github.com"));
+    }
+}
+
+#[cfg(test)]
+mod tests_injection {
+    use super::*;
+
+    #[test]
+    fn option_like_urls_are_refused() {
+        assert!(is_option_like("--upload-pack=touch /tmp/x"));
+        assert!(is_option_like("  -c"));
+        assert!(!is_option_like("https://github.com/a/b.git"));
+        assert!(!is_option_like("git@github.com:a/b.git"));
+        assert!(!remote_exists("--upload-pack=touch /tmp/pwned"));
+        assert!(clone_repo("--upload-pack=x", std::path::Path::new("/tmp/zedb-none")).is_err());
+    }
+
+    #[test]
+    fn control_characters_are_stripped_from_git_reported_text() {
+        assert_eq!(strip_controls("main\u{1b}[2J"), "main[2J");
+        assert_eq!(strip_controls("a\nb\tc"), "abc");
     }
 }
 

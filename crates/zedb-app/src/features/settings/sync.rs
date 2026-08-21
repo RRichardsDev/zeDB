@@ -162,7 +162,11 @@ impl Workspace {
             self.settings_sync.status = Some((format!("could not save: {error}"), true));
             return;
         }
-        self.connection.connections = payload.connections.clone();
+        // Secure by default: a pulled payload may add connections but never
+        // repoint or weaken one that already exists locally (its name is the
+        // Keychain key, so an endpoint swap would exfiltrate its password).
+        self.connection.connections =
+            sync::merge_synced_connections(&self.connection.connections, &payload.connections);
         if let Err(error) = zedb_core::save_connections(&self.connection.connections) {
             self.settings_sync.status = Some((format!("could not save: {error}"), true));
             return;

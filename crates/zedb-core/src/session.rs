@@ -44,19 +44,11 @@ pub fn save_session(session: &SavedSession) -> Result<(), StoreError> {
 }
 
 fn save_at(session: &SavedSession, path: PathBuf) -> Result<(), StoreError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| StoreError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
+    // Tabs carry working SQL, which routinely embeds credentials; the file
+    // is written private to the owner.
     let data = serde_json::to_string(session).expect("serializable");
-    let temporary = path.with_extension("json.tmp");
-    std::fs::write(&temporary, data).map_err(|source| StoreError::Io {
-        path: temporary.clone(),
-        source,
-    })?;
-    std::fs::rename(&temporary, &path).map_err(|source| StoreError::Io { path, source })
+    crate::store::write_private_atomic(&path, data.as_bytes())
+        .map_err(|source| StoreError::Io { path, source })
 }
 
 /// Read and delete the saved session. Returns `None` when there is nothing
@@ -66,6 +58,9 @@ pub fn take_session() -> Option<SavedSession> {
 }
 
 fn take_at(path: PathBuf) -> Option<SavedSession> {
+    // A crash between the temp write and the rename can leave a stale
+    // *.tmp behind; clear it so it cannot outlive the session it held.
+    let _ = std::fs::remove_file(path.with_extension("tmp"));
     let data = std::fs::read_to_string(&path).ok()?;
     let _ = std::fs::remove_file(&path);
     serde_json::from_str(&data).ok()
