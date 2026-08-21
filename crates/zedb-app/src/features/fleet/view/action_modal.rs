@@ -298,6 +298,7 @@ impl Workspace {
                 .child(
                     div()
                         .id("fleet-modal-cancel")
+                        .debug_selector(|| "fleet-modal-cancel".into())
                         .px_3()
                         .py_1()
                         .rounded(px(3.))
@@ -318,6 +319,7 @@ impl Workspace {
                     footer.child(
                         div()
                             .id("fleet-modal-confirm")
+                            .debug_selector(|| "fleet-modal-confirm".into())
                             .px_3()
                             .py_1()
                             .rounded(px(3.))

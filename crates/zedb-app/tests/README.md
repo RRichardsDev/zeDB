@@ -23,3 +23,13 @@ included) without a signed build or a display. `Workspace::new_for_test`
 builds the state without `new`'s launch side effects, so tests never touch
 preferences or session files, the Keychain, or the network. They run with
 plain `cargo test -p zedb-app`.
+
+Mouse-driven tests find their targets through `.debug_selector(...)` tags
+on view elements (a no-op in release builds) and the harness's
+`bounds`/`click` helpers, which force a fresh frame and click through the
+window's real hitboxes. Assert that an action *started* (running or
+already carrying a result), not that it is still running: fixture
+endpoints fail in microseconds on the real tokio runtime, so
+`action_running` alone races the completion. The remaining untestable
+seams (Cloud/GitHub HTTP, Keychain, simulated time, pixels) are the
+Phase 15 backlog (`docs/wip/PHASE-15.md`).

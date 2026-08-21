@@ -222,3 +222,32 @@ pub(crate) fn wait_for<T>(
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
+
+/// The rendered bounds of the element tagged `selector` (via
+/// `.debug_selector(...)` in the view code, a no-op in release
+/// builds). Drains pending work first so the lookup sees the current
+/// state; panics when nothing painted under that tag.
+pub(crate) fn bounds(
+    cx: &mut VisualTestContext,
+    selector: &'static str,
+) -> gpui::Bounds<gpui::Pixels> {
+    // Force a fresh frame: the deterministic executor's task shuffling
+    // means a plain run_until_parked may or may not have repainted
+    // since the last state change.
+    cx.refresh().expect("schedule redraw");
+    cx.run_until_parked();
+    cx.debug_bounds(selector)
+        .unwrap_or_else(|| panic!("no rendered element tagged {selector:?}"))
+}
+
+/// A real click at the center of the element tagged `selector`: mouse
+/// down and up through the window's hitboxes, exactly as a user click
+/// dispatches.
+pub(crate) fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    let center = bounds(cx, selector).center();
+    // Hover first, as a real pointer would; a bare down/up at a point
+    // the window has already seen a click at can be swallowed by
+    // element state from the earlier press.
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_click(center, gpui::Modifiers::default());
+}

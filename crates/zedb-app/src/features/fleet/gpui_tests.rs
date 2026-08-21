@@ -8,6 +8,14 @@ use gpui::{Focusable as _, TestAppContext};
 use super::view::{FleetAction, FleetRow};
 use crate::test_harness;
 
+/// The execute path was actually entered: still running, or already
+/// finished with a result. Actions against the harness's dead endpoint
+/// fail in microseconds on a real tokio thread, so `action_running`
+/// alone races the completion callback.
+fn action_started(workspace: &crate::Workspace) -> bool {
+    workspace.fleet.action_running || workspace.fleet.action_result.is_some()
+}
+
 #[gpui::test]
 fn workspace_builds_and_renders_headlessly(cx: &mut TestAppContext) {
     let (workspace, cx) = test_harness::workspace(cx);
@@ -94,7 +102,7 @@ fn production_confirmation_gates_on_typed_phrase(cx: &mut TestAppContext) {
     workspace.update(cx, |workspace, cx| {
         workspace.fleet_execute_action(cx);
         assert!(
-            workspace.fleet.action_running,
+            action_started(workspace),
             "the matching phrase lets the action start (notice: {:?})",
             workspace.notice
         );
@@ -136,7 +144,7 @@ fn structural_rollback_requires_acknowledgement(cx: &mut TestAppContext) {
 
         workspace.fleet.ack_structural = true;
         workspace.fleet_execute_action(cx);
-        assert!(workspace.fleet.action_running);
+        assert!(action_started(workspace));
     });
 }
 
@@ -175,7 +183,54 @@ fn missing_rollback_demands_the_irreversible_phrase(cx: &mut TestAppContext) {
             .clone()
             .update(cx, |input, cx| input.set_text("irreversible", cx));
         workspace.fleet_execute_action(cx);
-        assert!(workspace.fleet.action_running);
+        assert!(action_started(workspace));
+    });
+}
+
+/// Mouse-driven, through rendered bounds: Cancel clicks away a
+/// pending action; the Confirm button is inert while the ladder is
+/// unsatisfied (its click handler is only attached when confirmable)
+/// and a real click runs the action once the phrase matches.
+#[gpui::test]
+fn modal_buttons_click_through_their_rendered_bounds(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    let (_repo_dir, repo) = test_harness::migration_repo();
+
+    let request = |workspace: &mut crate::Workspace, cx: &mut gpui::Context<crate::Workspace>| {
+        workspace.fleet_request_action(FleetAction::UpgradeDatabase("analytics".into()), cx);
+    };
+    workspace.update(cx, |workspace, cx| {
+        // No saved connection: production tier, phrase required.
+        workspace.connection.connected = Some(test_harness::connected_cluster("prod"));
+        workspace.fleet.repo = Some(repo);
+        workspace.fleet.write_unlocked = true;
+        workspace.show_fleet = true;
+        request(workspace, cx);
+    });
+
+    // Cancel through its rendered bounds clears the pending action.
+    test_harness::click(cx, "fleet-modal-cancel");
+    workspace.update(cx, |workspace, cx| {
+        assert!(workspace.fleet.pending_action.is_none());
+        request(workspace, cx);
+    });
+
+    // Unsatisfied ladder: the click lands on Confirm and does nothing.
+    test_harness::click(cx, "fleet-modal-confirm");
+    workspace.update(cx, |workspace, cx| {
+        assert!(!action_started(workspace));
+        assert!(workspace.fleet.pending_action.is_some());
+        workspace
+            .fleet
+            .confirm_input
+            .clone()
+            .update(cx, |input, cx| input.set_text("analytics", cx));
+    });
+
+    // With the phrase typed, the same click starts the action.
+    test_harness::click(cx, "fleet-modal-confirm");
+    workspace.update(cx, |workspace, _| {
+        assert!(action_started(workspace));
     });
 }
 

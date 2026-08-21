@@ -1,3 +1,22 @@
+## 2026-08-21: mouse-driven window tests
+
+- Window tests can now click real elements: view code tags targets with
+  gpui's `.debug_selector(...)` (a no-op in release builds), and the
+  harness's `bounds`/`click` helpers force a fresh frame, hover, and
+  click through the window's actual hitboxes. First tagged elements:
+  the fleet modal's Cancel and Confirm buttons.
+- Proof test: Cancel clicks away a pending action; a click on the
+  unsatisfied Confirm (whose handler is only attached when confirmable)
+  does nothing; after typing the phrase the same click executes.
+- Two determinism lessons folded into the harness and README: force a
+  redraw before reading bounds (the test executor's task shuffling
+  means run_until_parked alone may not have repainted), and assert
+  that an action started rather than is still running (dead-endpoint
+  runners fail in microseconds on the real tokio runtime).
+- The four remaining seams (Cloud/GitHub HTTP fakes, a Keychain seam,
+  simulated time, pixels) are now the Phase 15 backlog
+  (docs/wip/PHASE-15.md).
+
 ## 2026-08-21: end-to-end tier on a real ClickHouse
 
 - zedb-ch grew a `test-support` feature: `any_cached_binary` (the
