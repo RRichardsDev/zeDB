@@ -9,6 +9,7 @@ impl Workspace {
         self.schema.databases.clear();
         self.schema.error = None;
         self.schema.selected_object = None;
+        self.schema.pending_apply = None;
     }
 
     pub(crate) fn load_schema_databases(&mut self, cx: &mut Context<Self>) {

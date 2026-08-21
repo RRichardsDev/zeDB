@@ -10,6 +10,7 @@
 //! the new bundle is signed by our team before trusting it, and swaps it into
 //! place; the app keeps running from the old inode until relaunch.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -20,6 +21,9 @@ const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Updates must be signed by this Apple team; anything else is rejected even
 /// if its signature is otherwise valid.
 const TEAM_ID: &str = "M8Y82YQ4GF";
+const BUNDLE_ID: &str = "dev.zedb.app";
+const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct UpdateInfo {
@@ -30,7 +34,6 @@ pub struct UpdateInfo {
 
 #[derive(Clone, Debug)]
 pub struct AssetInfo {
-    pub name: String,
     pub url: String,
 }
 
@@ -81,7 +84,6 @@ async fn check_at(url: &str) -> Option<UpdateInfo> {
             .into_iter()
             .find(|asset| asset.name.ends_with(".zip"))
             .map(|asset| AssetInfo {
-                name: asset.name,
                 url: asset.browser_download_url,
             }),
     })
@@ -116,29 +118,47 @@ pub async fn download_and_install(update: &UpdateInfo) -> Result<(), String> {
     if let Ok(token) = std::env::var("ZEDB_GITHUB_TOKEN") {
         request = request.bearer_auth(token);
     }
-    let response = request
+    let mut response = request
         .send()
         .await
         .and_then(|response| response.error_for_status())
         .map_err(|error| format!("download failed: {error}"))?;
-    let bytes = response
-        .bytes()
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_ARCHIVE_BYTES)
+    {
+        return Err("update archive is larger than the 512 MiB limit".into());
+    }
+    let work = tempfile::Builder::new()
+        .prefix("zedb-update-")
+        .tempdir()
+        .map_err(|error| error.to_string())?;
+    let archive = work.path().join("update.zip");
+    let mut archive_file = std::fs::File::create(&archive).map_err(|error| error.to_string())?;
+    let mut downloaded = 0u64;
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|error| format!("download failed: {error}"))?;
-
-    let work = std::env::temp_dir().join(format!(
-        "zedb-update-{}-{}",
-        update.version,
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&work).map_err(|error| error.to_string())?;
-    let archive = work.join(&asset.name);
-    std::fs::write(&archive, &bytes).map_err(|error| error.to_string())?;
+        .map_err(|error| format!("download failed: {error}"))?
+    {
+        downloaded = downloaded
+            .checked_add(chunk.len() as u64)
+            .ok_or("update archive size overflow")?;
+        if downloaded > MAX_ARCHIVE_BYTES {
+            return Err("update archive is larger than the 512 MiB limit".into());
+        }
+        archive_file
+            .write_all(&chunk)
+            .map_err(|error| format!("could not write update archive: {error}"))?;
+    }
+    archive_file
+        .sync_all()
+        .map_err(|error| format!("could not finish update archive: {error}"))?;
+    drop(archive_file);
 
     let result = tokio::task::spawn_blocking(move || {
-        let result = install_from_archive(&archive, &bundle);
-        let _ = std::fs::remove_dir_all(&work);
-        result
+        let _work = work;
+        install_from_archive(&archive, &bundle)
     })
     .await
     .map_err(|error| format!("install task failed: {error}"))?;
@@ -148,43 +168,62 @@ pub async fn download_and_install(update: &UpdateInfo) -> Result<(), String> {
 /// Extract `archive` next to it, verify the contained bundle's signature and
 /// team, and swap it in over `bundle`. Blocking; run off the UI thread.
 fn install_from_archive(archive: &Path, bundle: &Path) -> Result<(), String> {
+    let summary = run("/usr/bin/zipinfo", &["-t".as_ref(), archive.as_os_str()])?;
+    let expanded = zipinfo_uncompressed_bytes(&summary)
+        .ok_or("could not determine update archive's expanded size")?;
+    if expanded > MAX_EXPANDED_BYTES {
+        return Err("update archive expands beyond the 2 GiB limit".into());
+    }
     let extract_dir = archive
         .parent()
         .ok_or("archive has no parent directory")?
         .join("extracted");
     run(
-        "ditto",
+        "/usr/bin/ditto",
         &["-xk".as_ref(), archive.as_os_str(), extract_dir.as_os_str()],
     )?;
 
-    let new_bundle = std::fs::read_dir(&extract_dir)
+    let bundles: Vec<PathBuf> = std::fs::read_dir(&extract_dir)
         .map_err(|error| error.to_string())?
         .filter_map(|entry| Some(entry.ok()?.path()))
-        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
-        .ok_or("archive does not contain an .app bundle")?;
+        .filter(|path| path.extension().is_some_and(|extension| extension == "app"))
+        .collect();
+    let [new_bundle] = bundles.as_slice() else {
+        return Err("archive must contain exactly one top-level .app bundle".into());
+    };
 
+    let requirement = format!(
+        "-R=identifier \"{BUNDLE_ID}\" and anchor apple generic and certificate leaf[subject.OU] = \"{TEAM_ID}\""
+    );
     run(
-        "codesign",
+        "/usr/bin/codesign",
         &[
             "--verify".as_ref(),
             "--strict".as_ref(),
+            "--deep".as_ref(),
+            requirement.as_ref(),
             new_bundle.as_os_str(),
         ],
     )?;
-    let signing_info = run("codesign", &["-dvv".as_ref(), new_bundle.as_os_str()])?;
-    if !signing_info.contains(&format!("TeamIdentifier={TEAM_ID}")) {
-        return Err(format!("update is not signed by team {TEAM_ID}; refusing"));
-    }
 
     let backup = bundle.with_extension("app.previous");
     let _ = std::fs::remove_dir_all(&backup);
-    run("mv", &[bundle.as_os_str(), backup.as_os_str()])?;
-    if let Err(error) = run("mv", &[new_bundle.as_os_str(), bundle.as_os_str()]) {
-        let _ = run("mv", &[backup.as_os_str(), bundle.as_os_str()]);
+    run("/bin/mv", &[bundle.as_os_str(), backup.as_os_str()])?;
+    if let Err(error) = run("/bin/mv", &[new_bundle.as_os_str(), bundle.as_os_str()]) {
+        let _ = run("/bin/mv", &[backup.as_os_str(), bundle.as_os_str()]);
         return Err(error);
     }
     let _ = std::fs::remove_dir_all(&backup);
     Ok(())
+}
+
+fn zipinfo_uncompressed_bytes(summary: &str) -> Option<u64> {
+    let words: Vec<&str> = summary.split_whitespace().collect();
+    words.windows(3).find_map(|window| {
+        (window[1] == "bytes" && window[2].starts_with("uncompressed"))
+            .then(|| window[0].trim_matches(',').parse().ok())
+            .flatten()
+    })
 }
 
 fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<String, String> {
@@ -224,7 +263,7 @@ fn parse(version: &str) -> Option<(u64, u64, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_at, install_from_archive, parse};
+    use super::{check_at, install_from_archive, parse, zipinfo_uncompressed_bytes};
 
     fn serve_release(tag: &str) -> String {
         use std::io::{Read, Write};
@@ -256,6 +295,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_zipinfo_expanded_size() {
+        assert_eq!(
+            zipinfo_uncompressed_bytes(
+                "18 files, 1234567 bytes uncompressed, 456789 bytes compressed: 63.0%"
+            ),
+            Some(1_234_567)
+        );
+        assert_eq!(zipinfo_uncompressed_bytes("not a zip summary"), None);
+    }
+
+    #[test]
     fn ordering_matches_semver_for_release_triples() {
         assert!(parse("0.2.0") > parse("0.1.9"));
         assert!(parse("1.0.0") > parse("0.99.99"));
@@ -270,7 +320,6 @@ mod tests {
         assert_eq!(update.version, "99.0.0");
         assert_eq!(update.url, "https://example.test/v99.0.0");
         let asset = update.asset.expect("zip asset expected");
-        assert_eq!(asset.name, "zeDB-v99.0.0-macos.zip");
         assert_eq!(asset.url, "https://example.test/v99.0.0.zip");
     }
 

@@ -4,17 +4,28 @@ use std::time::Instant;
 use gpui::{prelude::*, Context};
 use zedb_ch::runner::{Runner, RunnerOptions, Targets};
 
-use super::view::FleetAction;
+use super::view::{
+    fleet_confirmation_valid, fleet_context_matches, FleetAction, FleetConfirmation,
+    PendingFleetAction,
+};
 use crate::components::text_input::TextInput;
 use crate::{rt, Workspace};
 
 impl Workspace {
     pub(crate) fn fleet_tier(&self) -> zedb_core::EnvTier {
         self.connection
-            .selected
-            .and_then(|index| self.connection.connections.get(index))
+            .connected
+            .as_ref()
+            .and_then(|connected| {
+                self.connection
+                    .connections
+                    .iter()
+                    .find(|connection| connection.name == connected.name)
+            })
             .map(|connection| connection.tier)
-            .unwrap_or(zedb_core::EnvTier::Dev)
+            // If the connected identity is no longer present in saved
+            // settings, fail closed into the strongest confirmation tier.
+            .unwrap_or(zedb_core::EnvTier::Production)
     }
 
     /// The rollback class the ladder must gate on for an action, when any.
@@ -38,7 +49,21 @@ impl Workspace {
             cx.notify();
             return;
         }
-        self.fleet.pending_action = Some(action);
+        let Some(connected) = self.connection.connected.as_ref() else {
+            self.notice = Some("Connect to a cluster before confirming a mutation".into());
+            cx.notify();
+            return;
+        };
+        let Some(repo) = self.fleet.repo.as_ref() else {
+            self.notice = Some("Open a migration repository first".into());
+            cx.notify();
+            return;
+        };
+        self.fleet.pending_action = Some(PendingFleetAction {
+            action,
+            connection: connected.name.clone(),
+            repo_root: repo.root.clone(),
+        });
         self.fleet.ack_structural = false;
         self.fleet.action_progress.clear();
         self.fleet.action_running = false;
@@ -51,7 +76,7 @@ impl Workspace {
     }
 
     pub(crate) fn fleet_execute_action(&mut self, cx: &mut Context<Self>) {
-        let Some(action) = self.fleet.pending_action.clone() else {
+        let Some(pending) = self.fleet.pending_action.clone() else {
             return;
         };
         let Some(repo) = self.fleet.repo.clone() else {
@@ -60,6 +85,47 @@ impl Workspace {
         let Some(connected) = &self.connection.connected else {
             return;
         };
+        let class = self.action_rollback_class(&pending.action);
+        let structural = matches!(
+            class,
+            Some(Some(zedb_core::repo::RollbackClass::Structural))
+        );
+        let irreversible = matches!(
+            class,
+            Some(None) | Some(Some(zedb_core::repo::RollbackClass::Irreversible))
+        );
+        let required_phrase = pending
+            .action
+            .required_phrase(self.fleet_tier(), irreversible);
+        let typed_phrase = self.fleet.confirm_input.read(cx).text();
+        let confirmation = FleetConfirmation {
+            pending: &pending,
+            current_connection: Some(connected.name.as_str()),
+            current_repo: Some(repo.root.as_path()),
+            write_unlocked: self.fleet.write_unlocked,
+            running: self.fleet.action_running,
+            completed: self.fleet.action_result.is_some(),
+            structural,
+            acknowledged: self.fleet.ack_structural,
+            required_phrase: required_phrase.as_deref(),
+            typed_phrase: &typed_phrase,
+        };
+        if !fleet_context_matches(&confirmation) {
+            self.fleet.pending_action = None;
+            self.notice = Some(
+                "The connection or repository changed; review and confirm the action again".into(),
+            );
+            self.notice_warning = true;
+            cx.notify();
+            return;
+        }
+        if !fleet_confirmation_valid(&confirmation) {
+            self.notice = Some("Complete the confirmation before running this action".into());
+            self.notice_warning = true;
+            cx.notify();
+            return;
+        }
+        let action = pending.action;
         // The ${cluster} for fleet operations comes from the top
         // toolbar's node/cluster selector (apply_cluster), the single
         // cluster choice in the app. On Cloud it is forced off: the

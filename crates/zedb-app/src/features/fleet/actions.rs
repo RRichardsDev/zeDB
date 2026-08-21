@@ -145,7 +145,7 @@ impl Workspace {
             cx.notify();
             return;
         };
-        let dest = base.join(zedb_core::git::clone_directory_name(&url));
+        let dest = base.join(crate::managed_checkout::directory_name(&url));
         if dest.join(".git").exists() {
             if !zedb_core::git::has_upstream(&dest) {
                 // Nothing upstream to pull (the remote is still empty);

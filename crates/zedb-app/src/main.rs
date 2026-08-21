@@ -25,6 +25,8 @@ mod fleet;
 mod github;
 #[path = "features/query/components/grid/mod.rs"]
 mod grid_spike;
+#[path = "platform/managed_checkout.rs"]
+mod managed_checkout;
 #[path = "features/operations/mod.rs"]
 mod ops;
 #[path = "features/query/advisor.rs"]
@@ -104,8 +106,8 @@ use features::query::{
     TailWatch,
 };
 use features::schema::{
-    database_nodes_from_cache, schema_object_from_cache, DatabaseNode, ObjectInspectorTab,
-    SchemaState, SelectedSchemaObject,
+    apply_in_place_allowed, database_nodes_from_cache, schema_object_from_cache, DatabaseNode,
+    ObjectInspectorTab, PendingApply, SchemaState, SelectedSchemaObject,
 };
 use fleet::FleetState;
 use grid_spike::GridSpike;

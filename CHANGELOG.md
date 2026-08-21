@@ -9,6 +9,13 @@ GitHub release notes.
 
 ## Unreleased
 
+- Desktop trust boundaries now fail closed: updates require the exact Apple
+  bundle identity and signing team with bounded archives, managed clones cannot
+  collide by repository basename, mutation confirmations are tied to the
+  reviewed connection and repository or table, Cloud password rotation cannot
+  escape its form, codec trials never pre-drop colliding tables, commit staging
+  uses exact repo paths, and export cancellation removes only its own partial
+  file.
 - Settings sync is secure by default: a pulled payload may add connections but
   never deletes, reorders, or changes an existing local connection (the name is
   its Keychain key). New synced connections are validated, read-only,

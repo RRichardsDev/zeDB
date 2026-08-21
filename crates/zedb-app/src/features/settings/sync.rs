@@ -243,7 +243,7 @@ impl Workspace {
         let Some(dest) = dirs::data_local_dir().map(|dir| {
             dir.join("zedb")
                 .join("settings-sync")
-                .join(git::clone_directory_name(&url))
+                .join(crate::managed_checkout::directory_name(&url))
         }) else {
             self.flash_warning("Could not determine a local data directory", cx);
             return;

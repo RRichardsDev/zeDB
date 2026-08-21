@@ -17,8 +17,10 @@ use crate::Workspace;
 
 /// Checkout paths a migration repo owns; only these are ever staged.
 fn repo_owned(path: &str) -> bool {
-    path.starts_with("migrations")
-        || path.starts_with("current-state")
+    path == "migrations"
+        || path.starts_with("migrations/")
+        || path == "current-state"
+        || path.starts_with("current-state/")
         || path == "zedb.toml"
         || path == "exclusions.toml"
 }
@@ -347,5 +349,19 @@ impl Workspace {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::repo_owned;
+
+    #[test]
+    fn stages_only_exact_repo_owned_paths() {
+        assert!(repo_owned("migrations/2026/08/00001/up.sql"));
+        assert!(repo_owned("current-state/table.sql"));
+        assert!(repo_owned("zedb.toml"));
+        assert!(!repo_owned("migrations-secret/payload"));
+        assert!(!repo_owned("current-state-backup/table.sql"));
     }
 }

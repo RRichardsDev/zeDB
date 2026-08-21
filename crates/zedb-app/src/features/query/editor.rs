@@ -187,15 +187,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let is_prod = self.active_tier() == Some(EnvTier::Production);
-        let writable = self
-            .connection
-            .connected
-            .as_ref()
-            .map(|cluster| cluster.name.clone())
-            .map(|name| self.connection_is_writable(&name))
-            .unwrap_or(false);
-        if is_prod || !writable {
+        let Some(connected) = self.connection.connected.as_ref() else {
+            return;
+        };
+        let connection = connected.name.clone();
+        if !apply_in_place_allowed(connected.client_config.read_only, self.active_tier()) {
             self.open_query_tab_with(&editor_sql, window, cx);
             return;
         }
@@ -207,7 +203,16 @@ impl Workspace {
             .and_then(|selected| selected.object.total_bytes)
             .is_some_and(|bytes| bytes > LARGE_TABLE_BYTES);
         if large {
-            self.schema.pending_apply = Some((index, apply));
+            let Some(selected) = self.schema.selected_object.as_ref() else {
+                return;
+            };
+            self.schema.pending_apply = Some(PendingApply {
+                index,
+                apply,
+                connection,
+                database: selected.database.clone(),
+                object: selected.object.name.clone(),
+            });
             cx.notify();
         } else {
             self.apply_suggestion(index, apply, window, cx);
@@ -215,9 +220,28 @@ impl Workspace {
     }
 
     pub(crate) fn confirm_apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((index, apply)) = self.schema.pending_apply.take() {
-            self.apply_suggestion(index, apply, window, cx);
+        let Some(pending) = self.schema.pending_apply.take() else {
+            return;
+        };
+        let context_matches = pending.matches_context(
+            self.connection
+                .connected
+                .as_ref()
+                .map(|connected| (connected.name.as_str(), connected.client_config.read_only)),
+            self.active_tier(),
+            self.schema
+                .selected_object
+                .as_ref()
+                .map(|selected| (selected.database.as_str(), selected.object.name.as_str())),
+        );
+        if !context_matches {
+            self.flash_warning(
+                "The connection or table changed; review the suggestion again",
+                cx,
+            );
+            return;
         }
+        self.apply_suggestion(pending.index, pending.apply, window, cx);
     }
 
     pub(crate) fn cancel_apply(&mut self, cx: &mut Context<Self>) {

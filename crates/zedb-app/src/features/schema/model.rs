@@ -10,6 +10,10 @@ use zedb_ch::{
 use crate::components::text_input::TextInput;
 use crate::schema_intelligence_ui::SchemaProvider;
 
+#[cfg(test)]
+#[path = "model/security_tests.rs"]
+mod security_tests;
+
 pub(crate) struct SchemaState {
     pub(crate) filter: Entity<TextInput>,
     pub(crate) connection: Option<String>,
@@ -22,7 +26,37 @@ pub(crate) struct SchemaState {
     pub(crate) selected_object: Option<SelectedSchemaObject>,
     pub(crate) cardinality_cache: HashMap<(String, String, String), Vec<u64>>,
     pub(crate) measured_cache: HashMap<(String, String, String), HashMap<usize, f64>>,
-    pub(crate) pending_apply: Option<(usize, Vec<String>)>,
+    pub(crate) pending_apply: Option<PendingApply>,
+}
+
+pub(crate) struct PendingApply {
+    pub(crate) index: usize,
+    pub(crate) apply: Vec<String>,
+    pub(crate) connection: String,
+    pub(crate) database: String,
+    pub(crate) object: String,
+}
+
+pub(crate) fn apply_in_place_allowed(read_only: bool, tier: Option<zedb_core::EnvTier>) -> bool {
+    !read_only
+        && matches!(
+            tier,
+            Some(zedb_core::EnvTier::Dev | zedb_core::EnvTier::Staging)
+        )
+}
+
+impl PendingApply {
+    pub(crate) fn matches_context(
+        &self,
+        current_connection: Option<(&str, bool)>,
+        tier: Option<zedb_core::EnvTier>,
+        selected_object: Option<(&str, &str)>,
+    ) -> bool {
+        current_connection.is_some_and(|(name, read_only)| {
+            name == self.connection && apply_in_place_allowed(read_only, tier)
+        }) && selected_object
+            .is_some_and(|(database, object)| database == self.database && object == self.object)
+    }
 }
 
 impl SchemaState {

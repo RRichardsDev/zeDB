@@ -1,3 +1,5 @@
+//! Integration coverage for the vendored SQL highlighter boundary.
+//!
 //! ClickHouse statements the sequel grammar cannot parse (DESCRIBE,
 //! OPTIMIZE, KILL, ...) must still get keyword coloring via the
 //! vendored ERROR-region salvage patch.

@@ -126,7 +126,7 @@ impl Workspace {
                         }),
                     ))
                     .map(|panel| {
-                        if editing {
+                        if editing && !running {
                             panel.child(
                                 div()
                                     .flex()

@@ -81,8 +81,8 @@ impl ChClient {
         // body a CREATE/INSERT/DROP returns, aborting before cleanup and
         // orphaning the table. Only the measurement SELECT uses `query`.
         //
-        // Clean up any leftover from an interrupted run, then build.
-        let _ = self.execute(&drop_sql).await;
+        // Do not pre-drop a colliding name. We only own the table after this
+        // CREATE succeeds, and only then may the cleanup below remove it.
         self.execute(&format!(
             "CREATE TABLE {db}.{trial} (base {base_def}, cand {cand_def}) \
              ENGINE = MergeTree ORDER BY tuple() \
