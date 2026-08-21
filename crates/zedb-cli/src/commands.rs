@@ -27,7 +27,10 @@ pub fn runtime() -> Result<tokio::runtime::Runtime, String> {
 /// the fix in it rather than a fallback.
 pub fn pinned_binary(repo: &MigrationRepo) -> Result<PathBuf, String> {
     let version = &repo.config.engine.version;
-    zedb_ch::cached_binary(version)
+    // Honor the fallback `zedb pin` may have resolved and recorded for
+    // a version with no reviewed artifact; otherwise pin says "pinned"
+    // and the next command demands pinning again, forever.
+    zedb_ch::cached_binary_or_fallback(version)
         .ok_or_else(|| format!("pinned ClickHouse {version} is not cached; run `zedb pin` first"))
 }
 

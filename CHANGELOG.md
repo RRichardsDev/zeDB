@@ -9,6 +9,10 @@ GitHub release notes.
 
 ## Unreleased
 
+- `zedb pin` and the commands that need the pinned binary agree again
+  when the server's exact version has no reviewed artifact: pin records
+  the trusted fallback it resolved, and check/regen/verify now honor
+  that record instead of demanding a pin that pin already did.
 - The agent's highlight tool no longer claims to have flashed a control
   that was not on screen: pointing at a fleet toolbar control now opens
   the fleet view (narrated in the thread), and pointing at a

@@ -301,6 +301,33 @@ pub enum PinPhase {
 
 pub type DownloadProgress = std::sync::Arc<dyn Fn(PinPhase) + Send + Sync>;
 
+/// Alias-file content that names a manifest-trusted, platform-available
+/// release; anything else is ignored.
+fn trusted_fallback_alias(content: &str) -> Option<String> {
+    let value = content.trim().to_string();
+    platform_asset_name(&value)
+        .and_then(|asset| trusted_artifact(&value, None, &asset))
+        .map(|_| value)
+}
+
+/// The fallback version a prior `ensure_binary` remembered for
+/// `version` (recorded when the exact version has no reviewed
+/// artifact), if its alias file survives validation.
+fn remembered_fallback(version: &str) -> Option<String> {
+    if !valid_version(version) {
+        return None;
+    }
+    let alias_path = binary_cache_dir().join(version).join("fallback-version");
+    trusted_fallback_alias(&std::fs::read_to_string(alias_path).ok()?)
+}
+
+/// The cached binary for exactly `version`, or for its remembered
+/// trusted fallback. Sync and offline, so the answer `zedb pin`
+/// printed stays true for the replay-backed commands that follow it.
+pub fn cached_binary_or_fallback(version: &str) -> Option<PathBuf> {
+    cached_binary(version).or_else(|| cached_binary(&remembered_fallback(version)?))
+}
+
 /// `ensure_binary` with download progress reported to `progress`;
 /// nothing is reported when the binary is already cached.
 pub async fn ensure_binary_with_progress(
@@ -312,16 +339,7 @@ pub async fn ensure_binary_with_progress(
         Err(PinError::DownloadFailed { .. } | PinError::UntrustedArtifact { .. }) => {}
         _ => return exact,
     }
-    let alias_path = binary_cache_dir().join(version).join("fallback-version");
-    let remembered = std::fs::read_to_string(&alias_path)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| {
-            platform_asset_name(value)
-                .and_then(|asset| trusted_artifact(value, None, &asset))
-                .is_some()
-        });
-    let fallback = match remembered {
+    let fallback = match remembered_fallback(version) {
         Some(fallback) => Some(fallback),
         None => nearest_published_release(version).await?,
     };
@@ -329,6 +347,7 @@ pub async fn ensure_binary_with_progress(
         return exact;
     };
     let path = ensure_exact_binary(&fallback, progress).await?;
+    let alias_path = binary_cache_dir().join(version).join("fallback-version");
     if let Ok(parent) = ensure_cache_version_dir(version) {
         let temporary = tempfile::Builder::new()
             .prefix(".zedb-clickhouse-alias-")
@@ -994,6 +1013,17 @@ mod tests {
     /// linker-signed binaries in place on that run: no record rejects,
     /// a matching record accepts, and post-record tampering rejects
     /// before anything executes.
+    #[test]
+    fn fallback_aliases_must_name_trusted_versions() {
+        assert_eq!(
+            trusted_fallback_alias("26.3.12.3\n"),
+            Some("26.3.12.3".into())
+        );
+        for bad in ["99.99.99.99", "../26.3.12.3", "", "not-a-version"] {
+            assert_eq!(trusted_fallback_alias(bad), None, "accepted {bad:?}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn continuity_digest_governs_the_cache_between_downloads() {

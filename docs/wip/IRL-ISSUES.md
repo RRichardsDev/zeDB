@@ -20,6 +20,10 @@ they leave the list when shipped.
   -> fixed (unreleased): toolbar controls bring the fleet view with
   them (narrated); detail-panel controls refuse honestly with the
   navigation hint when no database is selected
+- zedb-cli `upgrade --dry-run` without `--write` refuses with "this
+  connection is read-only; re-run with --write to consent", but a dry
+  run is exactly what you want before consenting; it should run on the
+  read-only session (it provably writes nothing) (seen 2026-08-21)
 - while a storage suggestion is applying, the advice button should
   show a loading state once the mutation runs longer than ~2s; today
   there is no feedback on the button itself (seen 2026-08-21 applying
