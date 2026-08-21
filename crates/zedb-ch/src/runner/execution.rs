@@ -110,6 +110,17 @@ impl Runner<'_> {
                 .unwrap_or_else(std::env::temp_dir)
                 .join("zedb");
             std::fs::create_dir_all(&dir)?;
+            let metadata = std::fs::symlink_metadata(&dir)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(std::io::Error::other(
+                    "audit directory is not a real directory",
+                ));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+            }
             append_audit_line(&dir.join("audit.jsonl"), line.as_bytes())
         })();
         if let Err(error) = result {
@@ -269,10 +280,16 @@ fn audit_endpoint(endpoint: &str) -> String {
 }
 
 fn append_audit_line(path: &std::path::Path, line: &[u8]) -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -322,5 +339,20 @@ mod security_tests {
             std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_file_refuses_symlink_targets() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let outside = directory.path().join("outside");
+        let audit = directory.path().join("audit.jsonl");
+        std::fs::write(&outside, b"keep\n").unwrap();
+        symlink(&outside, &audit).unwrap();
+
+        assert!(append_audit_line(&audit, b"new\n").is_err());
+        assert_eq!(std::fs::read(outside).unwrap(), b"keep\n");
     }
 }

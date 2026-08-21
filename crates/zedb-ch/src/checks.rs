@@ -13,10 +13,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use regex::Regex;
 use zedb_core::repo::{render, MigrationRepo};
 
+use crate::process::output_with_timeout;
 use crate::replay::{split_statements, LocalReplay, ReplaySide};
 
 #[derive(Debug, thiserror::Error)]
@@ -122,9 +124,9 @@ pub fn check_sql_text(
     let sql = truncate_insert_values(&sql);
 
     // -n / multiquery: migration files hold several statements.
-    let output = Command::new(binary)
-        .args(["format", "-n", "--query", &sql])
-        .output()?;
+    let mut command = Command::new(binary);
+    command.args(["format", "-n", "--query", &sql]);
+    let output = output_with_timeout(command, None, Duration::from_secs(30))?;
     if output.status.success() {
         return Ok(None);
     }

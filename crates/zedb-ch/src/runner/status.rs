@@ -63,71 +63,84 @@ static NEEDS_ADMIN: LazyLock<regex::Regex> = LazyLock::new(|| {
     .expect("static regex")
 });
 
-fn body_lines(statement: &str) -> Vec<&str> {
-    statement
-        .lines()
-        .filter(|line| !line.trim().is_empty() && !line.trim().starts_with("--"))
-        .collect()
+fn statement_body(mut statement: &str) -> Option<&str> {
+    loop {
+        statement = statement
+            .trim_start()
+            .trim_start_matches('\u{feff}')
+            .trim_start();
+        if let Some(comment) = statement
+            .strip_prefix("--")
+            .or_else(|| statement.strip_prefix('#'))
+        {
+            statement = comment.split_once('\n').map_or("", |(_, rest)| rest);
+            continue;
+        }
+        if let Some(comment) = statement.strip_prefix("/*") {
+            let (_, rest) = comment.split_once("*/")?;
+            statement = rest;
+            continue;
+        }
+        return (!statement.is_empty()).then_some(statement);
+    }
 }
 
 /// Statements needing elevated grants, restricted to an allowlist of
 /// statement forms at the start of the SQL body. Comments, literals, and
 /// optional clauses cannot grant access to the admin executor.
 pub fn needs_admin(statement: &str) -> bool {
-    let lines = body_lines(statement);
-    let Some(first) = lines.first() else {
-        return false;
-    };
-    NEEDS_ADMIN.is_match(first.trim())
+    statement_body(statement).is_some_and(|body| NEEDS_ADMIN.is_match(body))
 }
 
 /// SYSTEM statements act on the connected node only (no ON CLUSTER on
 /// the target servers), so the runner fans them out per replica.
 pub fn is_system(statement: &str) -> bool {
-    body_lines(statement).first().is_some_and(|first| {
-        let trimmed = first.trim();
-        trimmed.len() >= 6
-            && trimmed[..6].eq_ignore_ascii_case("SYSTEM")
-            && !trimmed
+    statement_body(statement).is_some_and(|body| {
+        body.get(..6)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("SYSTEM"))
+            && !body
                 .as_bytes()
                 .get(6)
-                .is_some_and(|c| c.is_ascii_alphanumeric())
+                .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
     })
 }
 
 /// The host part of an `http://host:port` URL.
 pub(crate) fn host_of(url: &str) -> Option<String> {
-    let rest = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let authority = rest.split('/').next().unwrap_or(rest);
-    Some(
-        authority
-            .rsplit_once(':')
-            .map(|(host, _)| host)
-            .unwrap_or(authority)
-            .to_string(),
-    )
+    let parsed = reqwest::Url::parse(url).ok()?;
+    parsed.host_str().map(|host| {
+        host.trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string()
+    })
 }
 
 /// Swap the host in an `http://host:port` URL, keeping scheme and port.
 pub(crate) fn replace_host(url: &str, host: &str) -> String {
-    let (scheme, rest) = url.split_once("://").unwrap_or(("http", url));
-    let (authority, path) = rest
-        .split_once('/')
-        .map(|(a, p)| (a, format!("/{p}")))
-        .unwrap_or((rest, String::new()));
-    let port = authority
-        .rsplit_once(':')
-        .map(|(_, port)| format!(":{port}"))
-        .unwrap_or_default();
-    format!("{scheme}://{host}{port}{path}")
+    let Ok(mut parsed) = reqwest::Url::parse(url) else {
+        return url.to_string();
+    };
+    let bracketed_host;
+    let host = if host.contains(':') && !host.starts_with('[') {
+        bracketed_host = format!("[{host}]");
+        &bracketed_host
+    } else {
+        host
+    };
+    if parsed.set_host(Some(host)).is_err() {
+        return url.to_string();
+    }
+    let mut replaced = parsed.to_string();
+    if parsed.path() == "/" && !url.ends_with('/') {
+        replaced.pop();
+    }
+    replaced
 }
 
 /// Statements the migration user is genuinely *refused* (not merely
 /// routed): what proves admin routing is load-bearing.
 pub fn refused_without_admin(statement: &str) -> bool {
-    body_lines(statement)
-        .first()
-        .is_some_and(|first| NEEDS_ADMIN.is_match(first.trim()))
+    statement_body(statement).is_some_and(|body| NEEDS_ADMIN.is_match(body))
 }
 
 #[cfg(test)]
@@ -142,6 +155,9 @@ mod tests {
             "CREATE TABLE system_log (x UInt8) ENGINE = Memory"
         ));
         assert!(!is_system("SELECT * FROM system.tables"));
+        assert!(!is_system("SYSTEM_TABLE"));
+        assert!(is_system("/* scheduler */ SYSTEM START VIEW x"));
+        assert!(!is_system("ééaé"));
     }
 
     #[test]
@@ -149,6 +165,7 @@ mod tests {
         assert!(needs_admin("-- maintenance\nOPTIMIZE TABLE events FINAL"));
         assert!(needs_admin("ALTER TABLE events DELETE WHERE expired"));
         assert!(needs_admin("CREATE FUNCTION f AS x -> x + 1"));
+        assert!(needs_admin("/* maintenance */ OPTIMIZE TABLE events FINAL"));
 
         assert!(!needs_admin("SELECT 1 /* DEFINER */"));
         assert!(!needs_admin("SELECT 'DEFINER'"));
@@ -171,6 +188,10 @@ mod tests {
         assert_eq!(
             replace_host("http://10.0.0.1:8443/path", "node-b"),
             "http://node-b:8443/path"
+        );
+        assert_eq!(
+            replace_host("https://[::1]:8443/path", "2001:db8::2"),
+            "https://[2001:db8::2]:8443/path"
         );
     }
 }

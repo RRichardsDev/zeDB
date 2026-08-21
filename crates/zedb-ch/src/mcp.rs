@@ -26,6 +26,10 @@ const MAX_MCP_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_MCP_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_MCP_TEXT_BYTES: usize = (MAX_MCP_OUTPUT_BYTES - 4096) / 6;
 const OUTPUT_TRUNCATED: &str = "\n[output truncated at the MCP safety limit]\n";
+#[cfg(not(test))]
+const APP_BRIDGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+#[cfg(test)]
+const APP_BRIDGE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Server-side caps applied to every agent query.
 #[derive(Clone, Copy)]
@@ -94,6 +98,19 @@ impl McpServer {
 
     /// Forward an app tool call over the bridge; one JSONL round trip.
     async fn forward_app_tool(&self, name: &str, arguments: &Value) -> Result<String, String> {
+        tokio::time::timeout(
+            APP_BRIDGE_TIMEOUT,
+            self.forward_app_tool_inner(name, arguments),
+        )
+        .await
+        .map_err(|_| "app bridge reply deadline exceeded".to_string())?
+    }
+
+    async fn forward_app_tool_inner(
+        &self,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<String, String> {
         let Some(socket) = &self.app_socket else {
             return Err("this tool needs the zeDB app; the pane provides it".into());
         };
@@ -754,5 +771,23 @@ mod tests {
             panic!("expected the next bounded line");
         };
         assert_eq!(line, b"{}");
+    }
+
+    #[tokio::test]
+    async fn app_bridge_reply_has_a_deadline() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("bridge.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let peer = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        });
+        let server = bare_server().with_app_bridge(socket);
+        let error = server
+            .forward_app_tool("navigate", &json!({"view": "fleet"}))
+            .await
+            .unwrap_err();
+        assert!(error.contains("deadline"), "{error}");
+        peer.abort();
     }
 }

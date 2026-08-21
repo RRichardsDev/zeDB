@@ -109,14 +109,14 @@ impl ChClient {
         Self { cfg, http }
     }
 
-    pub(super) fn ensure_secure_endpoint(&self) -> Result<()> {
-        if endpoint_is_secure_or_loopback(&self.cfg.url) {
+    pub(super) fn ensure_acceptable_endpoint(&self) -> Result<()> {
+        if endpoint_is_acceptable(&self.cfg.url) {
             return Ok(());
         }
-        Err(ChError::InsecureTransport(format!(
-            "use https:// for non-loopback endpoint {:?}",
-            self.cfg.url
-        )))
+        Err(ChError::InsecureTransport(
+            "endpoint must be a plain http:// or https:// URL with credentials in the dedicated user and password fields, never in the URL"
+                .into(),
+        ))
     }
 
     /// Query-string pairs for this cluster's driver settings. The
@@ -203,16 +203,18 @@ impl ChClient {
     ///
     /// Reads prefer the pooled native (TCP) connection when one is up;
     /// the first query kicks off a background connect and rides
-    /// HTTP. A native transport failure falls back to HTTP for this
-    /// query and evicts the broken connection; a server error does not
-    /// (the query really ran). Mutating statements never route natively.
+    /// HTTP. A native transport or decode failure falls back to HTTP for
+    /// this query: only reads route natively ([`crate::native::is_read_statement`]
+    /// is a strict allowlist), so a replay is harmless. A server error does
+    /// not fall back (the query really ran). Mutating statements never
+    /// route natively and are never replayed.
     pub async fn query(&self, sql: &str) -> Result<QueryResult> {
         if crate::native::is_read_statement(sql) {
             if let Some(native) = crate::native::pooled(&self.cfg) {
                 match native.query(sql).await {
                     Ok(result) => return Ok(result),
                     Err(error @ ChError::Server { .. }) => return Err(error),
-                    // Transport or decode trouble: this query falls back to
+                    // Transport or decode trouble: this read falls back to
                     // HTTP. Only a dead socket evicts the connection; a
                     // per-query gap (e.g. a type the native decoder can't
                     // parse) keeps the healthy connection pooled.
@@ -259,6 +261,9 @@ impl ChClient {
 
     /// `GET /ping`: true when the server is up and answering.
     pub async fn ping(&self) -> bool {
+        if self.ensure_acceptable_endpoint().is_err() {
+            return false;
+        }
         let url = format!("{}/ping", self.cfg.url.trim_end_matches('/'));
         // ClickHouse does not authenticate /ping. Sending credentials here
         // creates exposure without adding a useful connection check.
@@ -286,7 +291,7 @@ impl ChClient {
         params: &[(&str, &str)],
         max_response_bytes: u64,
     ) -> Result<Vec<u8>> {
-        self.ensure_secure_endpoint()?;
+        self.ensure_acceptable_endpoint()?;
         let mut req = self
             .http
             .post(&self.cfg.url)
@@ -321,18 +326,7 @@ impl ChClient {
         } else {
             MAX_ERROR_RESPONSE_BYTES
         };
-        if resp.content_length().is_some_and(|length| length > limit) {
-            return Err(ChError::ResponseTooLarge { limit });
-        }
-        let mut bytes = Vec::new();
-        let mut stream = resp.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            if bytes.len() as u64 + chunk.len() as u64 > limit {
-                return Err(ChError::ResponseTooLarge { limit });
-            }
-            bytes.extend_from_slice(&chunk);
-        }
+        let bytes = collect_response_bounded(resp, limit).await?;
         if !status.is_success() {
             return Err(ChError::Server {
                 code,
@@ -343,24 +337,54 @@ impl ChClient {
     }
 }
 
-pub(crate) fn endpoint_is_secure_or_loopback(endpoint: &str) -> bool {
+async fn collect_response_bounded(response: reqwest::Response, limit: u64) -> Result<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit)
+    {
+        return Err(ChError::ResponseTooLarge { limit });
+    }
+    let capacity = response
+        .content_length()
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or(0)
+        .min(64 * 1024);
+    let mut bytes = Vec::with_capacity(capacity);
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        let next = (bytes.len() as u64)
+            .checked_add(chunk.len() as u64)
+            .ok_or(ChError::ResponseTooLarge { limit })?;
+        if next > limit {
+            return Err(ChError::ResponseTooLarge { limit });
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+/// Endpoint policy: `https://` and `http://` are both accepted. Many
+/// ClickHouse clusters expose no TLS at all, so an explicit `http://`
+/// URL is the owner's deliberate plaintext choice (accepted risk on
+/// ZCH-002), not a mistake to refuse. URLs that embed credentials are
+/// always rejected: they leak into logs, history, and audit trails.
+pub(crate) fn endpoint_is_acceptable(endpoint: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(endpoint) else {
         return false;
     };
-    if url.scheme() == "https" {
-        return true;
-    }
-    if url.scheme() != "http" {
+    if !url.username().is_empty() || url.password().is_some() {
         return false;
     }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|address| address.is_loopback())
+    matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+}
+
+/// Whether the native transport may offer plaintext candidates for this
+/// configuration. TLS is still tried first; plaintext exists only when
+/// the HTTP side is itself explicitly plaintext.
+pub(crate) fn endpoint_allows_plaintext(endpoint: &str) -> bool {
+    endpoint_is_acceptable(endpoint)
+        && reqwest::Url::parse(endpoint).is_ok_and(|url| url.scheme() == "http")
 }
 
 fn value_as_u64(value: &Value) -> Option<u64> {
@@ -404,23 +428,29 @@ mod security_tests {
     }
 
     #[test]
-    fn only_tls_or_literal_loopback_http_is_accepted() {
-        assert!(endpoint_is_secure_or_loopback(
-            "https://db.example.com:8443"
+    fn http_and_https_endpoints_without_url_credentials_are_accepted() {
+        assert!(endpoint_is_acceptable("https://db.example.com:8443"));
+        assert!(endpoint_is_acceptable("http://db.example.com:8123"));
+        assert!(endpoint_is_acceptable("http://localhost:8123"));
+        assert!(endpoint_is_acceptable("http://127.0.0.1:8123"));
+        assert!(endpoint_is_acceptable("http://[::1]:8123"));
+        assert!(!endpoint_is_acceptable("not a URL"));
+        assert!(!endpoint_is_acceptable("ftp://db.example.com"));
+        assert!(!endpoint_is_acceptable(
+            "https://user:secret@db.example.com:8443"
         ));
-        assert!(endpoint_is_secure_or_loopback("http://localhost:8123"));
-        assert!(endpoint_is_secure_or_loopback("http://127.0.0.1:8123"));
-        assert!(endpoint_is_secure_or_loopback("http://[::1]:8123"));
-        assert!(!endpoint_is_secure_or_loopback(
-            "http://db.example.com:8123"
+        assert!(!endpoint_is_acceptable("http://user@db.example.com:8123"));
+
+        assert!(endpoint_allows_plaintext("http://db.example.com:8123"));
+        assert!(!endpoint_allows_plaintext("https://db.example.com:8443"));
+        assert!(!endpoint_allows_plaintext(
+            "http://user:secret@db.example.com:8123"
         ));
-        assert!(!endpoint_is_secure_or_loopback("http://192.0.2.1:8123"));
-        assert!(!endpoint_is_secure_or_loopback("not a URL"));
     }
 
     #[tokio::test]
-    async fn remote_plaintext_is_refused_before_connecting() {
-        let client = ChClient::new(config("http://192.0.2.1:8123".into()));
+    async fn url_embedded_credentials_are_refused_before_connecting() {
+        let client = ChClient::new(config("http://user:secret@192.0.2.1:8123".into()));
         assert!(matches!(
             client.test_connection().await,
             Err(ChError::InsecureTransport(_))

@@ -34,18 +34,13 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install ClickHouse (integration tests)
+      - name: Cache reviewed ClickHouse build (integration tests)
         run: |
-          if ! command -v clickhouse >/dev/null 2>&1; then
-            curl -fsSL https://clickhouse.com/ | sh
-            sudo mv ./clickhouse /usr/local/bin/clickhouse
-          fi
-          clickhouse --version
-      - name: Seed zedb binary cache (replay-backed tests)
-        run: |
-          version=$(clickhouse local --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-          mkdir -p ~/.cache/zedb/clickhouse/"$version"
-          cp "$(command -v clickhouse)" ~/.cache/zedb/clickhouse/"$version"/clickhouse
+          cp -R crates/zedb-core/tests/fixtures/demo-repo "$RUNNER_TEMP/pin-repo"
+          cargo run -p zedb-cli -- --repo "$RUNNER_TEMP/pin-repo" pin --version 26.3.12.3
+          binary="$HOME/.cache/zedb/clickhouse/26.3.12.3/clickhouse"
+          test -x "$binary"
+          echo "ZEDB_CLICKHOUSE_BIN=$binary" >> "$GITHUB_ENV"
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy

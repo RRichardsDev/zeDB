@@ -180,6 +180,19 @@ Five focused regression tests cover endpoint classification, refusal before
 connect, redirect refusal, unauthenticated ping, and native candidate policy.
 All 89 library tests and strict Clippy pass after the change.
 
+**Amendment (2026-08-21, owner-accepted risk):** the blanket refusal of remote
+plain HTTP broke real deployments; many ClickHouse clusters, including the
+owner's, expose no TLS endpoint at all. The owner accepted the residual
+plaintext-transport risk for explicitly configured `http://` URLs: typing the
+scheme is the deliberate opt-in, and the app offers no silent downgrade from
+`https://`. Retained protections: URLs embedding credentials are rejected,
+redirects stay disabled, `/ping` stays unauthenticated, and the native
+transport still tries TLS first, offering plaintext candidates only when the
+HTTP endpoint is itself explicit plain HTTP (never for an `https://` config).
+A network attacker on the path of an `http://` connection can still read and
+modify traffic including credentials; that is the accepted residual risk.
+Regression tests were updated to the amended policy.
+
 ### ZCH-003: comments can select the admin executor
 
 **Affected code:** `needs_admin` in `src/runner/status.rs` and
@@ -625,6 +638,21 @@ owner with a documented expiry.
   unmaintained transitive crates remain visible as warnings.
 - Confirmed the old vulnerable `quick-xml` lockfile entry is not reachable from
   any workspace target and the patched `h2 0.4.16` product path is selected.
+
+### 2026-08-21: post-review adjustments (owner decisions)
+
+- Amended ZCH-002: explicit `http://` endpoints are accepted again as an
+  owner-accepted risk (many clusters, including the owner's, have no TLS).
+  URL-embedded credentials, redirects, authenticated ping, and TLS-to-plain
+  native downgrade for `https://` configs all remain refused. Native plaintext
+  candidates now key off the explicit plaintext scheme, not loopback.
+- Restored the HTTP fallback for native read failures in `ChClient::query`.
+  Only allowlisted read statements route natively, so a replay is harmless;
+  server errors still do not fall back, and mutating statements still never
+  route natively.
+- Gave exports their own 24-hour total deadline plus a 60-second idle stall
+  detector, replacing the general five-minute whole-request deadline that
+  aborted large exports. Added a stalled-export regression test.
 
 ### 2026-08-20: ZCH-010 remediated
 

@@ -98,6 +98,10 @@ fn digest_path(binary: &Path) -> PathBuf {
     binary.with_extension("sha256")
 }
 
+fn artifact_path(binary: &Path) -> PathBuf {
+    binary.with_extension("artifact")
+}
+
 /// The cached binary for `version`, verified against its release digest before
 /// executing it to check the reported version.
 pub fn cached_binary(version: &str) -> Option<PathBuf> {
@@ -109,6 +113,15 @@ pub fn cached_binary(version: &str) -> Option<PathBuf> {
 }
 
 fn verify_cached_binary(path: &Path, version: &str) -> bool {
+    if std::fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+        || path.parent().is_some_and(|parent| {
+            std::fs::symlink_metadata(parent)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_dir())
+        })
+    {
+        return false;
+    }
     let Some(asset_name) = platform_asset_name(version) else {
         return false;
     };
@@ -118,8 +131,18 @@ fn verify_cached_binary(path: &Path, version: &str) -> bool {
     let Some(expected) = parse_sha256(&trusted.sha256) else {
         return false;
     };
-    sha256_file(path).is_ok_and(|actual| actual == expected)
-        && binary_reports_version(path, version)
+    let integrity_matches = if asset_name.ends_with(".tgz") {
+        let archive = artifact_path(path);
+        let expected_entry =
+            PathBuf::from(format!("clickhouse-common-static-{version}")).join("usr/bin/clickhouse");
+        sha256_file(&archive).is_ok_and(|actual| actual == expected)
+            && binary_digest_from_archive(&archive, &expected_entry)
+                .and_then(|archived| sha256_file(path).map(|cached| archived == cached))
+                .unwrap_or(false)
+    } else {
+        sha256_file(path).is_ok_and(|actual| actual == expected)
+    };
+    integrity_matches && binary_reports_version(path, version)
 }
 
 fn valid_version(version: &str) -> bool {
@@ -249,9 +272,10 @@ pub async fn ensure_binary_with_progress(
     progress: Option<DownloadProgress>,
 ) -> Result<PathBuf, PinError> {
     let exact = ensure_exact_binary(version, progress.clone()).await;
-    let Err(PinError::DownloadFailed { .. }) = &exact else {
-        return exact;
-    };
+    match &exact {
+        Err(PinError::DownloadFailed { .. } | PinError::UntrustedArtifact { .. }) => {}
+        _ => return exact,
+    }
     let alias_path = binary_cache_dir().join(version).join("fallback-version");
     let remembered = std::fs::read_to_string(&alias_path)
         .ok()
@@ -269,11 +293,45 @@ pub async fn ensure_binary_with_progress(
         return exact;
     };
     let path = ensure_exact_binary(&fallback, progress).await?;
-    if let Some(parent) = alias_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    if let Ok(parent) = ensure_cache_version_dir(version) {
+        let temporary = tempfile::Builder::new()
+            .prefix(".zedb-clickhouse-alias-")
+            .tempfile_in(parent);
+        if let Ok(mut temporary) = temporary {
+            use std::io::Write as _;
+            if writeln!(temporary, "{fallback}").is_ok() {
+                let _ = std::fs::remove_file(&alias_path);
+                let _ = temporary.persist(&alias_path);
+            }
+        }
     }
-    let _ = std::fs::write(&alias_path, &fallback);
     Ok(path)
+}
+
+fn ensure_cache_version_dir(version: &str) -> Result<PathBuf, PinError> {
+    let root = binary_cache_dir();
+    std::fs::create_dir_all(&root)?;
+    let root_metadata = std::fs::symlink_metadata(&root)?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(PinError::UnsafeArchive(
+            "ClickHouse cache root is not a real directory".into(),
+        ));
+    }
+    let directory = root.join(version);
+    std::fs::create_dir_all(&directory)?;
+    let metadata = std::fs::symlink_metadata(&directory)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(PinError::UnsafeArchive(
+            "ClickHouse version cache is not a real directory".into(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(directory)
 }
 
 /// The closest published release to `version`, from the GitHub
@@ -494,11 +552,13 @@ async fn ensure_exact_binary(
         }
         std::fs::remove_file(&target)?;
         let _ = std::fs::remove_file(digest_path(&target));
+        let _ = std::fs::remove_file(artifact_path(&target));
     }
 
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
-    std::fs::create_dir_all(target.parent().expect("binary path has a parent"))?;
+    let directory = ensure_cache_version_dir(version)?;
+    let target = directory.join("clickhouse");
     let staging = target.with_extension("tmp");
     let _ = std::fs::remove_file(&staging);
 
@@ -520,7 +580,7 @@ async fn ensure_exact_binary(
             asset: asset_name,
         });
     }
-    let mut downloaded_digest = None;
+    let mut downloaded = None;
     for channel in ["lts", "stable"] {
         let release = format!(
             "https://github.com/ClickHouse/ClickHouse/releases/download/v{version}-{channel}"
@@ -530,11 +590,11 @@ async fn ensure_exact_binary(
         let Some(asset) = release_asset(version, channel, &asset_name).await? else {
             continue;
         };
-        download(&asset, &staging, version, os == "linux", progress.as_ref()).await?;
-        downloaded_digest = Some(asset.sha256);
+        let archive = download(&asset, &staging, version, os == "linux", progress.as_ref()).await?;
+        downloaded = Some((asset.sha256, archive));
         break;
     }
-    let Some(downloaded_digest) = downloaded_digest else {
+    let Some((downloaded_digest, verified_archive)) = downloaded else {
         return Err(PinError::DownloadFailed {
             version: version.into(),
             tried,
@@ -547,7 +607,19 @@ async fn ensure_exact_binary(
         std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))?;
     }
     std::fs::rename(&staging, &target)?;
-    persist_digest(&target, &downloaded_digest)?;
+    if let Some(archive) = verified_archive {
+        let archive_target = artifact_path(&target);
+        let _ = std::fs::remove_file(&archive_target);
+        if let Err(error) = archive.persist(&archive_target) {
+            let _ = std::fs::remove_file(&target);
+            return Err(PinError::Io(error.error));
+        }
+    }
+    if let Err(error) = persist_digest(&target, &downloaded_digest) {
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_file(artifact_path(&target));
+        return Err(error);
+    }
 
     // This is the first execution. Artifact integrity has already been checked.
     report(PinPhase::Verifying);
@@ -555,6 +627,7 @@ async fn ensure_exact_binary(
     if !actual.contains(version) {
         let _ = std::fs::remove_file(&target);
         let _ = std::fs::remove_file(digest_path(&target));
+        let _ = std::fs::remove_file(artifact_path(&target));
         return Err(PinError::VersionMismatch {
             expected: version.into(),
             actual,
@@ -572,7 +645,7 @@ async fn download(
     version: &str,
     is_tarball: bool,
     progress: Option<&DownloadProgress>,
-) -> Result<(), PinError> {
+) -> Result<Option<tempfile::NamedTempFile>, PinError> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("zeDB/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::limited(5))
@@ -649,12 +722,73 @@ async fn download(
         let expected =
             PathBuf::from(format!("clickhouse-common-static-{version}")).join("usr/bin/clickhouse");
         extract_binary(archive_temp.path(), staging, &expected)?;
+        Ok(Some(archive_temp))
     } else {
         archive_temp
             .persist(staging)
             .map_err(|error| PinError::Io(error.error))?;
+        Ok(None)
     }
-    Ok(())
+}
+
+fn binary_digest_from_archive(archive_path: &Path, expected: &Path) -> std::io::Result<[u8; 32]> {
+    use std::io::Read as _;
+
+    let file = std::fs::File::open(archive_path)?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    let mut found = None;
+    for (index, entry) in archive.entries()?.enumerate() {
+        if index >= MAX_ARCHIVE_ENTRIES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "archive contains too many entries",
+            ));
+        }
+        let mut entry = entry?;
+        if entry.path()?.as_ref() != expected {
+            continue;
+        }
+        if found.is_some() || !entry.header().entry_type().is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "archive binary entry is not unique and regular",
+            ));
+        }
+        if entry.size() == 0 || entry.size() > MAX_ASSET_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "archive binary entry has an unsafe size",
+            ));
+        }
+        let expected_size = entry.size();
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        let mut read_total = 0u64;
+        loop {
+            let read = entry.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            read_total = read_total.checked_add(read as u64).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "archive size overflow")
+            })?;
+            hasher.update(&buffer[..read]);
+        }
+        if read_total != expected_size {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "archive binary entry ended early",
+            ));
+        }
+        found = Some(hasher.finalize().into());
+    }
+    found.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "archive does not contain the expected binary",
+        )
+    })
 }
 
 fn persist_digest(binary: &Path, digest: &[u8; 32]) -> Result<(), PinError> {
@@ -866,6 +1000,10 @@ mod tests {
         let staging = directory.path().join("clickhouse.tmp");
         extract_binary(&archive_path, &staging, &expected).unwrap();
         assert_eq!(std::fs::read(staging).unwrap(), payload);
+        assert_eq!(
+            binary_digest_from_archive(&archive_path, &expected).unwrap(),
+            <[u8; 32]>::from(Sha256::digest(payload))
+        );
         assert!(!directory.path().join("safe/unrelated.txt").exists());
     }
 

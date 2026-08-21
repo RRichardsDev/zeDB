@@ -1,8 +1,8 @@
 //! Native (TCP) protocol transport.
 //!
 //! A persistent connection over ClickHouse's native protocol (9440 TLS,
-//! with 9000 plaintext limited to explicit loopback HTTP development) via
-//! `klickhouse`, decoded into the same
+//! with 9000 plaintext offered only for an explicitly plaintext `http://`
+//! endpoint) via `klickhouse`, decoded into the same
 //! driver-agnostic [`zedb_core::Value`] model the HTTP path produces. Reads
 //! route here when a pooled connection exists ([`crate::ChClient::query`]);
 //! anything mutating stays on HTTP, where a failure is unambiguous.
@@ -70,8 +70,9 @@ impl Drop for NativeTransport {
 impl NativeClient {
     /// Connect to the native port of the HTTP config's host: the server's
     /// own `getServerPort('tcp_port_secure')` over TLS. Plain `tcp_port` is
-    /// considered only for a loopback HTTP configuration (defaulting to
-    /// 9440/9000 when discovery fails). Applies `readonly = 2` for read-only
+    /// considered only when the HTTP endpoint is itself explicit plaintext
+    /// `http://` (defaulting to 9440/9000 when discovery fails). Applies
+    /// `readonly = 2` for read-only
     /// connections and the driver settings before returning, so a handed-out
     /// client is never missing the session posture.
     pub async fn connect(cfg: &ChConfig) -> Result<Self> {
@@ -257,7 +258,7 @@ impl NativeClient {
     /// Run a query and materialize the full typed result, mirroring
     /// [`crate::ChClient::query`].
     pub async fn query(&self, sql: &str) -> Result<QueryResult> {
-        tokio::time::timeout(NATIVE_QUERY_TIMEOUT, async {
+        match tokio::time::timeout(NATIVE_QUERY_TIMEOUT, async {
             let mut stream = self.inner.query_raw(sql).await.map_err(map_err)?;
             let mut columns: Vec<ColumnMeta> = Vec::new();
             let mut rows: Vec<Vec<Value>> = Vec::new();
@@ -271,7 +272,15 @@ impl NativeClient {
             Ok(QueryResult { columns, rows })
         })
         .await
-        .map_err(|_| ChError::NativeTransport("native query deadline exceeded".into()))?
+        {
+            Ok(result) => result,
+            Err(_) => {
+                self.close();
+                Err(ChError::NativeTransport(
+                    "native query deadline exceeded; connection closed".into(),
+                ))
+            }
+        }
     }
 
     /// Run a long-lived streaming query (e.g. `WATCH ... EVENTS`), invoking
@@ -312,10 +321,15 @@ impl NativeClient {
     /// statements the tail needs (live view DDL); the app's general
     /// mutating path stays on HTTP.
     pub async fn execute(&self, sql: &str) -> Result<()> {
-        tokio::time::timeout(NATIVE_QUERY_TIMEOUT, self.inner.execute(sql))
-            .await
-            .map_err(|_| ChError::NativeTransport("native execute deadline exceeded".into()))?
-            .map_err(map_err)
+        match tokio::time::timeout(NATIVE_QUERY_TIMEOUT, self.inner.execute(sql)).await {
+            Ok(result) => result.map_err(map_err),
+            Err(_) => {
+                self.close();
+                Err(ChError::NativeTransport(
+                    "native execute deadline exceeded; connection closed".into(),
+                ))
+            }
+        }
     }
 }
 
@@ -325,8 +339,7 @@ fn native_candidates(
     plain_port: u16,
     offset: i32,
 ) -> Vec<(NativeEndpoint, u16)> {
-    let allow_plain = crate::client::endpoint_is_secure_or_loopback(&cfg.url)
-        && cfg.url.trim_start().starts_with("http://");
+    let allow_plain = crate::client::endpoint_allows_plaintext(&cfg.url);
     let shifted = |port: u16| {
         u16::try_from(i32::from(port) + offset)
             .ok()
@@ -335,7 +348,8 @@ fn native_candidates(
     let mut candidates = Vec::new();
     if let Some(port) = cfg.native_port {
         // An explicitly configured port is configuration, not a guess. TLS
-        // goes first, and plaintext exists only for a loopback HTTP setup.
+        // goes first, and plaintext exists only when the HTTP endpoint is
+        // itself explicit plaintext.
         candidates.push((NativeEndpoint::Tls, port));
         if allow_plain {
             candidates.push((NativeEndpoint::Plain, port));
@@ -376,17 +390,25 @@ mod security_tests {
     }
 
     #[test]
-    fn plaintext_native_candidates_are_loopback_http_only() {
-        for endpoint in ["https://db.example.com:8443", "http://db.example.com:8123"] {
+    fn plaintext_native_candidates_require_an_explicit_plaintext_endpoint() {
+        for endpoint in [
+            "https://db.example.com:8443",
+            "http://user:secret@db.example.com:8123",
+        ] {
             let candidates = native_candidates(&config(endpoint), 9440, 9000, 0);
             assert!(candidates
                 .iter()
                 .all(|(transport, _)| *transport == NativeEndpoint::Tls));
         }
 
-        let local = native_candidates(&config("http://127.0.0.1:8123"), 9440, 9000, 0);
-        assert!(local
-            .iter()
-            .any(|(transport, _)| *transport == NativeEndpoint::Plain));
+        // An explicit http:// endpoint is the owner's plaintext choice;
+        // the native side may then offer plaintext too, TLS still first.
+        for endpoint in ["http://db.example.com:8123", "http://127.0.0.1:8123"] {
+            let candidates = native_candidates(&config(endpoint), 9440, 9000, 0);
+            assert_eq!(candidates.first(), Some(&(NativeEndpoint::Tls, 9441)));
+            assert!(candidates
+                .iter()
+                .any(|(transport, _)| *transport == NativeEndpoint::Plain));
+        }
     }
 }

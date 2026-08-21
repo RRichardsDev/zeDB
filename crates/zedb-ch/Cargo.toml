@@ -26,6 +26,7 @@ rustls-pki-types = "1"
 sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros"] }

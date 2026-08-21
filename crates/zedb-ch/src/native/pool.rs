@@ -71,6 +71,10 @@ fn pool_key(cfg: &ChConfig) -> Option<String> {
     if endpoint.is_empty() {
         return None;
     }
+    let parsed = reqwest::Url::parse(endpoint).ok()?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
     Some(format!(
         "{endpoint}|{:?}|{}|{}|{}|{}",
         cfg.native_port,
@@ -134,8 +138,9 @@ pub async fn connect_pooled(cfg: &ChConfig) -> Result<NativeClient> {
             "native transport disabled (ZEDB_NATIVE=0)".into(),
         ));
     }
-    let key = pool_key(cfg)
-        .ok_or_else(|| ChError::NativeTransport(format!("no host in URL {:?}", cfg.url)))?;
+    let key = pool_key(cfg).ok_or_else(|| {
+        ChError::NativeTransport("invalid or credential-bearing native endpoint".into())
+    })?;
     if let Ok(entries) = pool().lock() {
         if let Some(PoolEntry::Ready(client)) = entries.get(&key) {
             if !client.is_closed() {
@@ -159,8 +164,9 @@ pub async fn connect_pooled(cfg: &ChConfig) -> Result<NativeClient> {
     }
 }
 
-/// Whether a statement is safe to route over the native read path: reads
-/// re-run harmlessly on HTTP fallback, anything else must not run twice.
+/// Whether a statement is safe to route over the native read path. This is a
+/// deliberately narrow first-keyword allowlist. In particular, `WITH` is not
+/// enough to prove the eventual statement is a read.
 pub fn is_read_statement(sql: &str) -> bool {
     let first = sql
         .split_whitespace()
@@ -169,7 +175,7 @@ pub fn is_read_statement(sql: &str) -> bool {
         .to_ascii_uppercase();
     matches!(
         first.as_str(),
-        "SELECT" | "WITH" | "SHOW" | "DESCRIBE" | "DESC" | "EXPLAIN" | "EXISTS"
+        "SELECT" | "SHOW" | "DESCRIBE" | "DESC" | "EXPLAIN" | "EXISTS"
     )
 }
 
@@ -179,7 +185,10 @@ mod tests {
     #[test]
     fn read_statements_are_recognized() {
         assert!(is_read_statement("  select 1"));
-        assert!(is_read_statement("WITH x AS (SELECT 1) SELECT * FROM x"));
+        assert!(!is_read_statement("WITH x AS (SELECT 1) SELECT * FROM x"));
+        assert!(!is_read_statement(
+            "WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x"
+        ));
         assert!(is_read_statement("SHOW TABLES"));
         assert!(is_read_statement("EXPLAIN SELECT 1"));
         assert!(!is_read_statement("INSERT INTO t VALUES (1)"));
@@ -203,6 +212,7 @@ mod tests {
         let two = pool_key(&node("http://localhost:8124")).unwrap();
         assert_ne!(one, two);
         assert!(pool_key(&node("  ")).is_none());
+        assert!(pool_key(&node("https://user:secret@db.example.com:8443")).is_none());
     }
 
     #[test]
@@ -233,6 +243,7 @@ mod tests {
             "ch.example.com"
         );
         assert!(host_of("http://").is_none());
+        assert_eq!(host_of("https://[::1]:9440/path").as_deref(), Some("::1"));
     }
 
     #[test]

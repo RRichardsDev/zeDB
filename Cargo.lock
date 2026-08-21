@@ -8560,6 +8560,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "klickhouse",
+ "libc",
  "regex",
  "reqwest",
  "rustls",

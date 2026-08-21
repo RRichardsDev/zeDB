@@ -10,9 +10,10 @@ GitHub release notes.
 ## Unreleased
 
 - ClickHouse connections no longer send credentials to `/ping` or follow HTTP
-  redirects, remote plaintext HTTP endpoints are refused, and native transport
-  no longer falls back from TLS to plaintext outside an explicit loopback HTTP
-  development connection.
+  redirects, and URLs that embed credentials are rejected. Plain `http://`
+  endpoints remain supported for clusters without TLS; the native transport
+  still tries TLS first and offers plaintext only when the endpoint itself is
+  explicit plain HTTP.
 - ClickHouse binary downloads are streamed through strict compressed and
   expanded size limits, checked against GitHub release digests before use, and
   extracted without invoking a system archive tool or following archive links.
@@ -36,6 +37,20 @@ GitHub release notes.
 - Downloaded and cached ClickHouse executables now require a matching
   source-controlled zeDB artifact hash before any process launch; unreviewed
   versions fail closed.
+- Reviewed binary fallback now works for server builds without their own
+  artifact entry, Linux cache hits verify the extracted executable against the
+  reviewed archive, and replay-backed CI can no longer pass by silently
+  skipping its ClickHouse tests.
+- Streaming queries and server error responses now have client-side byte
+  ceilings, timed-out native queries close their socket, app-tool forwarding
+  has a deadline, and local ClickHouse subprocess output is bounded.
+- Comment-prefixed admin and system statements are classified consistently,
+  including for IPv6 replicas. Native read failures fall back to HTTP again
+  (only reads route natively, so a replay is harmless); mutating statements
+  still never route natively.
+- Exports run under their own generous deadline with a stall detector instead
+  of the general five-minute HTTP request deadline, so large exports no longer
+  abort mid-stream.
 
 ## v0.1.33 - 2026-08-20
 

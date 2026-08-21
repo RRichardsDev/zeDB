@@ -265,6 +265,9 @@ impl<'a> Reader<'a> {
         let mut out: u64 = 0;
         for shift in (0..64).step_by(7) {
             let b = self.u8()?;
+            if shift == 63 && b > 1 {
+                return Err(ChError::Decode("varuint overflows u64".into()));
+            }
             out |= u64::from(b & 0x7f) << shift;
             if b & 0x80 == 0 {
                 return Ok(out);
@@ -565,6 +568,16 @@ mod tests {
             pos: usize::MAX,
         };
         assert!(matches!(reader.take(1), Err(ChError::Decode(_))));
+    }
+
+    #[test]
+    fn overflowing_varuint_is_rejected() {
+        let bytes = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02];
+        let mut reader = Reader {
+            buf: &bytes,
+            pos: 0,
+        };
+        assert!(reader.varuint().is_err());
     }
 
     #[test]
