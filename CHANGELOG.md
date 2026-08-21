@@ -7,136 +7,92 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.34 - 2026-08-21
 
-- A successful push closes the commit panel with a green "Pushed" flash
-  instead of leaving an armed Push button behind; a failed push still
-  keeps the panel open with git's own words.
-- `zedb pin` and the commands that need the pinned binary agree again
-  when the server's exact version has no reviewed artifact: pin records
-  the trusted fallback it resolved, and check/regen/verify now honor
-  that record instead of demanding a pin that pin already did.
+The security release: a boundary-by-boundary hardening review of every
+crate, plus the fixes its hands-on shakedown surfaced. Written by the
+review, verified by use.
+
+### Fixed by the shakedown
+
+- Fleet verify, chain checks, and regen no longer re-download the
+  ~850 MB pinned ClickHouse on every run on macOS (the OS rewrites
+  downloaded binaries on first execution, which made the hardened cache
+  check reject its own cache); the cache now verifies a digest recorded
+  after that first run, and works offline. Downloads are still checked
+  against the reviewed trust manifest.
+- `zedb pin` and check/regen/verify agree again when the server's exact
+  version has no reviewed artifact: the commands honor the trusted
+  fallback pin resolved instead of demanding a pin that just happened.
+- The fleet refresh re-reads the migration checkout as well as database
+  state, so a pulled commit or hand-written migration shows up without
+  reopening the repo; a changed chain invalidates the last checks
+  verdict.
 - The agent's highlight tool no longer claims to have flashed a control
-  that was not on screen: pointing at a fleet toolbar control now opens
-  the fleet view (narrated in the thread), and pointing at a
-  per-database control with no database selected is refused with a hint
-  instead of silently doing nothing.
-- "Check for Updates" answers "No newer release found" with a green,
-  self-clearing status flash instead of the easy-to-miss neutral tone.
-- The fleet refresh now re-reads the migration checkout as well as
-  database state, so a pulled commit or hand-written migration shows up
-  without reopening the repo; a changed chain also invalidates the last
-  checks verdict.
-- Fleet verify, chain checks, and regen no longer re-download the pinned
-  ClickHouse binary on every run on macOS. The OS rewrites downloaded
-  binaries on their first execution, which made the hardened cache check
-  reject its own cache; the cache now verifies against a digest recorded
-  after that first run, while downloads are still verified against the
-  reviewed trust manifest.
-- Desktop trust boundaries now fail closed: updates require the exact Apple
-  bundle identity and signing team with bounded archives, managed clones cannot
-  collide by repository basename, mutation confirmations are tied to the
-  reviewed connection and repository or table, Cloud password rotation cannot
-  escape its form, codec trials never pre-drop colliding tables, commit staging
-  uses exact repo paths, and export cancellation removes only its own partial
-  file.
-- Settings sync is secure by default: a pulled payload may add connections but
-  never deletes, reorders, or changes an existing local connection (the name is
-  its Keychain key). New synced connections are validated, read-only,
-  production-marked, and carry no remote driver or Cloud authority until edited
-  locally. Per-connection repo paths and the fleet cluster also stay local.
-- Git operations against a migration or settings repo no longer run programs
-  the repo's own config could name through hooks, fsmonitor, signing, filters,
-  credential helpers, proxies, or executable transports. Effective fetch and
-  push destinations are checked before credentials are enabled, askpass checks
-  Git's actual prompt host, and helper process groups have hard deadlines.
-- Opening a migration repository is now bounded against hostile content:
-  symlinks and special files are not followed, the migrations walk is
-  depth-limited, and files are bounded on the same descriptor that is read.
-- Query history, saved tabs, the launch session, saved connections, and
-  settings are read with byte limits and written through unique, no-follow,
-  atomic 0600 files in repaired 0700 directories. Git diagnostics are private,
-  bounded, and never log remote credentials, queries, or stderr content.
-- Legacy Keychain token accounts can no longer be read or deleted through a
-  colliding connection name before their one-time namespace migration runs.
-- A malformed decimal value from a server can no longer crash the results grid.
-- Hyphenated cluster names work everywhere again: where zeDB interpolates the
-  cluster into tracking DDL it is backtick-quoted instead of rejected, and
-  read-only commands no longer validate a cluster name they never use.
-- Agent streaming is stable under load: a busy UI now slows the agent's pipe
-  instead of tearing down the connection, permission answers and stderr lines
-  are delivered instead of dropped, and a closed connection always reaches the
-  pane (no more permanent spinner on a dead process).
-- Permission cards answer the exact card clicked, cancelling a turn marks its
-  pending cards cancelled, and a non-ASCII permission preview no longer
-  crashes the app.
-- MCP children of a reused agent process keep their bridge capability working
-  across new threads, and the agent's drift tool gets a deadline that fits a
-  cold binary download instead of failing at 30 seconds.
-- The import-tracking dry run now says it checks no preconditions instead of
-  implying the real run would succeed.
-- CLI database and template secrets now come from bounded files instead of
-  process arguments, ambiguous option combinations fail closed, and status and
-  verify use structurally read-only ClickHouse sessions.
-- CLI dry runs no longer create or update tracking state, SQL-facing names are
-  validated or quoted, and human output escapes terminal control characters.
-- Repository imports now reject source symlinks, unsafe version text,
-  pre-existing or overlapping destinations, while migration scaffolds reject
-  multiline descriptions that could escape their SQL comment.
-- Built-in ACP adapters now run exact reviewed npm versions instead of mutable
-  latest releases, and settings sync no longer imports custom agent commands,
-  remembered agent selection, or persistent permission grants between machines.
-- Agent permission requests are bound to the active ACP session and their exact
-  offered choices. Cancelling a turn cancels its pending approvals, and zeDB no
-  longer reuses approvals based on agent-supplied display titles.
-- Agent protocol traffic, queues, and waits now have safety limits. The local
-  app bridge requires a random capability and private filesystem modes, while
-  transcripts and diagnostics are private, bounded, and avoid raw tool data.
-- ClickHouse passwords no longer cross the ACP session or enter an
-  agent-spawned process. Connection-dependent agent tools execute inside zeDB
-  through a bounded read-only bridge while preserving the same MCP interface.
-- ClickHouse connections no longer send credentials to `/ping` or follow HTTP
-  redirects, and URLs that embed credentials are rejected. Plain `http://`
-  endpoints remain supported for clusters without TLS; the native transport
-  still tries TLS first and offers plaintext only when the endpoint itself is
-  explicit plain HTTP.
-- ClickHouse binary downloads are streamed through strict compressed and
-  expanded size limits, checked against GitHub release digests before use, and
-  extracted without invoking a system archive tool or following archive links.
-- Migration comments, string literals, and `DEFINER` clauses can no longer
-  select admin credentials; elevated routing is limited to explicit
-  allowlisted statement forms.
-- Guarded agent queries and query-grid distinct-value probes now enforce
-  ClickHouse result-byte limits. Agent responses stream through a client-side
-  ceiling, and MCP request and serialized output frames are capped.
-- Regeneration rejects unsafe scope names and refuses symlinks beneath
-  `current-state`, preventing generated writes or stale-file cleanup from
-  escaping the repository tree.
-- ClickHouse response decoding now rejects oversized wire lengths, excessive
-  collections or nesting, and invalid type parameters before large allocation
-  or unsafe arithmetic.
-- ClickHouse HTTP and native operations now have client-side deadlines, and a
-  stalled long-lived native stream closes its underlying connection.
-- Migration tracking and audit logs no longer retain resolved secret values or
-  credential-bearing endpoint details, and native pool keys no longer contain
-  plaintext passwords or setting values.
-- Downloaded and cached ClickHouse executables now require a matching
-  source-controlled zeDB artifact hash before any process launch; unreviewed
-  versions fail closed.
-- Reviewed binary fallback now works for server builds without their own
-  artifact entry, Linux cache hits verify the extracted executable against the
-  reviewed archive, and replay-backed CI can no longer pass by silently
-  skipping its ClickHouse tests.
-- Streaming queries and server error responses now have client-side byte
-  ceilings, timed-out native queries close their socket, app-tool forwarding
-  has a deadline, and local ClickHouse subprocess output is bounded.
-- Comment-prefixed admin and system statements are classified consistently,
-  including for IPv6 replicas. Native read failures fall back to HTTP again
-  (only reads route natively, so a replay is harmless); mutating statements
-  still never route natively.
-- Exports run under their own generous deadline with a stall detector instead
-  of the general five-minute HTTP request deadline, so large exports no longer
-  abort mid-stream.
+  that was not on screen: fleet toolbar controls bring the fleet view
+  up with them (narrated), and a per-database control with no database
+  selected is refused with a hint.
+- A successful push closes the commit panel with a green "Pushed"
+  flash; a failed push keeps it open with git's own words.
+- "Check for Updates" answers "up to date" with a green, self-clearing
+  flash instead of the easy-to-miss neutral tone.
+
+### The app fails closed
+
+- Updates require the exact Apple bundle identity and signing team with
+  bounded archives; managed clones cannot collide by repository
+  basename; mutation confirmations are tied to the reviewed connection
+  and repository or table; Cloud password rotation cannot escape its
+  form; codec trials never pre-drop colliding tables; commit staging
+  uses exact repo paths; export cancellation removes only its own
+  partial file.
+- Settings sync is secure by default: a pulled payload may add
+  connections but never deletes, reorders, or changes an existing local
+  one. New synced connections arrive validated, read-only, and
+  production-marked, with no remote driver or Cloud authority until
+  edited locally.
+- Git against a migration or settings repo never runs programs the
+  repo's own config names (hooks, fsmonitor, signing, filters,
+  credential helpers, proxies, executable transports); destinations are
+  checked before credentials are enabled, and askpass validates Git's
+  actual prompt host.
+- Local files are bounded and private: repos open without following
+  symlinks or special files; history, sessions, connections, and
+  settings read with byte limits and write through atomic 0600 files;
+  diagnostics never log credentials or queries; legacy Keychain
+  accounts cannot be reached through a colliding connection name.
+
+### The wire fails closed
+
+- Connections never send credentials to `/ping`, never follow
+  redirects, and reject credential-bearing URLs; plain `http://` stays
+  supported for clusters without TLS.
+- Response decoding, streaming queries, exports, and error bodies all
+  have byte ceilings and deadlines; a stalled native stream closes its
+  socket; exports get their own generous deadline with a stall detector
+  so large exports no longer abort mid-stream.
+- ClickHouse binaries download through strict size limits and reviewed
+  digests, and never launch unreviewed; extraction never invokes a
+  system archive tool or follows archive links.
+- Migration comments, string literals, and `DEFINER` clauses cannot
+  select admin credentials; tracking and audit logs retain no secrets;
+  hyphenated cluster names work everywhere again.
+
+### The agent and CLI fail closed
+
+- Agent tools reach ClickHouse only through a bounded read-only bridge
+  inside zeDB; passwords never cross the ACP session or enter an
+  agent-spawned process. Protocol traffic, queues, and result sizes are
+  capped, and built-in adapters run exact reviewed versions.
+- Permission requests bind to the active session and their exact
+  offered choices; cancelling a turn cancels its approvals; permission
+  cards answer the card clicked. Agent streaming survives a busy UI,
+  and a dead agent process reaches the pane instead of spinning
+  forever.
+- CLI secrets come from bounded files rather than process arguments;
+  status and verify run structurally read-only sessions; dry runs write
+  no tracking state; output escapes terminal control characters;
+  imports and scaffolds reject hostile paths and text.
 
 ## v0.1.33 - 2026-08-20
 
