@@ -9,6 +9,11 @@ GitHub release notes.
 
 ## Unreleased
 
+- The agent's highlight tool no longer claims to have flashed a control
+  that was not on screen: pointing at a fleet toolbar control now opens
+  the fleet view (narrated in the thread), and pointing at a
+  per-database control with no database selected is refused with a hint
+  instead of silently doing nothing.
 - "Check for Updates" answers "No newer release found" with a green,
   self-clearing status flash instead of the easy-to-miss neutral tone.
 - The fleet refresh now re-reads the migration checkout as well as

@@ -17,6 +17,9 @@ they leave the list when shipped.
   (show fleet, and say so) or answer honestly that it is not on
   screen and what would put it there (seen 2026-08-21, prompt "show
   me where I'd roll back a migration" with no database selected)
+  -> fixed (unreleased): toolbar controls bring the fleet view with
+  them (narrated); detail-panel controls refuse honestly with the
+  navigation hint when no database is selected
 - while a storage suggestion is applying, the advice button should
   show a loading state once the mutation runs longer than ~2s; today
   there is no feedback on the button itself (seen 2026-08-21 applying

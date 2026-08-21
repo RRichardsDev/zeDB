@@ -65,6 +65,9 @@ fn truncate_for_disk(text: &str) -> String {
     format!("{}...", &text[..end])
 }
 
+#[cfg(test)]
+mod gpui_tests;
+
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json, no_register)]
 pub struct StartAgentThread {

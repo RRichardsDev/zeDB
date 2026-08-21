@@ -445,11 +445,34 @@ impl Workspace {
                 if !CONTROLS.contains(&control.as_str()) {
                     return (format!("unknown control: {control}"), true);
                 }
+                // A highlight nothing renders is an invisible UI change,
+                // which the bridge must never make: refuse honestly when
+                // the control is not on screen and cannot be brought
+                // there without choosing for the user.
+                if control == "rollback" && self.fleet.selected.is_none() {
+                    return (
+                        "rollback is a per-database control on the fleet detail panel and no \
+                         database is selected; navigate to a database first (view=fleet with a \
+                         database), then highlight again"
+                            .into(),
+                        true,
+                    );
+                }
+                // The remaining controls live in the fleet view itself;
+                // pointing at one means bringing it on screen, visibly.
+                if !self.show_fleet {
+                    self.show_fleet = true;
+                    self.show_query_editor = false;
+                    narrate(self, "agent: opened fleet view".into(), cx);
+                }
                 self.control_highlight = Some(control.clone());
                 self.control_highlight_generation += 1;
                 let generation = self.control_highlight_generation;
+                let timer = cx
+                    .background_executor()
+                    .timer(std::time::Duration::from_secs(4));
                 cx.spawn(async move |this, cx| {
-                    gpui::Timer::after(std::time::Duration::from_secs(4)).await;
+                    timer.await;
                     this.update(cx, |this, cx| {
                         if this.control_highlight_generation == generation {
                             this.control_highlight = None;

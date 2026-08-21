@@ -70,6 +70,7 @@ asks where something is; never as a reflex on seeing a failure.
 - **No invisible UI changes.** Every bridge action that touches the
   window (navigate, propose_*, highlight_control) is narrated in the
   thread transcript.
+  A signpost that nothing renders counts as invisible: `highlight_control` refuses (with a navigation hint) when the target control is not on screen, and brings the fleet view up, narrated, for its toolbar controls.
 
 ## Session mechanics (for maintainers)
 
