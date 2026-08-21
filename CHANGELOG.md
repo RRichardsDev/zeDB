@@ -9,6 +9,9 @@ GitHub release notes.
 
 ## Unreleased
 
+- A successful push closes the commit panel with a green "Pushed" flash
+  instead of leaving an armed Push button behind; a failed push still
+  keeps the panel open with git's own words.
 - `zedb pin` and the commands that need the pinned binary agree again
   when the server's exact version has no reviewed artifact: pin records
   the trusted fallback it resolved, and check/regen/verify now honor

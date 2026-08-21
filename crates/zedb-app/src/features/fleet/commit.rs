@@ -130,35 +130,47 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = handle.await;
             this.update(cx, |this, cx| {
-                let root = this.fleet.repo.as_ref().map(|repo| repo.root.clone());
-                let Some(commit) = &mut this.commit else {
-                    return;
+                let result = match result {
+                    Ok(Ok(outcome)) => outcome,
+                    Ok(Err(error)) | Err(error) => Err(error.to_string()),
                 };
-                if commit.generation != generation {
-                    return;
-                }
-                commit.pushing = false;
-                commit.push_result = Some(
-                    match result {
-                        Ok(Ok(outcome)) => outcome,
-                        Ok(Err(error)) | Err(error) => Err(error.to_string()),
-                    }
-                    .map(|output| {
-                        if output.is_empty() {
-                            "pushed".into()
-                        } else {
-                            output
-                        }
-                    }),
-                );
-                if let Some(root) = root {
-                    this.fleet.git = zedb_core::git::read_git_status(&root);
-                }
-                cx.notify();
+                this.commit_push_finished(generation, result, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    /// A finished push resolves the panel: success closes it (the work
+    /// is done; a lingering Push button invites double-pushing) with a
+    /// green status flash, failure keeps it open with git's words.
+    pub(crate) fn commit_push_finished(
+        &mut self,
+        generation: u64,
+        result: Result<String, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let root = self.fleet.repo.as_ref().map(|repo| repo.root.clone());
+        let Some(commit) = &mut self.commit else {
+            return;
+        };
+        if commit.generation != generation {
+            return;
+        }
+        commit.pushing = false;
+        match result {
+            Ok(_) => {
+                self.commit = None;
+                self.flash_success("Pushed", cx);
+            }
+            Err(error) => {
+                commit.push_result = Some(Err(error));
+            }
+        }
+        if let Some(root) = root {
+            self.fleet.git = zedb_core::git::read_git_status(&root);
+        }
+        cx.notify();
     }
 
     pub(crate) fn commit_panel(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {

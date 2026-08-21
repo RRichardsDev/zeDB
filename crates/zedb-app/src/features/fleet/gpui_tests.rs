@@ -3,7 +3,7 @@
 //! notify flow the app runs. The pure ladder rules are unit-tested in
 //! view.rs; these tests prove the wiring around them.
 
-use gpui::{Focusable as _, TestAppContext};
+use gpui::{prelude::*, Focusable as _, TestAppContext};
 
 use super::view::{FleetAction, FleetRow};
 use crate::test_harness;
@@ -214,6 +214,52 @@ fn refresh_rereads_the_repo_chain_from_disk(cx: &mut TestAppContext) {
             !workspace.checks_clean,
             "a changed chain invalidates the last checks verdict"
         );
+    });
+}
+
+/// A successful push closes the commit panel (a lingering Push button
+/// invites double-pushing) with a green flash; a failed push keeps the
+/// panel open with git's words.
+#[gpui::test]
+fn push_outcome_resolves_the_commit_panel(cx: &mut TestAppContext) {
+    use gpui_component::input::InputState;
+
+    let (workspace, cx) = test_harness::workspace(cx);
+    let make_commit = |window: &mut gpui::Window, cx: &mut gpui::Context<crate::Workspace>| {
+        crate::commit::CommitState {
+            message: cx.new(|cx| InputState::new(window, cx)),
+            include: vec!["migrations/2026/08/00000/upgrade.sql".into()],
+            others: Vec::new(),
+            committed: Some("abc1234".into()),
+            pushing: true,
+            push_result: None,
+            error: None,
+            generation: 7,
+        }
+    };
+
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.commit = Some(make_commit(window, cx));
+        workspace.commit_push_finished(7, Ok("pushed".into()), cx);
+        assert!(workspace.commit.is_none(), "success closes the panel");
+        assert_eq!(workspace.notice.as_deref(), Some("Pushed"));
+        assert!(workspace.notice_success);
+    });
+
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.commit = Some(make_commit(window, cx));
+        workspace.commit_push_finished(7, Err("remote rejected".into()), cx);
+        let commit = workspace.commit.as_ref().expect("failure keeps the panel");
+        assert!(!commit.pushing);
+        assert_eq!(
+            commit.push_result,
+            Some(Err("remote rejected".into())),
+            "git's words are shown verbatim"
+        );
+
+        // A stale completion (superseded generation) changes nothing.
+        workspace.commit_push_finished(6, Ok("pushed".into()), cx);
+        assert!(workspace.commit.is_some());
     });
 }
 
