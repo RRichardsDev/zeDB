@@ -9,6 +9,12 @@ GitHub release notes.
 
 ## Unreleased
 
+- Fleet verify, chain checks, and regen no longer re-download the pinned
+  ClickHouse binary on every run on macOS. The OS rewrites downloaded
+  binaries on their first execution, which made the hardened cache check
+  reject its own cache; the cache now verifies against a digest recorded
+  after that first run, while downloads are still verified against the
+  reviewed trust manifest.
 - Desktop trust boundaries now fail closed: updates require the exact Apple
   bundle identity and signing team with bounded archives, managed clones cannot
   collide by repository basename, mutation confirmations are tied to the

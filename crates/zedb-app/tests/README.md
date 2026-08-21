@@ -33,3 +33,9 @@ endpoints fail in microseconds on the real tokio runtime, so
 `action_running` alone races the completion. The remaining untestable
 seams (Cloud/GitHub HTTP, Keychain, simulated time, pixels) are the
 Phase 15 backlog (`docs/wip/PHASE-15.md`).
+
+The end-to-end tier (a real ephemeral ClickHouse via
+`zedb-ch/test-support`) is opt-in so the default suite stays fast and
+deterministic: `ZEDB_E2E=1 cargo test -p zedb-app --lib` runs it from
+the pin cache; `ZEDB_E2E_DOWNLOAD=1` additionally allows repairing an
+empty cache through the verified download path.

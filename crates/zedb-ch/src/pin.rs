@@ -128,10 +128,10 @@ fn verify_cached_binary(path: &Path, version: &str) -> bool {
     let Some(trusted) = trusted_artifact(version, None, &asset_name) else {
         return false;
     };
-    let Some(expected) = parse_sha256(&trusted.sha256) else {
-        return false;
-    };
     let integrity_matches = if asset_name.ends_with(".tgz") {
+        let Some(expected) = parse_sha256(&trusted.sha256) else {
+            return false;
+        };
         let archive = artifact_path(path);
         let expected_entry =
             PathBuf::from(format!("clickhouse-common-static-{version}")).join("usr/bin/clickhouse");
@@ -140,9 +140,25 @@ fn verify_cached_binary(path: &Path, version: &str) -> bool {
                 .and_then(|archived| sha256_file(path).map(|cached| archived == cached))
                 .unwrap_or(false)
     } else {
-        sha256_file(path).is_ok_and(|actual| actual == expected)
+        // macOS rewrites adhoc linker-signed binaries in place on
+        // first execution (signature replacement plus provenance
+        // tracking), so the manifest digest matches the verified
+        // download stream but never the file at rest. The continuity
+        // digest ensure_exact_binary records after that first run is
+        // the at-rest truth: it preserves corruption and substitution
+        // detection (still checked before anything executes) without
+        // invalidating the cache on every probe.
+        recorded_digest(path)
+            .is_some_and(|recorded| sha256_file(path).is_ok_and(|actual| actual == recorded))
     };
     integrity_matches && binary_reports_version(path, version)
+}
+
+/// The continuity digest recorded beside the binary after its first
+/// execution; None when absent or malformed.
+fn recorded_digest(binary: &Path) -> Option<[u8; 32]> {
+    let text = std::fs::read_to_string(digest_path(binary)).ok()?;
+    parse_sha256(text.trim())
 }
 
 fn valid_version(version: &str) -> bool {
@@ -614,7 +630,7 @@ async fn ensure_exact_binary(
         downloaded = Some((asset.sha256, archive));
         break;
     }
-    let Some((downloaded_digest, verified_archive)) = downloaded else {
+    let Some((_, verified_archive)) = downloaded else {
         return Err(PinError::DownloadFailed {
             version: version.into(),
             tried,
@@ -635,12 +651,6 @@ async fn ensure_exact_binary(
             return Err(PinError::Io(error.error));
         }
     }
-    if let Err(error) = persist_digest(&target, &downloaded_digest) {
-        let _ = std::fs::remove_file(&target);
-        let _ = std::fs::remove_file(artifact_path(&target));
-        return Err(error);
-    }
-
     // This is the first execution. Artifact integrity has already been checked.
     report(PinPhase::Verifying);
     let actual = binary_version(&target).unwrap_or_default();
@@ -652,6 +662,23 @@ async fn ensure_exact_binary(
             expected: version.into(),
             actual,
         });
+    }
+    // Hash the file only after that run: macOS rewrites adhoc
+    // linker-signed binaries in place on first execution, and this
+    // at-rest digest is what future cache probes verify against (the
+    // trust manifest already anchored the download stream).
+    let at_rest = match sha256_file(&target) {
+        Ok(digest) => digest,
+        Err(error) => {
+            let _ = std::fs::remove_file(&target);
+            let _ = std::fs::remove_file(artifact_path(&target));
+            return Err(error.into());
+        }
+    };
+    if let Err(error) = persist_digest(&target, &at_rest) {
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_file(artifact_path(&target));
+        return Err(error);
     }
     Ok(target)
 }
@@ -960,6 +987,48 @@ mod tests {
             validate_trusted_metadata(trusted, &substituted),
             Err(PinError::IntegrityMismatch { .. })
         ));
+    }
+
+    /// The at-rest file is governed by the continuity digest recorded
+    /// after the first execution, because macOS rewrites adhoc
+    /// linker-signed binaries in place on that run: no record rejects,
+    /// a matching record accepts, and post-record tampering rejects
+    /// before anything executes.
+    #[cfg(unix)]
+    #[test]
+    fn continuity_digest_governs_the_cache_between_downloads() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("clickhouse");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\necho 'ClickHouse local version 26.3.12.3.'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // No recorded digest: rejected (and, per the sibling test,
+        // rejected before execution).
+        assert!(!verify_cached_binary(&binary, "26.3.12.3"));
+
+        // As ensure_exact_binary records it after the first run.
+        persist_digest(&binary, &sha256_file(&binary).unwrap()).unwrap();
+        assert!(verify_cached_binary(&binary, "26.3.12.3"));
+
+        // Tampering after the record is caught before execution.
+        let marker = directory.path().join("executed");
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\ntouch '{}'\necho 'ClickHouse local version 26.3.12.3.'\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!verify_cached_binary(&binary, "26.3.12.3"));
+        assert!(!marker.exists(), "tampered payload was executed");
     }
 
     #[cfg(unix)]

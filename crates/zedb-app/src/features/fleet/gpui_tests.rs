@@ -237,12 +237,18 @@ fn modal_buttons_click_through_their_rendered_bounds(cx: &mut TestAppContext) {
 /// End to end against a real ClickHouse: zedb-ch's EphemeralServer (the
 /// lifecycle-check fixture) running a trust-verified binary from the
 /// pin cache. The confirmed upgrade must actually apply the fixture
-/// migration. Skips when no binary is cached, so nothing downloads
-/// during a normal test run.
+/// migration. Opt-in via ZEDB_E2E=1 (uses the cache) or
+/// ZEDB_E2E_DOWNLOAD=1 (may also repair the cache through a verified
+/// download): a real server boot and an 850 MB hash have no place in
+/// the default seconds-fast deterministic suite.
 #[gpui::test]
 fn confirmed_upgrade_applies_migrations_to_a_real_server(cx: &mut TestAppContext) {
     use zedb_ch::test_support::{e2e_binary, http_query};
 
+    if std::env::var_os("ZEDB_E2E").is_none() && std::env::var_os("ZEDB_E2E_DOWNLOAD").is_none() {
+        eprintln!("skipping: end-to-end tier is opt-in (ZEDB_E2E=1, or ZEDB_E2E_DOWNLOAD=1 to allow a verified download)");
+        return;
+    }
     let Some(binary) = e2e_binary() else {
         eprintln!(
             "skipping: no trusted cached ClickHouse binary \

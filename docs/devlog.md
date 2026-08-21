@@ -1,3 +1,22 @@
+## 2026-08-21: pin-cache continuity digest
+
+- The Aug 20 hardening made `cached_binary` recompute the at-rest file
+  against the trust manifest; on macOS that can never pass, because the
+  OS rewrites adhoc linker-signed binaries in place on first execution
+  (proven: the 26.3.12.3 asset hashes f69ad394... on download and
+  8c552906... after one `local --version`). Every fleet
+  verify/check/regen was silently deleting and re-downloading ~850 MB.
+- Fix: `ensure_exact_binary` now records the binary's at-rest digest
+  after its first (in-flow) execution, and `verify_cached_binary`
+  checks continuity against that record instead of recomputing the
+  manifest digest. The manifest still anchors the download stream
+  itself, unknown payloads are still rejected before anything
+  executes, and the Linux tarball path (where the OS does not rewrite
+  binaries) keeps its manifest-anchored archive check unchanged.
+- Found because the user noticed fleet checks "feel slower" after the
+  security review; the window-test session's e2e tier had already
+  isolated the mechanism.
+
 ## 2026-08-21: mouse-driven window tests
 
 - Window tests can now click real elements: view code tags targets with
