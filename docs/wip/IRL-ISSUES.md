@@ -3,6 +3,15 @@
 Raw inbox. Items graduate into a phase doc and gain a reference here;
 they leave the list when shipped.
 
+- the large-table apply confirmation says "rewrites the whole table
+  (about 1.0 GB)" for a single-column codec change that only mutates
+  that column (~20 MB); the number should size the actual rewrite
+  (truthful labels) or users learn to ignore it (seen 2026-08-21 on
+  tenant_01.events, at-column codec advice)
+- while a storage suggestion is applying, the advice button should
+  show a loading state once the mutation runs longer than ~2s; today
+  there is no feedback on the button itself (seen 2026-08-21 applying
+  the at-column codec on a 1 GB table)
 - ai chat drag doesnt  play nice with highlighting and scrolling
   -> shipped 2026-08-16 (phase doc retired)
 - does ch cloud provide any oauth login which we could use from inside the app. It still feels super janky to set one up. And feel like its slapped onto the other way of setting up the clusters. This should feel more integrated.
