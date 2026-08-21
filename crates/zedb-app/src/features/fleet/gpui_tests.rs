@@ -187,6 +187,36 @@ fn missing_rollback_demands_the_irreversible_phrase(cx: &mut TestAppContext) {
     });
 }
 
+/// Refresh reflects the checkout, not just database state: a migration
+/// that landed on disk outside the app (a pull, a hand edit) appears
+/// in the chain, and a passed-checks verdict does not survive it.
+#[gpui::test]
+fn refresh_rereads_the_repo_chain_from_disk(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    let (repo_dir, repo) = test_harness::migration_repo();
+
+    workspace.update(cx, |workspace, cx| {
+        workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
+        workspace.fleet.repo = Some(repo);
+        workspace.checks_clean = true;
+        assert_eq!(workspace.fleet.repo.as_ref().unwrap().migrations.len(), 0);
+
+        // A migration lands in the checkout behind the app's back.
+        test_harness::write_migration(repo_dir.path(), 0, Some("clean"));
+
+        workspace.fleet_refresh(cx);
+        assert_eq!(
+            workspace.fleet.repo.as_ref().unwrap().migrations.len(),
+            1,
+            "refresh re-reads the chain from disk"
+        );
+        assert!(
+            !workspace.checks_clean,
+            "a changed chain invalidates the last checks verdict"
+        );
+    });
+}
+
 /// Mouse-driven, through rendered bounds: Cancel clicks away a
 /// pending action; the Confirm button is inert while the ladder is
 /// unsatisfied (its click handler is only attached when confirmable)

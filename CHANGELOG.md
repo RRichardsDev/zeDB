@@ -9,6 +9,10 @@ GitHub release notes.
 
 ## Unreleased
 
+- The fleet refresh now re-reads the migration checkout as well as
+  database state, so a pulled commit or hand-written migration shows up
+  without reopening the repo; a changed chain also invalidates the last
+  checks verdict.
 - Fleet verify, chain checks, and regen no longer re-download the pinned
   ClickHouse binary on every run on macOS. The OS rewrites downloaded
   binaries on their first execution, which made the hardened cache check

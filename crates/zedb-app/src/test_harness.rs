@@ -72,31 +72,36 @@ pub(crate) fn migration_repo_with(
     .expect("write zedb.toml");
     std::fs::create_dir_all(dir.path().join("migrations")).expect("migrations dir");
     for (number, rollback) in migrations {
-        let directory = dir
-            .path()
-            .join("migrations")
-            .join("2026")
-            .join("08")
-            .join(format!("{number:05}"));
-        std::fs::create_dir_all(&directory).expect("migration dir");
-        std::fs::write(
-            directory.join("upgrade.sql"),
-            format!(
-                "CREATE TABLE ${{db}}.fixture_{number:05} (id UInt64) \
-                 ENGINE = MergeTree ORDER BY id;\n"
-            ),
-        )
-        .expect("write upgrade.sql");
-        if let Some(class) = rollback {
-            std::fs::write(
-                directory.join("rollback.sql"),
-                format!("-- rollback-class: {class}\nDROP TABLE ${{db}}.fixture_{number:05};\n"),
-            )
-            .expect("write rollback.sql");
-        }
+        write_migration(dir.path(), *number, *rollback);
     }
     let repo = zedb_core::repo::MigrationRepo::open_root(dir.path()).expect("open fixture repo");
     (dir, std::sync::Arc::new(repo))
+}
+
+/// Write one fixture migration into an existing repo root, dated
+/// 2026/08, as a pulled commit or hand edit would leave it on disk.
+pub(crate) fn write_migration(root: &std::path::Path, number: u32, rollback: Option<&str>) {
+    let directory = root
+        .join("migrations")
+        .join("2026")
+        .join("08")
+        .join(format!("{number:05}"));
+    std::fs::create_dir_all(&directory).expect("migration dir");
+    std::fs::write(
+        directory.join("upgrade.sql"),
+        format!(
+            "CREATE TABLE ${{db}}.fixture_{number:05} (id UInt64) \
+             ENGINE = MergeTree ORDER BY id;\n"
+        ),
+    )
+    .expect("write upgrade.sql");
+    if let Some(class) = rollback {
+        std::fs::write(
+            directory.join("rollback.sql"),
+            format!("-- rollback-class: {class}\nDROP TABLE ${{db}}.fixture_{number:05};\n"),
+        )
+        .expect("write rollback.sql");
+    }
 }
 
 /// Port 1 is root-only to bind, so nothing listens there: if a test
