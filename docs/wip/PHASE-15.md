@@ -32,11 +32,15 @@ churn, cleaner seam). Decide when the first test actually needs it.
 
 ## 3. Simulated time
 
-gpui's test clock (`advance_clock`) should make debounces and timers
-deterministic: the notice flash (1 s), focus-recheck debounce (30 s),
-health/update polls (2-5 min), control-highlight decay. Unexplored;
-likely just works for pure gpui `Timer` waits. Flows that hop through
-the real tokio runtime stay wall-clock (`wait_for`), by design.
+Proven working (2026-08-21, the success-flash tests): gpui's test
+clock (`advance_clock`) drives timers deterministically, with one
+trap: `Timer::after` runs on the wall clock and ignores the simulated
+one; use `cx.background_executor().timer(...)` instead (identical in
+the app). The remaining work is migrating the other timed behaviors
+(notice flashes, focus-recheck debounce, polls, control-highlight
+decay) off `Timer::after` as tests come to need them. Flows that hop
+through the real tokio runtime stay wall-clock (`wait_for`), by
+design.
 
 ## 4. Pixel output
 

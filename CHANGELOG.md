@@ -9,6 +9,8 @@ GitHub release notes.
 
 ## Unreleased
 
+- "Check for Updates" answers "No newer release found" with a green,
+  self-clearing status flash instead of the easy-to-miss neutral tone.
 - The fleet refresh now re-reads the migration checkout as well as
   database state, so a pulled commit or hand-written migration shows up
   without reopening the repo; a changed chain also invalidates the last

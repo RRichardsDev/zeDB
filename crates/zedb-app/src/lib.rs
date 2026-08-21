@@ -41,6 +41,9 @@ mod schema_intelligence_ui;
 mod settings_sync;
 #[path = "shell/chrome.rs"]
 mod shell_chrome;
+#[cfg(test)]
+#[path = "shell/gpui_tests.rs"]
+mod shell_gpui_tests;
 #[path = "shell/navigation.rs"]
 mod shell_navigation;
 #[path = "shell/overlays.rs"]
@@ -379,6 +382,9 @@ struct Workspace {
     schema: SchemaState,
     notice: Option<String>,
     notice_warning: bool,
+    /// The current notice is a success flash (green, self-clearing);
+    /// set only by `flash_success`.
+    notice_success: bool,
     notice_flash_id: u64,
     update_available: Option<updates::UpdateInfo>,
     update_phase: UpdatePhase,
@@ -663,6 +669,7 @@ impl Workspace {
             schema: SchemaState::new(schema_filter, schema_provider),
             notice,
             notice_warning: false,
+            notice_success: false,
             notice_flash_id: 0,
             update_available: None,
             update_phase: UpdatePhase::Available,
