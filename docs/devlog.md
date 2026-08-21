@@ -1,3 +1,24 @@
+## 2026-08-21: UI regression suites
+
+- The gpui window-test framework grew into a regression net across the
+  main surfaces, 23 tests in all. New suites: connections form (tab-key
+  focus cycling, typed input, validation, duplicate names, sandboxed
+  save, cancel), command palette (cmd-shift-p chord, typed filtering,
+  arrow selection with wraparound, enter runs, escape closes), query
+  tabs (add/close, the leave-the-view-on-last-close invariant across a
+  real redraw, close-others, action dispatch through the window), export
+  dialog (no-result refusal, CSV default path, clean cancel), schema
+  in-place apply (read-only diversion to a query tab, large-table
+  confirmation, stale-context refusal), and fleet structural/irreversible
+  rollback gating.
+- Harness upgrades: the window root is now a gpui_component Root as in
+  production; `ZEDB_CONFIG_DIR` points at a per-process temp dir so no
+  test can touch real config files; the keystroke interceptor moved into
+  `install_keystroke_interceptor`, shared by `new` and `new_for_test`,
+  so chords and form tab cycling run the real routing; fixtures for
+  saved connections, selected schema objects, and migration repos with
+  declared rollback classes.
+
 ## 2026-08-21: zedb-app lib/bin split
 
 - zedb-app is now a library crate plus a thin `zedb` binary whose main only

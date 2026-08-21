@@ -17,6 +17,10 @@ pub struct PaletteState {
     pub previous_focus: Option<gpui::FocusHandle>,
 }
 
+#[cfg(test)]
+#[path = "command_palette/gpui_tests.rs"]
+mod gpui_tests;
+
 impl PaletteState {
     pub fn new(cx: &mut Context<Workspace>) -> Self {
         let input = cx.new(|cx| TextInput::new("", "Type a command...", false, cx));

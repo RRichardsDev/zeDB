@@ -101,6 +101,84 @@ fn production_confirmation_gates_on_typed_phrase(cx: &mut TestAppContext) {
     });
 }
 
+/// A structural rollback on a non-production tier needs no phrase, but
+/// it does need the explicit structural acknowledgement.
+#[gpui::test]
+fn structural_rollback_requires_acknowledgement(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    let (_repo_dir, repo) = test_harness::migration_repo_with(&[(0, Some("structural"))]);
+    workspace.update(cx, |workspace, cx| {
+        workspace
+            .connection
+            .connections
+            .push(test_harness::saved_connection(
+                "stag",
+                zedb_core::EnvTier::Staging,
+                false,
+            ));
+        workspace.connection.connected = Some(test_harness::connected_cluster("stag"));
+        workspace.fleet.repo = Some(repo);
+        workspace.fleet.write_unlocked = true;
+        workspace.fleet_request_action(
+            FleetAction::Rollback {
+                database: "analytics".into(),
+                number: 0,
+            },
+            cx,
+        );
+
+        workspace.fleet_execute_action(cx);
+        assert!(
+            !workspace.fleet.action_running,
+            "unacknowledged structural work must not start"
+        );
+        assert!(workspace.fleet.pending_action.is_some());
+
+        workspace.fleet.ack_structural = true;
+        workspace.fleet_execute_action(cx);
+        assert!(workspace.fleet.action_running);
+    });
+}
+
+/// A migration with no rollback.sql is irreversible at run time: the
+/// "irreversible" phrase is demanded even off production.
+#[gpui::test]
+fn missing_rollback_demands_the_irreversible_phrase(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    let (_repo_dir, repo) = test_harness::migration_repo_with(&[(0, None)]);
+    workspace.update(cx, |workspace, cx| {
+        workspace
+            .connection
+            .connections
+            .push(test_harness::saved_connection(
+                "stag",
+                zedb_core::EnvTier::Staging,
+                false,
+            ));
+        workspace.connection.connected = Some(test_harness::connected_cluster("stag"));
+        workspace.fleet.repo = Some(repo);
+        workspace.fleet.write_unlocked = true;
+        workspace.fleet_request_action(
+            FleetAction::Rollback {
+                database: "analytics".into(),
+                number: 0,
+            },
+            cx,
+        );
+
+        workspace.fleet_execute_action(cx);
+        assert!(!workspace.fleet.action_running);
+
+        workspace
+            .fleet
+            .confirm_input
+            .clone()
+            .update(cx, |input, cx| input.set_text("irreversible", cx));
+        workspace.fleet_execute_action(cx);
+        assert!(workspace.fleet.action_running);
+    });
+}
+
 #[gpui::test]
 fn confirmation_dies_when_the_connection_changes(cx: &mut TestAppContext) {
     let (workspace, cx) = test_harness::workspace(cx);

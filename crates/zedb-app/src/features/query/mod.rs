@@ -7,6 +7,8 @@ mod execution;
 mod execution_advisor;
 #[path = "execution/controls.rs"]
 mod execution_controls;
+#[cfg(test)]
+mod gpui_tests;
 mod input;
 mod state;
 mod tabs;

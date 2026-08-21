@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod gpui_tests;
 mod loading;
 mod model;
 mod relationships;

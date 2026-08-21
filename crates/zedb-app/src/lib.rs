@@ -558,121 +558,7 @@ impl Workspace {
             cx.notify()
         })
         .detach();
-        // Vim keys must be intercepted before action dispatch: the editor's
-        // own key bindings (Enter, Backspace, arrows) run before any key-down
-        // listener and would edit the buffer behind modalkit's back.
-        let workspace = cx.entity().downgrade();
-        cx.intercept_keystrokes(move |event, window, cx| {
-            if let Some(workspace) = workspace.upgrade() {
-                workspace.update(cx, |this, cx| {
-                    // The palette chord is handled here, not via action
-                    // dispatch: key equivalents die whenever the window
-                    // has no live focus path, and this interceptor is the
-                    // one place that provably sees every keystroke.
-                    if event.keystroke.modifiers.platform
-                        && event.keystroke.modifiers.shift
-                        && event.keystroke.key == "p"
-                    {
-                        this.palette_toggle(window, cx);
-                        cx.stop_propagation();
-                        return;
-                    }
-                    // Palette keys come first: it floats above everything
-                    // and its input must not feed vim or the editors.
-                    if this.palette.open {
-                        match event.keystroke.key.as_str() {
-                            "escape" => {
-                                this.palette_close(window, cx);
-                                cx.stop_propagation();
-                            }
-                            "up" => {
-                                this.palette_move(-1, cx);
-                                cx.stop_propagation();
-                            }
-                            "down" => {
-                                this.palette_move(1, cx);
-                                cx.stop_propagation();
-                            }
-                            "enter" => {
-                                this.palette_run_selected(window, cx);
-                                cx.stop_propagation();
-                            }
-                            _ => {
-                                // The filter text changes after this
-                                // keystroke lands in the input; preview
-                                // once it has.
-                                let handle = cx.entity();
-                                cx.defer(move |cx| {
-                                    handle.update(cx, |this, cx| this.palette_theme_preview(cx));
-                                });
-                            }
-                        }
-                        return;
-                    }
-                    // cmd-i toggles the agent pane; interceptor-handled
-                    // like the palette chord so focus state can't kill it.
-                    if event.keystroke.modifiers.platform
-                        && !event.keystroke.modifiers.shift
-                        && event.keystroke.key == "i"
-                    {
-                        this.agent_toggle(window, cx);
-                        cx.stop_propagation();
-                        return;
-                    }
-                    // cmd-. forces the schema completion menu open in the
-                    // active query editor, even with no prefix typed.
-                    if event.keystroke.modifiers.platform
-                        && event.keystroke.key == "."
-                        && this.show_query_editor
-                    {
-                        if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
-                            let editor = tab.editor.clone();
-                            editor.update(cx, |editor, cx| {
-                                editor.show_completion_menu(window, cx);
-                            });
-                            cx.stop_propagation();
-                            return;
-                        }
-                    }
-                    // Tab cycles the connection form's fields.
-                    if event.keystroke.key == "tab"
-                        && this.connection.form.is_some()
-                        && !event.keystroke.modifiers.platform
-                        && !event.keystroke.modifiers.control
-                    {
-                        this.form_tab(event.keystroke.modifiers.shift, window, cx);
-                        cx.stop_propagation();
-                        return;
-                    }
-                    // cmd-n with the agent pane open: new thread with the
-                    // last-used agent.
-                    if event.keystroke.modifiers.platform
-                        && !event.keystroke.modifiers.shift
-                        && event.keystroke.key == "n"
-                        && this.agent.open
-                    {
-                        this.agent_start_last_thread(window, cx);
-                        cx.stop_propagation();
-                        return;
-                    }
-                    // Escape closes an open filter popover regardless of
-                    // where focus sits (checkbox panels hold none).
-                    if event.keystroke.key == "escape" {
-                        if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
-                            let closed = tab
-                                .result_grid
-                                .update(cx, |grid, cx| grid.close_filter_panel(cx));
-                            if closed {
-                                cx.stop_propagation();
-                                return;
-                            }
-                        }
-                    }
-                    this.vim_keystroke(&event.keystroke, window, cx)
-                });
-            }
-        })
-        .detach();
+        Self::install_keystroke_interceptor(cx);
         // Tabs from the previous session come back; first launch starts with
         // the sample query.
         let saved_session = zedb_core::take_session();
@@ -823,6 +709,7 @@ impl Workspace {
     /// window tests only.
     #[cfg(test)]
     pub(crate) fn new_for_test(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::install_keystroke_interceptor(cx);
         let schema_provider = SchemaProvider::new();
         let query_tabs = vec![Self::make_query_tab(
             1,
@@ -857,6 +744,128 @@ impl Workspace {
             self.notice = notice;
         }
         self
+    }
+
+    /// Install the window-level keystroke interceptor: palette and
+    /// agent chords, form tab cycling, escape routing, and the vim
+    /// layer. Shared by `new` and `new_for_test` so window tests
+    /// exercise the real key routing.
+    fn install_keystroke_interceptor(cx: &mut Context<Self>) {
+        // Vim keys must be intercepted before action dispatch: the editor's
+        // own key bindings (Enter, Backspace, arrows) run before any key-down
+        // listener and would edit the buffer behind modalkit's back.
+        let workspace = cx.entity().downgrade();
+        cx.intercept_keystrokes(move |event, window, cx| {
+            if let Some(workspace) = workspace.upgrade() {
+                workspace.update(cx, |this, cx| {
+                    // The palette chord is handled here, not via action
+                    // dispatch: key equivalents die whenever the window
+                    // has no live focus path, and this interceptor is the
+                    // one place that provably sees every keystroke.
+                    if event.keystroke.modifiers.platform
+                        && event.keystroke.modifiers.shift
+                        && event.keystroke.key == "p"
+                    {
+                        this.palette_toggle(window, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    // Palette keys come first: it floats above everything
+                    // and its input must not feed vim or the editors.
+                    if this.palette.open {
+                        match event.keystroke.key.as_str() {
+                            "escape" => {
+                                this.palette_close(window, cx);
+                                cx.stop_propagation();
+                            }
+                            "up" => {
+                                this.palette_move(-1, cx);
+                                cx.stop_propagation();
+                            }
+                            "down" => {
+                                this.palette_move(1, cx);
+                                cx.stop_propagation();
+                            }
+                            "enter" => {
+                                this.palette_run_selected(window, cx);
+                                cx.stop_propagation();
+                            }
+                            _ => {
+                                // The filter text changes after this
+                                // keystroke lands in the input; preview
+                                // once it has.
+                                let handle = cx.entity();
+                                cx.defer(move |cx| {
+                                    handle.update(cx, |this, cx| this.palette_theme_preview(cx));
+                                });
+                            }
+                        }
+                        return;
+                    }
+                    // cmd-i toggles the agent pane; interceptor-handled
+                    // like the palette chord so focus state can't kill it.
+                    if event.keystroke.modifiers.platform
+                        && !event.keystroke.modifiers.shift
+                        && event.keystroke.key == "i"
+                    {
+                        this.agent_toggle(window, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    // cmd-. forces the schema completion menu open in the
+                    // active query editor, even with no prefix typed.
+                    if event.keystroke.modifiers.platform
+                        && event.keystroke.key == "."
+                        && this.show_query_editor
+                    {
+                        if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
+                            let editor = tab.editor.clone();
+                            editor.update(cx, |editor, cx| {
+                                editor.show_completion_menu(window, cx);
+                            });
+                            cx.stop_propagation();
+                            return;
+                        }
+                    }
+                    // Tab cycles the connection form's fields.
+                    if event.keystroke.key == "tab"
+                        && this.connection.form.is_some()
+                        && !event.keystroke.modifiers.platform
+                        && !event.keystroke.modifiers.control
+                    {
+                        this.form_tab(event.keystroke.modifiers.shift, window, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    // cmd-n with the agent pane open: new thread with the
+                    // last-used agent.
+                    if event.keystroke.modifiers.platform
+                        && !event.keystroke.modifiers.shift
+                        && event.keystroke.key == "n"
+                        && this.agent.open
+                    {
+                        this.agent_start_last_thread(window, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    // Escape closes an open filter popover regardless of
+                    // where focus sits (checkbox panels hold none).
+                    if event.keystroke.key == "escape" {
+                        if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
+                            let closed = tab
+                                .result_grid
+                                .update(cx, |grid, cx| grid.close_filter_panel(cx));
+                            if closed {
+                                cx.stop_propagation();
+                                return;
+                            }
+                        }
+                    }
+                    this.vim_keystroke(&event.keystroke, window, cx)
+                });
+            }
+        })
+        .detach();
     }
 }
 /// Best-effort teardown of a tail's live view, off-thread. The view only
