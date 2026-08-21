@@ -81,13 +81,16 @@ pub(crate) fn migration_repo_with(
         std::fs::create_dir_all(&directory).expect("migration dir");
         std::fs::write(
             directory.join("upgrade.sql"),
-            "CREATE TABLE fixture (id UInt64) ENGINE = MergeTree ORDER BY id;\n",
+            format!(
+                "CREATE TABLE ${{db}}.fixture_{number:05} (id UInt64) \
+                 ENGINE = MergeTree ORDER BY id;\n"
+            ),
         )
         .expect("write upgrade.sql");
         if let Some(class) = rollback {
             std::fs::write(
                 directory.join("rollback.sql"),
-                format!("-- rollback-class: {class}\nDROP TABLE fixture;\n"),
+                format!("-- rollback-class: {class}\nDROP TABLE ${{db}}.fixture_{number:05};\n"),
             )
             .expect("write rollback.sql");
         }
@@ -96,16 +99,23 @@ pub(crate) fn migration_repo_with(
     (dir, std::sync::Arc::new(repo))
 }
 
-/// A ConnectedCluster for tests. Combined with `saved_connection` under
-/// the same name it resolves to that connection's tier; alone, tier
-/// resolution fails closed to Production.
+/// Port 1 is root-only to bind, so nothing listens there: if a test
+/// does let an action past a gate, its runner dies on connection
+/// refused instead of reaching a real ClickHouse. Never point test
+/// fixtures at 8123/9000; dev machines often have live servers there.
+const DEAD_ENDPOINT: &str = "http://127.0.0.1:1";
+
+/// A ConnectedCluster for tests, aimed at a guaranteed-dead endpoint.
+/// Combined with `saved_connection` under the same name it resolves to
+/// that connection's tier; alone, tier resolution fails closed to
+/// Production.
 pub(crate) fn connected_cluster(name: &str) -> crate::ConnectedCluster {
     crate::ConnectedCluster {
         name: name.to_string(),
         active_node: 0,
-        active_endpoint: "http://127.0.0.1:8123".to_string(),
+        active_endpoint: DEAD_ENDPOINT.to_string(),
         client_config: zedb_ch::ChConfig {
-            url: "http://127.0.0.1:8123".to_string(),
+            url: DEAD_ENDPOINT.to_string(),
             user: "default".to_string(),
             password: None,
             database: None,
@@ -127,7 +137,7 @@ pub(crate) fn saved_connection(
         name: name.to_string(),
         nodes: vec![zedb_core::ConnectionNode {
             name: "node1".to_string(),
-            endpoint: "http://127.0.0.1:8123".to_string(),
+            endpoint: DEAD_ENDPOINT.to_string(),
             native_port: None,
         }],
         user: "default".to_string(),
@@ -187,5 +197,28 @@ pub(crate) fn selected_schema_object(
         engine_editor,
         tab: crate::ObjectInspectorTab::Overview,
         error: None,
+    }
+}
+
+/// Poll a condition while letting the deterministic executor drain,
+/// bounded by wall-clock time. For end-to-end tests whose work crosses
+/// into the real tokio runtime (network I/O), where run_until_parked
+/// alone cannot see pending completions.
+pub(crate) fn wait_for<T>(
+    cx: &mut VisualTestContext,
+    timeout: std::time::Duration,
+    mut poll: impl FnMut(&mut VisualTestContext) -> Option<T>,
+) -> T {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        cx.run_until_parked();
+        if let Some(value) = poll(cx) {
+            return value;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the polled condition"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }

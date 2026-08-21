@@ -176,6 +176,26 @@ fn trusted_artifact(
     })
 }
 
+/// The newest manifest version that ships an asset for this platform,
+/// so test-support's opt-in download never chases a hardcoded pin.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn newest_trusted_version() -> Option<String> {
+    fn key(version: &str) -> Vec<u64> {
+        version
+            .split('.')
+            .map(|part| part.parse().unwrap_or(0))
+            .collect()
+    }
+    TRUST_MANIFEST
+        .artifacts
+        .iter()
+        .filter(|entry| {
+            platform_asset_name(&entry.version).is_some_and(|asset| asset == entry.asset)
+        })
+        .map(|entry| entry.version.clone())
+        .max_by_key(|version| key(version))
+}
+
 fn parse_sha256(value: &str) -> Option<[u8; 32]> {
     let value = value.strip_prefix("sha256:").unwrap_or(value);
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {

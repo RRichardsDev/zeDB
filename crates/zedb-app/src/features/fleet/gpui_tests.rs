@@ -5,7 +5,7 @@
 
 use gpui::{Focusable as _, TestAppContext};
 
-use super::view::FleetAction;
+use super::view::{FleetAction, FleetRow};
 use crate::test_harness;
 
 #[gpui::test]
@@ -177,6 +177,69 @@ fn missing_rollback_demands_the_irreversible_phrase(cx: &mut TestAppContext) {
         workspace.fleet_execute_action(cx);
         assert!(workspace.fleet.action_running);
     });
+}
+
+/// End to end against a real ClickHouse: zedb-ch's EphemeralServer (the
+/// lifecycle-check fixture) running a trust-verified binary from the
+/// pin cache. The confirmed upgrade must actually apply the fixture
+/// migration. Skips when no binary is cached, so nothing downloads
+/// during a normal test run.
+#[gpui::test]
+fn confirmed_upgrade_applies_migrations_to_a_real_server(cx: &mut TestAppContext) {
+    use zedb_ch::test_support::{e2e_binary, http_query};
+
+    let Some(binary) = e2e_binary() else {
+        eprintln!(
+            "skipping: no trusted cached ClickHouse binary \
+             (run a fleet verify, or set ZEDB_E2E_DOWNLOAD=1)"
+        );
+        return;
+    };
+    let server = zedb_ch::ephemeral::EphemeralServer::start(&binary).expect("ephemeral server");
+    http_query(&server, "CREATE DATABASE e2e_fleet");
+
+    let (workspace, cx) = test_harness::workspace(cx);
+    let (_repo_dir, repo) = test_harness::migration_repo_with(&[(0, Some("clean"))]);
+    workspace.update(cx, |workspace, cx| {
+        workspace
+            .connection
+            .connections
+            .push(test_harness::saved_connection(
+                "local-e2e",
+                zedb_core::EnvTier::Staging,
+                false,
+            ));
+        let mut connected = test_harness::connected_cluster("local-e2e");
+        connected.active_endpoint = server.http_url.clone();
+        connected.client_config.url = server.http_url.clone();
+        workspace.connection.connected = Some(connected);
+        workspace.fleet.repo = Some(repo);
+        // The upgrade walks the pending list from the loaded matrix, as
+        // the app has it after a refresh; seed the row it would show.
+        workspace.fleet.rows = vec![FleetRow {
+            database: "e2e_fleet".into(),
+            head: None,
+            pending: vec![0],
+            customised: Vec::new(),
+            failed: Vec::new(),
+            excluded: None,
+        }];
+        workspace.fleet.write_unlocked = true;
+        workspace.fleet_request_action(FleetAction::UpgradeDatabase("e2e_fleet".into()), cx);
+        workspace.fleet_execute_action(cx);
+        assert!(workspace.fleet.action_running);
+    });
+
+    // The runner works on the real tokio runtime; wait wall-clock.
+    let result = test_harness::wait_for(cx, std::time::Duration::from_secs(60), |cx| {
+        workspace.update(cx, |workspace, _| workspace.fleet.action_result.clone())
+    });
+    assert!(result.is_ok(), "upgrade failed: {result:?}");
+    assert_eq!(
+        http_query(&server, "EXISTS TABLE e2e_fleet.fixture_00000").trim(),
+        "1",
+        "the fixture migration's table must exist on the server"
+    );
 }
 
 #[gpui::test]

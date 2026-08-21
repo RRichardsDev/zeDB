@@ -33,3 +33,6 @@ tempfile = "3"
 # Headless windows, simulated input, and the deterministic executor
 # for #[gpui::test] window tests.
 gpui = { workspace = true, features = ["test-support"] }
+# Ephemeral-server helpers and verified binary lookup for the
+# end-to-end tier.
+zedb-ch = { workspace = true, features = ["test-support"] }

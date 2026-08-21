@@ -25,6 +25,8 @@ pub mod runner;
 mod schema;
 pub mod schema_cache;
 pub mod schema_intelligence;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 mod types;
 pub mod verify;
 pub mod workload;

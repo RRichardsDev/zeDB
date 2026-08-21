@@ -1,3 +1,26 @@
+## 2026-08-21: end-to-end tier on a real ClickHouse
+
+- zedb-ch grew a `test-support` feature: `any_cached_binary` (the
+  helper the integration tests had been copy-pasting), `e2e_binary`
+  (same, plus an explicit `ZEDB_E2E_DOWNLOAD=1` opt-in that repairs an
+  empty or stale cache through the verified `ensure_binary` download at
+  the newest trusted version), and a blocking `http_query` for
+  ephemeral-server assertions. The app's window-test harness now uses
+  the existing `EphemeralServer` (the lifecycle-check fixture: real
+  config, port allocation outside the kernel's ephemeral range,
+  identity check, log tail on failure) instead of a duplicate.
+- First end-to-end window test: a confirmed fleet upgrade against an
+  ephemeral server actually applies the fixture migration; the pending
+  list is seeded through `fleet.rows` exactly as the app holds it after
+  a refresh. Skips when no trusted binary is cached; never downloads
+  without the opt-in.
+- Test fixtures aim at port 1 (root-only, never listening) rather than
+  8123/9000, so a test that gets past a gate can never reach a real
+  local ClickHouse.
+- Found while wiring this up, recorded in BUGS.md: macOS rewrites
+  adhoc linker-signed binaries on first execution, so the pin cache
+  never re-verifies on Apple Silicon and every verify re-downloads.
+
 ## 2026-08-21: UI regression suites
 
 - The gpui window-test framework grew into a regression net across the

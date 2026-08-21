@@ -28,5 +28,10 @@ flate2 = "1"
 tar = "0.4"
 libc = "0.2"
 
+[features]
+# Test scaffolding (ephemeral-server helpers, verified binary lookup)
+# for other crates' test suites; never part of a normal build.
+test-support = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros"] }
