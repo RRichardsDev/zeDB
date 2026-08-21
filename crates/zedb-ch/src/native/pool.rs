@@ -36,10 +36,10 @@ fn pool_key_salt() -> &'static [u8; 32] {
     POOL_KEY_SALT.get_or_init(|| {
         let state = std::collections::hash_map::RandomState::new();
         let mut salt = [0u8; 32];
-        for (index, chunk) in salt.chunks_exact_mut(8).enumerate() {
+        for (index, chunk) in salt.as_chunks_mut::<8>().0.iter_mut().enumerate() {
             let mut hasher = state.build_hasher();
             hasher.write_usize(index);
-            chunk.copy_from_slice(&hasher.finish().to_le_bytes());
+            *chunk = hasher.finish().to_le_bytes();
         }
         salt
     })
@@ -54,7 +54,7 @@ fn session_digest(cfg: &ChConfig) -> String {
     for setting in &cfg.driver.settings {
         digest.update([0]);
         digest.update(setting.name.trim().as_bytes());
-        digest.update([b'=']);
+        digest.update(*b"=");
         digest.update(setting.value.trim().as_bytes());
     }
     format!("{:x}", digest.finalize())

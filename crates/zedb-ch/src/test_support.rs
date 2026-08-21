@@ -74,10 +74,7 @@ pub fn http_query(server: &crate::ephemeral::EphemeralServer, sql: &str) -> Stri
     {
         let mut decoded = String::new();
         let mut rest = body;
-        loop {
-            let Some((size, tail)) = rest.split_once("\r\n") else {
-                break;
-            };
+        while let Some((size, tail)) = rest.split_once("\r\n") {
             let Ok(size) = usize::from_str_radix(size.trim(), 16) else {
                 break;
             };
