@@ -1,3 +1,12 @@
+## 2026-08-21: zedb-app lib/bin split
+
+- zedb-app is now a library crate plus a thin `zedb` binary whose main only
+  calls `zedb_app::run()` (the former `fn main`, hidden askpass and MCP-serve
+  modes included). Nothing else moved: modules, visibility, and the window
+  tests are unchanged, and unit tests now run in the library test target.
+- This unblocks linking app types from integration tests or future binaries
+  without touching the crate-private Workspace surface.
+
 ## 2026-08-21: gpui window-test framework
 
 - zedb-app now has `#[gpui::test]` window tests: the real Workspace in a
