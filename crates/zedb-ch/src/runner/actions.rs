@@ -248,6 +248,9 @@ impl Runner<'_> {
         self.require_write("import-tracking")?;
         validate_qualified_table(source_table)?;
         if self.options.dry_run {
+            // Dry runs deliberately make no network request (tested), so
+            // the already-has-rows refusal below is NOT evaluated here;
+            // callers must present this as unchecked, not as a promise.
             return Ok(0);
         }
         self.ensure_tracking().await?;

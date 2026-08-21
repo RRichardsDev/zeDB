@@ -156,7 +156,11 @@ pub fn import_tracking(
         .block_on(runner.import_tracking(&from))
         .map_err(|error| error.to_string())?;
     if dry_run {
-        println!("would import tracking rows from {from}");
+        println!(
+            "would import tracking rows from {from} (dry run checks no \
+             preconditions; the real run still refuses if tracking \
+             already has rows for this repo)"
+        );
     } else {
         println!("imported {imported} tracking row(s) from {from}");
     }

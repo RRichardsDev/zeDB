@@ -156,7 +156,13 @@ impl Workspace {
                     } else {
                         let mut text = raw.to_string();
                         if text.len() > 240 {
-                            text.truncate(240);
+                            // Byte-indexed truncate panics off a UTF-8
+                            // boundary and the JSON is agent-supplied.
+                            let mut end = 240;
+                            while !text.is_char_boundary(end) {
+                                end -= 1;
+                            }
+                            text.truncate(end);
                             text.push_str("...");
                         }
                         Some(text)
@@ -166,14 +172,19 @@ impl Workspace {
                     .iter()
                     .map(|option| option.option_id.clone())
                     .collect();
+                // Cards and queued responders pair by id: answers land on
+                // the exact card clicked, never "the oldest one".
+                let request_id = thread.next_permission_id;
+                thread.next_permission_id += 1;
                 thread.entries.push(ThreadEntry::Permission {
+                    request_id,
                     title,
                     input,
                     options,
                     answered: None,
                 });
-                // Requests queue; answers pop in arrival order.
                 thread.pending_permissions.push_back(PendingPermission {
+                    request_id,
                     responder,
                     option_ids,
                 });

@@ -101,7 +101,9 @@ struct BridgeRequest {
 
 /// One live permission request, including the exact option IDs the agent
 /// offered for this request. Display text is never an authority identity.
+/// `request_id` pairs the queued responder with its transcript card.
 struct PendingPermission {
+    request_id: u64,
     responder: oneshot::Sender<PermissionOutcome>,
     option_ids: std::collections::HashSet<String>,
 }
@@ -177,8 +179,10 @@ pub enum ThreadEntry {
         title: String,
         status: String,
     },
-    /// A permission request; `answered` records the chosen option.
+    /// A permission request; `answered` records the chosen option and
+    /// `request_id` ties the card to its queued responder.
     Permission {
+        request_id: u64,
         title: String,
         input: Option<String>,
         options: Vec<PermissionOption>,
@@ -211,6 +215,7 @@ pub struct ThreadState {
     pub running: bool,
     pub status: Option<String>,
     pending_permissions: std::collections::VecDeque<PendingPermission>,
+    next_permission_id: u64,
     pub generation: u64,
 }
 
@@ -230,14 +235,16 @@ pub struct AgentPaneState {
     /// The unix socket where app-hosted tools (propose_*, navigate)
     /// arrive from the MCP serve subprocess; created lazily once.
     pub bridge_socket: Option<std::path::PathBuf>,
-    /// Random capability required on every bridge request and rotated for each
-    /// session registration. The ACP agent can use the documented propose-only
-    /// bridge, but unrelated or stale clients cannot invoke it by guessing the
-    /// PID-named socket.
+    /// Random capability required on every bridge request; a fresh one is
+    /// minted per session registration. The ACP agent can use the documented
+    /// propose-only bridge, but unrelated clients cannot invoke it by
+    /// guessing the PID-named socket.
     pub bridge_token: Option<String>,
-    /// Listener-side copy of the current token, shared only with the bridge
-    /// task so a new session can invalidate older MCP children.
-    bridge_token_state: Option<std::sync::Arc<std::sync::Mutex<String>>>,
+    /// Listener-side set of live tokens (newest first, bounded), shared only
+    /// with the bridge task. A small set stays valid so MCP children of
+    /// reused agent processes keep working; older tokens still expire.
+    bridge_token_state:
+        Option<std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>>,
     /// Effects that need a Window (editor creation); queued by the
     /// bridge pump and drained at the top of render.
     pub pending_effects: Vec<AgentEffect>,

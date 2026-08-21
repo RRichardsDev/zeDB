@@ -9,6 +9,21 @@ GitHub release notes.
 
 ## Unreleased
 
+- Hyphenated cluster names work everywhere again: where zeDB interpolates the
+  cluster into tracking DDL it is backtick-quoted instead of rejected, and
+  read-only commands no longer validate a cluster name they never use.
+- Agent streaming is stable under load: a busy UI now slows the agent's pipe
+  instead of tearing down the connection, permission answers and stderr lines
+  are delivered instead of dropped, and a closed connection always reaches the
+  pane (no more permanent spinner on a dead process).
+- Permission cards answer the exact card clicked, cancelling a turn marks its
+  pending cards cancelled, and a non-ASCII permission preview no longer
+  crashes the app.
+- MCP children of a reused agent process keep their bridge capability working
+  across new threads, and the agent's drift tool gets a deadline that fits a
+  cold binary download instead of failing at 30 seconds.
+- The import-tracking dry run now says it checks no preconditions instead of
+  implying the real run would succeed.
 - CLI database and template secrets now come from bounded files instead of
   process arguments, ambiguous option combinations fail closed, and status and
   verify use structurally read-only ClickHouse sessions.

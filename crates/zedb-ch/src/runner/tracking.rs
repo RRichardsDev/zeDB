@@ -13,7 +13,7 @@ impl Runner<'_> {
         let (on_cluster, engine_meta, engine_rows) = if clustered {
             let cluster = self.options.cluster.as_deref().expect("checked above");
             (
-                format!(" ON CLUSTER {cluster}"),
+                format!(" ON CLUSTER {}", backtick_identifier(cluster)),
                 "ReplicatedMergeTree('/clickhouse/tables/{uuid}/{shard}', '{replica}')".to_string(),
                 "ReplicatedMergeTree('/clickhouse/tables/{uuid}/{shard}', '{replica}')".to_string(),
             )

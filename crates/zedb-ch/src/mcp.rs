@@ -30,6 +30,37 @@ const OUTPUT_TRUNCATED: &str = "\n[output truncated at the MCP safety limit]\n";
 const APP_BRIDGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 #[cfg(test)]
 const APP_BRIDGE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+#[cfg(not(test))]
+const APP_BRIDGE_SLOW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+#[cfg(test)]
+const APP_BRIDGE_SLOW_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The tools that need the app's live connection and therefore cross the
+/// bridge when the child has no credential of its own. One list, used by
+/// the child to decide what to forward and by the app to decide what to
+/// accept; the two sides must never diverge.
+pub const CONNECTION_TOOLS: [&str; 7] = [
+    "fleet_status",
+    "dry_run",
+    "drift",
+    "list_databases",
+    "list_tables",
+    "describe",
+    "run_query",
+];
+
+/// How long each side waits for one bridged tool reply. `drift` replays
+/// the migration chain and may first download the pinned ClickHouse
+/// binary, so it gets a budget in minutes; everything else answers fast.
+/// Both the MCP child and the app listener call this with the effective
+/// tool name so the two deadlines agree.
+pub fn bridge_reply_deadline(tool: &str) -> std::time::Duration {
+    if tool == "drift" {
+        APP_BRIDGE_SLOW_TIMEOUT
+    } else {
+        APP_BRIDGE_TIMEOUT
+    }
+}
 
 /// Server-side caps applied to every agent query.
 #[derive(Clone, Copy)]
@@ -101,8 +132,17 @@ impl McpServer {
 
     /// Forward an app tool call over the bridge; one JSONL round trip.
     async fn forward_app_tool(&self, name: &str, arguments: &Value) -> Result<String, String> {
+        // For a wrapped mcp_call the deadline follows the inner tool.
+        let effective = if name == "mcp_call" {
+            arguments
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(name)
+        } else {
+            name
+        };
         tokio::time::timeout(
-            APP_BRIDGE_TIMEOUT,
+            bridge_reply_deadline(effective),
             self.forward_app_tool_inner(name, arguments),
         )
         .await
@@ -262,15 +302,6 @@ impl McpServer {
             .and_then(Value::as_str)
             .ok_or("tool call without a name")?;
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-        const CONNECTION_TOOLS: [&str; 7] = [
-            "fleet_status",
-            "dry_run",
-            "drift",
-            "list_databases",
-            "list_tables",
-            "describe",
-            "run_query",
-        ];
         if self.config.is_none() && self.app_socket.is_some() && CONNECTION_TOOLS.contains(&name) {
             let text = self
                 .forward_app_tool("mcp_call", &json!({ "name": name, "arguments": arguments }))
@@ -380,13 +411,16 @@ fn serialize_bounded_response(response: &Value) -> Vec<u8> {
     .expect("static JSON response always serializes")
 }
 
-enum BoundedLine {
+/// One newline-delimited frame, read within a byte limit. Public so the
+/// app's bridge listener shares this framer instead of hand-rolling its
+/// own; oversized frames drain to a clean boundary either way.
+pub enum BoundedLine {
     Line(Vec<u8>),
     TooLarge,
     Eof,
 }
 
-async fn read_bounded_line<R>(reader: &mut R, limit: usize) -> std::io::Result<BoundedLine>
+pub async fn read_bounded_line<R>(reader: &mut R, limit: usize) -> std::io::Result<BoundedLine>
 where
     R: tokio::io::AsyncBufRead + Unpin,
 {

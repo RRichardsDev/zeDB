@@ -276,23 +276,49 @@ impl Workspace {
         if let Some(session_id) = &thread.session_id {
             let _ = thread.connection.cancel(session_id);
         }
+        // Cancelled responders leave their cards behind; mark them so no
+        // card keeps live buttons for a request that no longer exists.
         for pending in thread.pending_permissions.drain(..) {
+            let cancelled_id = pending.request_id;
             let _ = pending.responder.send(PermissionOutcome::Cancelled);
+            for entry in thread.entries.iter_mut() {
+                if let ThreadEntry::Permission {
+                    request_id,
+                    answered,
+                    ..
+                } = entry
+                {
+                    if *request_id == cancelled_id && answered.is_none() {
+                        *answered = Some("cancelled".into());
+                    }
+                }
+            }
         }
         cx.notify();
     }
 
     pub(crate) fn agent_answer_permission(
         &mut self,
+        request_id: u64,
         option_id: Option<String>,
         cx: &mut Context<Self>,
     ) {
         let Some(thread) = self.agent.thread.as_mut() else {
             return;
         };
-        let Some(pending) = thread.pending_permissions.pop_front() else {
+        // Answer the exact request whose card was clicked; requests are
+        // never answered positionally.
+        let Some(position) = thread
+            .pending_permissions
+            .iter()
+            .position(|pending| pending.request_id == request_id)
+        else {
             return;
         };
+        let pending = thread
+            .pending_permissions
+            .remove(position)
+            .expect("position was just found");
         let outcome = match &option_id {
             Some(option_id) if pending.option_ids.contains(option_id) => {
                 PermissionOutcome::Selected {
@@ -301,21 +327,27 @@ impl Workspace {
             }
             Some(_) | None => PermissionOutcome::Cancelled,
         };
+        // The card records what was actually sent, not what was clicked.
+        let sent = match &outcome {
+            PermissionOutcome::Selected { option_id } => option_id.clone(),
+            _ => "cancelled".into(),
+        };
         agent_log(
             "permission_answer",
-            serde_json::json!({ "selected": option_id.is_some() }),
+            serde_json::json!({ "selected": matches!(outcome, PermissionOutcome::Selected { .. }) }),
         );
         let _ = pending.responder.send(outcome);
-        // Mark the oldest unanswered card. ACP tool titles are display text,
-        // not authority identities, so approvals are never reused by title.
+        // ACP tool titles are display text, not authority identities, so
+        // approvals are never reused by title.
         for entry in thread.entries.iter_mut() {
             if let ThreadEntry::Permission {
-                title: _, answered, ..
+                request_id: card_id,
+                answered,
+                ..
             } = entry
             {
-                if answered.is_none() {
-                    let chosen = option_id.clone().unwrap_or_else(|| "cancelled".into());
-                    *answered = Some(chosen);
+                if *card_id == request_id {
+                    *answered = Some(sent);
                     break;
                 }
             }

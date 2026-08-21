@@ -109,6 +109,8 @@ impl AgentConnection {
         });
 
         // Stderr pump: agents talk auth problems here; surface them.
+        // Awaiting the send gives real backpressure: a momentarily busy
+        // consumer delays stderr instead of silently losing it.
         let stderr_events = event_tx.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr);
@@ -120,7 +122,11 @@ impl AgentConnection {
                     }
                     Ok(BoundedLine::Eof) | Err(_) => break,
                 };
-                if stderr_events.try_send(AgentEvent::Stderr { line }).is_err() {
+                if stderr_events
+                    .send(AgentEvent::Stderr { line })
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -144,18 +150,24 @@ impl AgentConnection {
                 let Ok(message) = serde_json::from_slice::<Value>(&line) else {
                     continue;
                 };
-                if !route_message(message, &reader_pending, &reader_outgoing, &event_tx) {
-                    break "agent event queue exceeded its safety limit";
+                if !route_message(message, &reader_pending, &reader_outgoing, &event_tx).await {
+                    break "agent event consumer stopped";
                 }
             };
             // Fail everything still in flight, then tell the consumer.
-            let mut pending = reader_pending.lock().expect("pending lock");
-            for (_, responder) in pending.drain() {
-                let _ = responder.send(Err(AcpError::Closed));
+            {
+                let mut pending = reader_pending.lock().expect("pending lock");
+                for (_, responder) in pending.drain() {
+                    let _ = responder.send(Err(AcpError::Closed));
+                }
             }
-            let _ = event_tx.try_send(AgentEvent::Closed {
-                reason: close_reason.into(),
-            });
+            // Awaited so the terminal event survives a full queue; the
+            // consumer relies on it to stop spinners and evict caches.
+            let _ = event_tx
+                .send(AgentEvent::Closed {
+                    reason: close_reason.into(),
+                })
+                .await;
         });
 
         Ok(Self {
@@ -293,7 +305,10 @@ impl AgentConnection {
     }
 }
 
-fn route_message(
+/// Route one incoming message. Sends into the bounded event and outgoing
+/// queues await free space (backpressure through the pipe) rather than
+/// dropping; `false` means the consumer is gone and the reader should stop.
+async fn route_message(
     message: Value,
     pending: &Pending,
     outgoing: &mpsc::Sender<String>,
@@ -350,22 +365,25 @@ fn route_message(
             let respond_via = outgoing.clone();
             tokio::spawn(async move {
                 // No answer (consumer dropped the responder) counts as
-                // cancelled; the agent must never hang on us.
+                // cancelled; the agent must never hang on us. Awaited:
+                // a momentarily full writer queue delays the answer, it
+                // must never swallow it.
                 let outcome = rx.await.unwrap_or(PermissionOutcome::Cancelled);
                 let response = json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": outcome.to_result_value(),
                 });
-                let _ = respond_via.try_send(response.to_string());
+                let _ = respond_via.send(response.to_string()).await;
             });
             events
-                .try_send(AgentEvent::PermissionRequest {
+                .send(AgentEvent::PermissionRequest {
                     session_id,
                     tool_call,
                     options,
                     responder: tx,
                 })
+                .await
                 .is_ok()
         }
         // Any other agent request: politely refuse rather than hang it.
@@ -375,13 +393,13 @@ fn route_message(
                 "id": id,
                 "error": { "code": -32601, "message": format!("method not supported: {method}") },
             });
-            outgoing.try_send(response.to_string()).is_ok()
+            outgoing.send(response.to_string()).await.is_ok()
         }
         // A notification.
         (None, Some("session/update")) => {
             if let Some(params) = message.get("params") {
                 if let Some(event) = protocol::decode_session_update(params) {
-                    return events.try_send(event).is_ok();
+                    return events.send(event).await.is_ok();
                 }
             }
             true

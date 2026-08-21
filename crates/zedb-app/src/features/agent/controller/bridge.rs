@@ -3,7 +3,11 @@ use super::*;
 const MAX_BRIDGE_FRAME_BYTES: usize = 2 * 1024 * 1024;
 const BRIDGE_QUEUE_CAPACITY: usize = 64;
 const BRIDGE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-const BRIDGE_APP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How many bridge capabilities stay valid at once. Each thread start
+/// mints a fresh one, but MCP children of reused agent processes hold
+/// the token they were spawned with; a small live set keeps them
+/// working while anything older still expires.
+const BRIDGE_LIVE_TOKENS: usize = 4;
 
 fn bridge_capability() -> Option<String> {
     use std::fmt::Write as _;
@@ -20,36 +24,6 @@ fn bridge_capability() -> Option<String> {
     Some(token)
 }
 
-async fn read_bridge_line<R>(reader: &mut R) -> std::io::Result<Option<Vec<u8>>>
-where
-    R: tokio::io::AsyncBufRead + Unpin,
-{
-    use tokio::io::AsyncBufReadExt as _;
-    let mut line = Vec::new();
-    loop {
-        let available = reader.fill_buf().await?;
-        if available.is_empty() {
-            return Ok((!line.is_empty()).then_some(line));
-        }
-        let consumed = available
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(available.len(), |index| index + 1);
-        if line.len().saturating_add(consumed) > MAX_BRIDGE_FRAME_BYTES {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "app bridge frame exceeds 2 MiB",
-            ));
-        }
-        let ended = available.get(consumed.saturating_sub(1)) == Some(&b'\n');
-        line.extend_from_slice(&available[..consumed]);
-        reader.consume(consumed);
-        if ended {
-            return Ok(Some(line));
-        }
-    }
-}
-
 impl Workspace {
     /// Bind the app-tool bridge socket once; returns its path.
     pub(crate) fn agent_ensure_bridge(
@@ -59,7 +33,13 @@ impl Workspace {
         if let Some(path) = self.agent.bridge_socket.clone() {
             let token = bridge_capability()?;
             let token_state = self.agent.bridge_token_state.as_ref()?;
-            *token_state.lock().ok()? = token.clone();
+            {
+                // Newest first; older tokens stay valid up to the cap so
+                // MCP children of reused agent processes keep working.
+                let mut tokens = token_state.lock().ok()?;
+                tokens.push_front(token.clone());
+                tokens.truncate(BRIDGE_LIVE_TOKENS);
+            }
             self.agent.bridge_token = Some(token);
             return Some(path);
         }
@@ -83,10 +63,14 @@ impl Workspace {
         let (requests_tx, mut requests_rx) = tokio::sync::mpsc::channel(BRIDGE_QUEUE_CAPACITY);
         let active_connections =
             std::sync::Arc::new(tokio::sync::Semaphore::new(BRIDGE_QUEUE_CAPACITY));
-        let token_state = std::sync::Arc::new(std::sync::Mutex::new(token.clone()));
+        let token_state =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from([
+                token.clone(),
+            ])));
         let listener_token_state = token_state.clone();
         rt::tokio().spawn(async move {
             use tokio::io::{AsyncWriteExt, BufReader};
+            use zedb_ch::mcp::{read_bounded_line, BoundedLine};
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
                     break;
@@ -99,24 +83,57 @@ impl Workspace {
                 tokio::spawn(async move {
                     let _active_connection = active_connection;
                     let (read_half, mut write_half) = stream.into_split();
-                    let Ok(Ok(Some(line))) = tokio::time::timeout(
+                    let line = match tokio::time::timeout(
                         BRIDGE_READ_TIMEOUT,
-                        read_bridge_line(&mut BufReader::new(read_half)),
+                        read_bounded_line(&mut BufReader::new(read_half), MAX_BRIDGE_FRAME_BYTES),
                     )
                     .await
-                    else {
-                        return;
+                    {
+                        Ok(Ok(BoundedLine::Line(line))) => line,
+                        Ok(Ok(BoundedLine::TooLarge)) => {
+                            let reply = serde_json::json!({
+                                "text": "app bridge frame exceeds 2 MiB",
+                                "isError": true,
+                            });
+                            let _ = write_half.write_all(reply.to_string().as_bytes()).await;
+                            let _ = write_half.write_all(b"\n").await;
+                            return;
+                        }
+                        Ok(Ok(BoundedLine::Eof)) | Ok(Err(_)) | Err(_) => return,
                     };
                     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&line) else {
                         return;
                     };
                     let valid_token = expected_token_state.lock().is_ok_and(|expected| {
-                        value.get("token").and_then(|value| value.as_str())
-                            == Some(expected.as_str())
+                        value
+                            .get("token")
+                            .and_then(|value| value.as_str())
+                            .is_some_and(|token| expected.iter().any(|live| live == token))
                     });
                     if !valid_token {
                         return;
                     }
+                    let tool = value
+                        .get("tool")
+                        .and_then(|tool| tool.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let arguments = value
+                        .get("arguments")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    // The reply deadline follows the effective tool, in
+                    // step with the child's own wait: drift replays the
+                    // chain and gets minutes, everything else seconds.
+                    let effective_tool = if tool == "mcp_call" {
+                        arguments
+                            .get("name")
+                            .and_then(|name| name.as_str())
+                            .unwrap_or(tool.as_str())
+                            .to_string()
+                    } else {
+                        tool.clone()
+                    };
                     let (respond_tx, respond_rx) = oneshot::channel();
                     let request = BridgeRequest {
                         token: value
@@ -124,26 +141,19 @@ impl Workspace {
                             .and_then(|token| token.as_str())
                             .unwrap_or_default()
                             .to_string(),
-                        tool: value
-                            .get("tool")
-                            .and_then(|tool| tool.as_str())
-                            .unwrap_or_default()
-                            .to_string(),
-                        arguments: value
-                            .get("arguments")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null),
+                        tool,
+                        arguments,
                         respond: respond_tx,
                     };
                     if requests_tx.try_send(request).is_err() {
                         return;
                     }
-                    let (text, is_error) =
-                        match tokio::time::timeout(BRIDGE_APP_TIMEOUT, respond_rx).await {
-                            Ok(Ok(reply)) => reply,
-                            Ok(Err(_)) => ("app closed".to_string(), true),
-                            Err(_) => ("app bridge reply deadline exceeded".to_string(), true),
-                        };
+                    let deadline = zedb_ch::mcp::bridge_reply_deadline(&effective_tool);
+                    let (text, is_error) = match tokio::time::timeout(deadline, respond_rx).await {
+                        Ok(Ok(reply)) => reply,
+                        Ok(Err(_)) => ("app closed".to_string(), true),
+                        Err(_) => ("app bridge reply deadline exceeded".to_string(), true),
+                    };
                     let reply = serde_json::json!({ "text": text, "isError": is_error });
                     let _ = write_half.write_all(reply.to_string().as_bytes()).await;
                     let _ = write_half.write_all(b"\n").await;
@@ -160,7 +170,12 @@ impl Workspace {
                             arguments,
                             respond,
                         } = request;
-                        if this.agent.bridge_token.as_deref() != Some(token.as_str()) {
+                        let live = this.agent.bridge_token_state.as_ref().is_some_and(|state| {
+                            state
+                                .lock()
+                                .is_ok_and(|tokens| tokens.iter().any(|live| *live == token))
+                        });
+                        if !live {
                             let _ = respond.send(("stale app bridge capability".into(), true));
                             return;
                         }
@@ -200,16 +215,7 @@ impl Workspace {
             let _ = respond.send(("MCP tool name required".into(), true));
             return;
         };
-        const CONNECTION_TOOLS: [&str; 7] = [
-            "fleet_status",
-            "dry_run",
-            "drift",
-            "list_databases",
-            "list_tables",
-            "describe",
-            "run_query",
-        ];
-        if !CONNECTION_TOOLS.contains(&name.as_str()) {
+        if !zedb_ch::mcp::CONNECTION_TOOLS.contains(&name.as_str()) {
             let _ = respond.send((format!("tool is not bridgeable: {name}"), true));
             return;
         }
@@ -224,8 +230,17 @@ impl Workspace {
             config
         });
         rt::tokio().spawn(async move {
-            let repo =
-                repo_root.and_then(|root| zedb_core::repo::MigrationRepo::open_root(&root).ok());
+            // Opening the repo reads every migration's SQL from disk;
+            // keep that off the async workers.
+            let repo = match repo_root {
+                Some(root) => tokio::task::spawn_blocking(move || {
+                    zedb_core::repo::MigrationRepo::open_root(&root).ok()
+                })
+                .await
+                .ok()
+                .flatten(),
+                None => None,
+            };
             let server = zedb_ch::mcp::McpServer::new(repo, config, Default::default());
             let request = serde_json::json!({
                 "jsonrpc": "2.0",

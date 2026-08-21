@@ -83,6 +83,13 @@ pub(crate) fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
+/// Backtick-quote a name for identifier position in DDL. Closes the
+/// injection without rejecting legal non-plain names (hyphenated
+/// clusters, most commonly).
+pub(crate) fn backtick_identifier(name: &str) -> String {
+    format!("`{}`", name.replace('\\', "\\\\").replace('`', "\\`"))
+}
+
 fn is_plain_identifier(value: &str) -> bool {
     let mut characters = value.chars();
     matches!(characters.next(), Some(character) if character.is_ascii_alphabetic() || character == '_')
@@ -196,5 +203,11 @@ mod security_tests {
     #[test]
     fn sql_string_literals_escape_quotes_and_backslashes() {
         assert_eq!(quote("db'\\name"), "'db\\'\\\\name'");
+    }
+
+    #[test]
+    fn backticked_identifiers_escape_backticks_and_backslashes() {
+        assert_eq!(backtick_identifier("ch-prod-cluster"), "`ch-prod-cluster`");
+        assert_eq!(backtick_identifier("x`\\y"), "`x\\`\\\\y`");
     }
 }

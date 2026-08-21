@@ -194,6 +194,7 @@ impl Workspace {
             running: false,
             status: Some("starting...".into()),
             pending_permissions: std::collections::VecDeque::new(),
+            next_permission_id: 0,
             generation,
         });
         self.agent.picker_open = false;

@@ -45,12 +45,13 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
+    /// The tracking database is interpolated into SQL as a bare
+    /// identifier, so it must be a plain identifier chunk. The cluster
+    /// name is NOT validated here: where the runner itself interpolates
+    /// it (tracking DDL) it is backtick-quoted, and hyphenated cluster
+    /// names are legal and common, so read paths must not reject them.
     pub(super) fn validate_sql_identifiers(&self) -> Result<(), RunnerError> {
-        validate_identifier(&self.repo.config.tracking.database, "tracking database")?;
-        if let Some(cluster) = &self.options.cluster {
-            validate_identifier(cluster, "cluster")?;
-        }
-        Ok(())
+        validate_identifier(&self.repo.config.tracking.database, "tracking database")
     }
 
     /// The fleet chain: every non-targeted migration in order.
