@@ -76,6 +76,23 @@ This project is indexed by GitNexus as **zeDB** (29999 symbols, 66930 relationsh
   Keep both in sync when patching the vendor; read that file before
   any vendor rebase.
 
+## Window tests
+
+- zedb-app has a gpui window-test framework: the real Workspace in a
+  headless window, with keyboard, mouse, action dispatch, and an
+  end-to-end tier on an ephemeral ClickHouse. Read
+  `crates/zedb-app/tests/README.md` before writing or changing UI
+  behavior; the harness is `crates/zedb-app/src/test_harness.rs`, and
+  suites live in a `gpui_tests.rs` beside their feature.
+- A UI behavior change ships with a window test in the same commit.
+  Tag new interactive elements with `.debug_selector(...)` (a release
+  no-op) so tests can click them. Verify behavior with these tests
+  first (`cargo test -p zedb-app --lib`, seconds, no signing); the
+  signed-build launch is for visual checks only.
+- Never point test fixtures at 8123/9000; dev machines run real
+  ClickHouse there. The harness's dead endpoint and EphemeralServer
+  (`zedb-ch/test-support`) exist for exactly this.
+
 ## Migration repo format
 
 - `docs/contracts/FORMAT.md` specifies the format-1 migration repo (zedb.toml,
