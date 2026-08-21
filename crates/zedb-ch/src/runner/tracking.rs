@@ -2,6 +2,10 @@ use super::*;
 
 impl Runner<'_> {
     pub async fn ensure_tracking(&self) -> Result<(), RunnerError> {
+        self.validate_sql_identifiers()?;
+        if self.options.dry_run {
+            return Ok(());
+        }
         let tracking = &self.repo.config.tracking;
         let clustered = !self.options.no_cluster
             && tracking.cluster_param.is_some()
@@ -71,6 +75,7 @@ impl Runner<'_> {
         &self,
         database: &str,
     ) -> Result<Vec<(u32, String, String)>, RunnerError> {
+        self.validate_sql_identifiers()?;
         let sql = format!(
             "SELECT migration, \
              argMax(action, (recorded_at, run_id)) AS last_action, \
@@ -121,8 +126,11 @@ impl Runner<'_> {
                 .map(|r| format!("{:?}", r.rows))
                 .unwrap_or_else(|e| format!("err: {e}"));
             eprintln!(
-                "[tracking-debug] empty last_states for db={database} client_url={} table_total={total} server_path={path}",
-                self.options.server.url
+                "[tracking-debug] empty last_states for db={} client_url={} table_total={} server_path={}",
+                terminal_field(database),
+                terminal_field(&self.options.server.url),
+                terminal_field(&total),
+                terminal_field(&path)
             );
         }
         Ok(result

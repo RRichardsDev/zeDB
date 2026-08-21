@@ -13,7 +13,7 @@ fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
-            eprintln!("error: {message}");
+            eprintln!("error: {}", commands::terminal_text(&message));
             ExitCode::FAILURE
         }
     }

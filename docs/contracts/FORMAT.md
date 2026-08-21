@@ -71,6 +71,11 @@ refresh_offset_expr = { dummy = "1 HOUR 42 MINUTE", sentinel = "2 HOUR 53 MINUTE
 # interval expressions).
 ```
 
+Tracking database and runtime cluster names are plain ClickHouse identifier
+chunks: an ASCII letter or underscore followed by ASCII letters, digits, or
+underscores. Ancestor tracking imports accept a table name in `TABLE` or
+`DATABASE.TABLE` form under the same grammar.
+
 Scope names are directory names under `current-state` and must match
 `[a-z0-9_]+`. Absolute paths, separators, parent components, uppercase letters,
 and punctuation are rejected when the repo opens.

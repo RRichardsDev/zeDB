@@ -3,13 +3,13 @@
 
 use std::path::Path;
 
-use super::{open_repo, pinned_binary, runtime};
+use super::{open_repo, pinned_binary, runtime, terminal_field, terminal_text};
 
 pub fn pin(
     root: &Path,
     server: Option<String>,
-    user: String,
-    password: String,
+    user: Option<String>,
+    password: Option<String>,
     pin_version: Option<String>,
 ) -> Result<(), String> {
     let repo = open_repo(root)?;
@@ -20,15 +20,15 @@ pub fn pin(
             let discovered = runtime
                 .block_on(zedb_ch::discover_server_version(zedb_ch::ChConfig {
                     url,
-                    user,
-                    password: (!password.is_empty()).then_some(password),
+                    user: user.unwrap_or_else(|| "default".into()),
+                    password,
                     database: None,
                     read_only: true,
                     driver: Default::default(),
                     native_port: None,
                 }))
                 .map_err(|error| error.to_string())?;
-            println!("server runs ClickHouse {discovered}");
+            println!("server runs ClickHouse {}", terminal_field(&discovered));
             discovered
         }
         (None, None) => repo.config.engine.version.clone(),
@@ -40,9 +40,16 @@ pub fn pin(
     if version != repo.config.engine.version {
         zedb_core::repo::RepoConfig::set_pinned_version(&repo.root, &version)
             .map_err(|error| error.to_string())?;
-        println!("zedb.toml [engine].version updated to {version}");
+        println!(
+            "zedb.toml [engine].version updated to {}",
+            terminal_field(&version)
+        );
     }
-    println!("pinned: ClickHouse {version} at {}", binary.display());
+    println!(
+        "pinned: ClickHouse {} at {}",
+        terminal_field(&version),
+        terminal_field(&binary.display().to_string())
+    );
     Ok(())
 }
 
@@ -64,7 +71,7 @@ pub fn regen(root: &Path, check: bool) -> Result<(), String> {
             return Ok(());
         }
         for problem in &problems {
-            eprintln!("{problem}");
+            eprintln!("{}", terminal_text(problem));
         }
         return Err(format!(
             "current-state/ is out of date ({} problem(s)); run `zedb regen`",
@@ -74,10 +81,10 @@ pub fn regen(root: &Path, check: bool) -> Result<(), String> {
     let (changed, removed) =
         zedb_ch::regen::write_tree(&repo, &files).map_err(|error| error.to_string())?;
     for path in &changed {
-        println!("wrote {}", path.display());
+        println!("wrote {}", terminal_field(&path.display().to_string()));
     }
     for path in &removed {
-        println!("removed {}", path.display());
+        println!("removed {}", terminal_field(&path.display().to_string()));
     }
     println!(
         "current-state/: {} files ({} written, {} removed, {} unchanged)",

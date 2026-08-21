@@ -89,6 +89,16 @@ pub fn scaffold_migration(
     repo: &MigrationRepo,
     options: &ScaffoldOptions,
 ) -> Result<PathBuf, RepoError> {
+    if options.description.trim().is_empty()
+        || options
+            .description
+            .chars()
+            .any(|character| character.is_control())
+    {
+        return Err(RepoError::Layout(
+            "migration description must be one non-empty line without control characters".into(),
+        ));
+    }
     let number = repo.next_number();
     let today = chrono::Local::now().date_naive();
     let directory = new_migration_directory(

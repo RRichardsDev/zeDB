@@ -6,8 +6,8 @@ use tokio::runtime::Runtime;
 use zedb_ch::runner::{Runner, Targets};
 use zedb_core::repo::MigrationRepo;
 
-use super::{open_repo, runtime};
-use crate::cli::{ConnectionArgs, TargetArgs};
+use super::{open_repo, runtime, terminal_field};
+use crate::cli::{ConnectionArgs, ReadConnectionArgs, TargetArgs};
 
 /// The repo, resolved targets, and runtime every fleet command opens with.
 /// The `Runner` itself borrows the repo, so it stays with the caller.
@@ -17,7 +17,7 @@ fn prepare(root: &Path, targets: &TargetArgs) -> Result<(MigrationRepo, Targets,
 
 pub fn status(
     root: &Path,
-    connection: ConnectionArgs,
+    connection: ReadConnectionArgs,
     target_args: TargetArgs,
     json: bool,
 ) -> Result<(), String> {
@@ -58,7 +58,8 @@ pub fn status(
         };
         let mut line = format!(
             "{}: at {head} of {:05}, {state}",
-            status.database, status.latest
+            terminal_field(&status.database),
+            status.latest
         );
         if !status.customised.is_empty() {
             let customised: Vec<String> = status
@@ -72,7 +73,7 @@ pub fn status(
             let failed: Vec<String> = status
                 .failed
                 .iter()
-                .map(|(n, action)| format!("{n:05} ({action})"))
+                .map(|(n, action)| format!("{n:05} ({})", terminal_field(action)))
                 .collect();
             line.push_str(&format!("; FAILED: {}", failed.join(", ")));
         }
@@ -88,7 +89,7 @@ pub fn upgrade(
     to: Option<u32>,
 ) -> Result<(), String> {
     let (repo, targets, runtime) = prepare(root, &target_args)?;
-    let runner = Runner::new(&repo, connection.options());
+    let runner = Runner::new(&repo, connection.options()?);
     runtime
         .block_on(runner.upgrade(&targets, to))
         .map_err(|error| error.to_string())
@@ -104,7 +105,7 @@ pub fn rollback(
     targeted: bool,
 ) -> Result<(), String> {
     let (repo, targets, runtime) = prepare(root, &target_args)?;
-    let runner = Runner::new(&repo, connection.options());
+    let runner = Runner::new(&repo, connection.options()?);
     match (number, to) {
         (Some(number), None) => runtime
             .block_on(runner.rollback_one(&targets, number, irreversible, targeted))
@@ -123,7 +124,7 @@ pub fn stamp(
     number: u32,
 ) -> Result<(), String> {
     let (repo, targets, runtime) = prepare(root, &target_args)?;
-    let runner = Runner::new(&repo, connection.options());
+    let runner = Runner::new(&repo, connection.options()?);
     runtime
         .block_on(runner.stamp(&targets, number))
         .map_err(|error| error.to_string())
@@ -136,7 +137,7 @@ pub fn apply(
     number: u32,
 ) -> Result<(), String> {
     let (repo, targets, runtime) = prepare(root, &target_args)?;
-    let runner = Runner::new(&repo, connection.options());
+    let runner = Runner::new(&repo, connection.options()?);
     runtime
         .block_on(runner.apply_targeted(&targets, number))
         .map_err(|error| error.to_string())
@@ -148,11 +149,16 @@ pub fn import_tracking(
     from: String,
 ) -> Result<(), String> {
     let repo = open_repo(root)?;
-    let runner = Runner::new(&repo, connection.options());
+    let dry_run = connection.dry_run;
+    let runner = Runner::new(&repo, connection.options()?);
     let runtime = runtime()?;
     let imported = runtime
         .block_on(runner.import_tracking(&from))
         .map_err(|error| error.to_string())?;
-    println!("imported {imported} tracking row(s) from {from}");
+    if dry_run {
+        println!("would import tracking rows from {from}");
+    } else {
+        println!("imported {imported} tracking row(s) from {from}");
+    }
     Ok(())
 }

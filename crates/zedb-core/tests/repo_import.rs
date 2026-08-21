@@ -217,3 +217,93 @@ fn the_pinned_version_is_read_unquoted_and_untrimmed_of_content() {
     let report = import_repo(&from, &to).expect("import should succeed");
     assert_eq!(report.engine_version, "25.1.2.3");
 }
+
+#[test]
+fn refuses_any_preexisting_destination_without_changing_it() {
+    let dir = temp();
+    let from = dir.path().join("ancestor");
+    let to = dir.path().join("occupied");
+    ancestor(&from, "24.3.1.1");
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(to.join("keep.txt"), "keep").unwrap();
+
+    let error = import_repo(&from, &to).expect_err("occupied destination must be refused");
+    assert!(
+        error.to_string().contains("must not already exist"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(to.join("keep.txt")).unwrap(),
+        "keep"
+    );
+    assert!(!to.join("zedb.toml").exists());
+}
+
+#[test]
+fn refuses_a_destination_nested_inside_the_ancestor() {
+    let dir = temp();
+    let from = dir.path().join("ancestor");
+    ancestor(&from, "24.3.1.1");
+    let to = from.join("migrations/imported");
+
+    let error = import_repo(&from, &to).expect_err("overlapping destination must be refused");
+    assert!(
+        error.to_string().contains("outside the ancestor"),
+        "{error}"
+    );
+    assert!(!to.exists());
+}
+
+#[test]
+fn refuses_versions_that_can_change_generated_toml() {
+    let dir = temp();
+    let from = dir.path().join("ancestor");
+    let to = dir.path().join("imported");
+    ancestor(&from, "24.3.1.1");
+    pin(
+        &from,
+        "CH_VERSION = \"24.3.1.1\\\"\\n[tracking]\\ndatabase = \\\"attacker\"\"\n",
+    );
+
+    let error = import_repo(&from, &to).expect_err("unsafe version must be refused");
+    assert!(
+        error.to_string().contains("unsafe ClickHouse version"),
+        "{error}"
+    );
+    assert!(
+        !to.exists(),
+        "validation must finish before destination creation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn refuses_file_and_directory_symlinks_in_the_ancestor_tree() {
+    use std::os::unix::fs::symlink;
+
+    for directory_link in [false, true] {
+        let dir = temp();
+        let from = dir.path().join("ancestor");
+        let to = dir.path().join("imported");
+        ancestor(&from, "24.3.1.1");
+        let migration = from.join("migrations/2026/08/00100");
+
+        if directory_link {
+            let outside = dir.path().join("outside-directory");
+            std::fs::create_dir(&outside).unwrap();
+            std::fs::write(outside.join("private.txt"), "private").unwrap();
+            symlink(&outside, migration.join("linked-directory")).unwrap();
+        } else {
+            let outside = dir.path().join("outside-file");
+            std::fs::write(&outside, "private").unwrap();
+            symlink(&outside, migration.join("linked-file.sql")).unwrap();
+        }
+
+        let error = import_repo(&from, &to).expect_err("source symlink must be refused");
+        assert!(error.to_string().contains("symlink"), "{error}");
+        assert!(
+            !to.exists(),
+            "validation must finish before destination creation"
+        );
+    }
+}

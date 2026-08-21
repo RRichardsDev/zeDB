@@ -214,6 +214,32 @@ fn init_and_scaffold_round_trip() {
 }
 
 #[test]
+fn scaffold_refuses_description_content_that_can_escape_the_sql_comment() {
+    let directory = tempfile::tempdir().unwrap();
+    init_repo(directory.path()).unwrap();
+    let repo = MigrationRepo::open_root(directory.path()).unwrap();
+
+    for description in ["", "   ", "safe\nDROP DATABASE prod", "escape\u{1b}[2J"] {
+        let result = scaffold_migration(
+            &repo,
+            &ScaffoldOptions {
+                description: description.into(),
+                targeted: false,
+                with_rollback: true,
+            },
+        );
+        assert!(result.is_err(), "should reject {description:?}");
+    }
+    assert_eq!(
+        std::fs::read_dir(directory.path().join("migrations"))
+            .unwrap()
+            .count(),
+        0,
+        "validation must happen before creating a migration directory"
+    );
+}
+
+#[test]
 fn set_pinned_version_preserves_the_rest_of_the_config() {
     let dir = tempfile::tempdir().unwrap();
     copy_fixture(dir.path());

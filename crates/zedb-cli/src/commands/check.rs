@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use super::{open_repo, pinned_binary, runtime};
+use super::{open_repo, pinned_binary, runtime, terminal_text};
 
 pub fn check(root: &Path, kind: String, json: bool) -> Result<(), String> {
     let repo = open_repo(root)?;
@@ -24,7 +24,7 @@ pub fn check(root: &Path, kind: String, json: bool) -> Result<(), String> {
             );
         } else {
             for error in &report.errors {
-                eprintln!("{error}");
+                eprintln!("{}", terminal_text(error));
             }
             println!(
                 "sql: {}/{} SQL files parse as valid ClickHouse",
@@ -49,7 +49,7 @@ pub fn check(root: &Path, kind: String, json: bool) -> Result<(), String> {
             );
         } else {
             for difference in &report.differences {
-                eprintln!("{difference}");
+                eprintln!("{}", terminal_text(difference));
             }
             println!(
                 "equivalence: {} current-state objects vs {} migration-chain objects, {} difference(s)",
@@ -78,10 +78,10 @@ pub fn check(root: &Path, kind: String, json: bool) -> Result<(), String> {
             );
         } else {
             for step in &report.steps {
-                println!("lifecycle: {step}");
+                println!("lifecycle: {}", terminal_text(step));
             }
             for difference in &report.differences {
-                eprintln!("{difference}");
+                eprintln!("{}", terminal_text(difference));
             }
             println!(
                 "lifecycle: {} expected vs {} live objects, {} difference(s)",

@@ -124,7 +124,10 @@ impl Runner<'_> {
             append_audit_line(&dir.join("audit.jsonl"), line.as_bytes())
         })();
         if let Err(error) = result {
-            eprintln!("warning: could not write audit log: {error}");
+            eprintln!(
+                "warning: could not write audit log: {}",
+                terminal_field(&error.to_string())
+            );
         }
     }
 
@@ -154,7 +157,9 @@ impl Runner<'_> {
 
         if self.options.dry_run {
             println!(
-                "-- {database}: would {action} {:05} ({} statements)",
+                "-- {}: would {} {:05} ({} statements)",
+                terminal_field(database),
+                terminal_field(action),
                 migration.number,
                 statements.len()
             );
@@ -248,7 +253,9 @@ impl Runner<'_> {
         )
         .await?;
         println!(
-            "{database}: {action} {:05} ok ({:.2}s)",
+            "{}: {} {:05} ok ({:.2}s)",
+            terminal_field(database),
+            terminal_field(action),
             migration.number,
             start.elapsed().as_secs_f64()
         );

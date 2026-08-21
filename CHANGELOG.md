@@ -9,6 +9,14 @@ GitHub release notes.
 
 ## Unreleased
 
+- CLI database and template secrets now come from bounded files instead of
+  process arguments, ambiguous option combinations fail closed, and status and
+  verify use structurally read-only ClickHouse sessions.
+- CLI dry runs no longer create or update tracking state, SQL-facing names are
+  validated or quoted, and human output escapes terminal control characters.
+- Repository imports now reject source symlinks, unsafe version text,
+  pre-existing or overlapping destinations, while migration scaffolds reject
+  multiline descriptions that could escape their SQL comment.
 - Built-in ACP adapters now run exact reviewed npm versions instead of mutable
   latest releases, and settings sync no longer imports custom agent commands,
   remembered agent selection, or persistent permission grants between machines.

@@ -52,6 +52,100 @@ fn dbs(names: &[&str]) -> Targets {
     Targets::Databases(names.iter().map(ToString::to_string).collect())
 }
 
+#[tokio::test]
+async fn dry_run_does_not_create_or_write_tracking_state() {
+    let _serial = SERIAL.lock().await;
+    let Some(binary) = any_cached_binary() else {
+        eprintln!("skipping: no cached clickhouse binary (run `zedb pin`)");
+        return;
+    };
+    let server = EphemeralServer::start(&binary).unwrap();
+    let repo = MigrationRepo::open_root(&fixture()).unwrap();
+    let mut dry_options = options(&server, true);
+    dry_options.dry_run = true;
+    let client = zedb_ch::ChClient::new(options(&server, true).server);
+    let runner = Runner::new(&repo, dry_options);
+
+    runner.ensure_tracking().await.unwrap();
+    runner.stamp(&dbs(&["dry_target"]), 100).await.unwrap();
+    assert_eq!(
+        runner
+            .import_tracking("default.schema_migrations")
+            .await
+            .unwrap(),
+        0
+    );
+    runner.upgrade(&dbs(&["dry_target"]), None).await.unwrap();
+
+    let tables = client
+        .query(
+            "SELECT count() FROM system.tables WHERE database = 'default' \
+             AND name IN ('zedb_meta', 'zedb_migrations')",
+        )
+        .await
+        .unwrap();
+    assert_eq!(tables.rows[0][0].to_string(), "0");
+    let databases = client
+        .query("SELECT count() FROM system.databases WHERE name = 'dry_target'")
+        .await
+        .unwrap();
+    assert_eq!(databases.rows[0][0].to_string(), "0");
+}
+
+#[tokio::test]
+async fn import_tracking_rejects_query_structure_before_connecting() {
+    let repo = MigrationRepo::open_root(&fixture()).unwrap();
+    let mut runner_options = options_for_unreachable_server();
+    runner_options.write = true;
+    let runner = Runner::new(&repo, runner_options);
+
+    let error = runner
+        .import_tracking("default.schema_migrations WHERE 1")
+        .await
+        .expect_err("query clauses are not table names")
+        .to_string();
+    assert!(error.contains("plain identifiers"), "{error}");
+}
+
+#[tokio::test]
+async fn direct_tracking_dry_runs_make_no_network_request() {
+    let repo = MigrationRepo::open_root(&fixture()).unwrap();
+    let mut runner_options = options_for_unreachable_server();
+    runner_options.write = true;
+    runner_options.dry_run = true;
+    let runner = Runner::new(&repo, runner_options);
+
+    runner.ensure_tracking().await.unwrap();
+    runner.stamp(&dbs(&["dry_target"]), 100).await.unwrap();
+    assert_eq!(
+        runner
+            .import_tracking("default.schema_migrations")
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+fn options_for_unreachable_server() -> RunnerOptions {
+    RunnerOptions {
+        server: ChConfig {
+            url: "http://127.0.0.1:1".into(),
+            user: "default".into(),
+            password: None,
+            database: None,
+            read_only: false,
+            driver: Default::default(),
+            native_port: None,
+        },
+        admin: None,
+        cluster: None,
+        no_cluster: true,
+        write: false,
+        dry_run: false,
+        overrides: BTreeMap::new(),
+    }
+}
+
 /// Proves the whole runner surface against a real ephemeral server:
 /// upgrade, status, peel-from-top and class enforcement, the --to walk,
 /// stamp, targeted apply with allow-list, and read-only refusal.

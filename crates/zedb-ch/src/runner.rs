@@ -79,8 +79,48 @@ pub struct ResolvedTargets {
     pub skipped: Vec<(String, String)>,
 }
 
-fn quote(text: &str) -> String {
+pub(crate) fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+fn is_plain_identifier(value: &str) -> bool {
+    let mut characters = value.chars();
+    matches!(characters.next(), Some(character) if character.is_ascii_alphabetic() || character == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn validate_identifier(value: &str, label: &str) -> Result<(), RunnerError> {
+    if is_plain_identifier(value) {
+        Ok(())
+    } else {
+        Err(RunnerError::Refused(format!(
+            "{label} must be a plain ClickHouse identifier, got {value:?}"
+        )))
+    }
+}
+
+fn validate_qualified_table(value: &str) -> Result<(), RunnerError> {
+    let parts: Vec<&str> = value.split('.').collect();
+    if (parts.len() == 1 || parts.len() == 2) && parts.iter().all(|part| is_plain_identifier(part))
+    {
+        Ok(())
+    } else {
+        Err(RunnerError::Refused(format!(
+            "source table must be TABLE or DATABASE.TABLE using plain identifiers, got {value:?}"
+        )))
+    }
+}
+
+fn terminal_field(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_control() {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
 }
 
 fn new_run_id() -> String {
@@ -118,5 +158,43 @@ fn getrandom(buffer: &mut [u8]) {
         for (target, source) in chunk.iter_mut().zip(hash.iter()) {
             *target = *source;
         }
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_plain_sql_identifiers_and_qualified_tables() {
+        for identifier in ["default", "cluster_01", "_internal"] {
+            assert!(validate_identifier(identifier, "test").is_ok());
+        }
+        for identifier in ["", "db-name", "db name", "db/*x*/", "db.settings"] {
+            assert!(validate_identifier(identifier, "test").is_err());
+        }
+
+        for table in ["schema_migrations", "default.schema_migrations"] {
+            assert!(validate_qualified_table(table).is_ok());
+        }
+        for table in [
+            "",
+            "default.schema.migrations",
+            "url('https://example.test')",
+            "default.schema_migrations WHERE 1",
+            "default.schema_migrations/*comment*/",
+        ] {
+            assert!(validate_qualified_table(table).is_err());
+        }
+    }
+
+    #[test]
+    fn terminal_fields_escape_control_sequences() {
+        assert_eq!(terminal_field("db\n\u{1b}[2J"), "db\\n\\u{1b}[2J");
+    }
+
+    #[test]
+    fn sql_string_literals_escape_quotes_and_backslashes() {
+        assert_eq!(quote("db'\\name"), "'db\\'\\\\name'");
     }
 }
