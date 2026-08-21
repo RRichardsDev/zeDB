@@ -10,21 +10,24 @@ GitHub release notes.
 ## Unreleased
 
 - Settings sync is secure by default: a pulled payload may add connections but
-  never repoints an existing connection's endpoint or weakens its read-only
-  posture or tier (the connection name is its Keychain key, so an endpoint swap
-  would have sent its password to the new host). Per-connection repo paths and
-  the fleet cluster value now also stay on the machine that set them, and the
-  sync payload has a size limit.
+  never deletes, reorders, or changes an existing local connection (the name is
+  its Keychain key). New synced connections are validated, read-only,
+  production-marked, and carry no remote driver or Cloud authority until edited
+  locally. Per-connection repo paths and the fleet cluster also stay local.
 - Git operations against a migration or settings repo no longer run programs
-  the repo's own git config could name (hooks, fsmonitor), bound their
-  runtime, refuse remote URLs that look like git options, and no longer hand a
-  stored git token to a look-alike host embedded in a URL.
+  the repo's own config could name through hooks, fsmonitor, signing, filters,
+  credential helpers, proxies, or executable transports. Effective fetch and
+  push destinations are checked before credentials are enabled, askpass checks
+  Git's actual prompt host, and helper process groups have hard deadlines.
 - Opening a migration repository is now bounded against hostile content:
-  symlinks are not followed, the migrations walk is depth-limited, and
-  oversized files are rejected instead of read into memory.
+  symlinks and special files are not followed, the migrations walk is
+  depth-limited, and files are bounded on the same descriptor that is read.
 - Query history, saved tabs, the launch session, saved connections, and
-  settings are written private to the owner (0600) so working SQL that embeds
-  credentials is not left world-readable.
+  settings are read with byte limits and written through unique, no-follow,
+  atomic 0600 files in repaired 0700 directories. Git diagnostics are private,
+  bounded, and never log remote credentials, queries, or stderr content.
+- Legacy Keychain token accounts can no longer be read or deleted through a
+  colliding connection name before their one-time namespace migration runs.
 - A malformed decimal value from a server can no longer crash the results grid.
 - Hyphenated cluster names work everywhere again: where zeDB interpolates the
   cluster into tracking DDL it is backtick-quoted instead of rejected, and

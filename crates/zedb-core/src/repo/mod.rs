@@ -41,25 +41,18 @@ pub enum RepoError {
 /// at open time rather than exhaust memory.
 pub(crate) const MAX_REPO_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Read a repo file as UTF-8, refusing a symlink (which could point outside
-/// the repo) and any file over [`MAX_REPO_FILE_BYTES`]. Every read of
-/// semi-trusted repo content goes through here.
+/// Read a repo file as UTF-8, refusing symlinks, special files, and content
+/// over [`MAX_REPO_FILE_BYTES`]. The shared bounded reader checks and reads
+/// one open descriptor, so a concurrent rename cannot bypass the limit.
 pub(crate) fn read_repo_file(path: &Path) -> Result<String, RepoError> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() {
-        return Err(RepoError::Layout(format!(
-            "{}: symlinks are not allowed inside a migration repo",
-            path.display()
-        )));
-    }
-    if metadata.len() > MAX_REPO_FILE_BYTES {
-        return Err(RepoError::Layout(format!(
-            "{}: file is {} bytes, over the {MAX_REPO_FILE_BYTES} byte repo limit",
-            path.display(),
-            metadata.len()
-        )));
-    }
-    Ok(std::fs::read_to_string(path)?)
+    crate::store::read_bounded_string(path, MAX_REPO_FILE_BYTES).map_err(|error| {
+        let kind = if error.kind() == std::io::ErrorKind::InvalidData {
+            "repo limit: "
+        } else {
+            ""
+        };
+        RepoError::Layout(format!("{}: {kind}{error}", path.display()))
+    })
 }
 
 /// A parsed migration repo: config, ordered chain, and exclusions.

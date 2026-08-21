@@ -1098,7 +1098,10 @@ fn main() {
     if std::env::var_os("ZEDB_GIT_ASKPASS").is_some() {
         let prompt = args.get(1).cloned().unwrap_or_default();
         let host = std::env::var("ZEDB_GIT_HOST").unwrap_or_default();
-        let answer = if prompt.starts_with("Username") {
+        let prompt_matches = zedb_core::git::askpass_prompt_matches_host(&prompt, &host);
+        let answer = if !prompt_matches {
+            String::new()
+        } else if prompt.starts_with("Username") {
             if host.contains("gitlab") {
                 "oauth2"
             } else {
@@ -1112,7 +1115,7 @@ fn main() {
                 .unwrap_or_default()
         };
         zedb_core::git::git_debug(&format!(
-            "askpass host={host} answered_len={} kind={}",
+            "askpass host={host} prompt_matches={prompt_matches} answered_len={} kind={}",
             answer.len(),
             if prompt.starts_with("Username") {
                 "username"

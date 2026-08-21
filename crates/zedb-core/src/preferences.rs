@@ -110,7 +110,7 @@ pub fn settings_file_path() -> Result<PathBuf, StoreError> {
 
 pub fn load_preferences() -> Result<Preferences, StoreError> {
     let path = preferences_path()?;
-    let data = match std::fs::read_to_string(&path) {
+    let data = match crate::store::read_bounded_string(&path, crate::store::MAX_LOCAL_STATE_BYTES) {
         Ok(data) => data,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(Preferences::default());

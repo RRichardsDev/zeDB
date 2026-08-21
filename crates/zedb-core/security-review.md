@@ -4,7 +4,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Complete; fifteen confirmed findings remediated, four documented as accepted or deferred |
+| Status | Complete after adversarial follow-up; twenty-three confirmed findings remediated, four documented as accepted or deferred |
 | Baseline commit | `0bc31dd0bfd10346d0ba78d0f6a90f7b3577e7dd` |
 | Branch | `security/zedb-cli-2026-aug` |
 | Review host | Apple silicon, macOS 26.2 |
@@ -25,7 +25,7 @@ core.
 | --- | --- | --- |
 | Formatting | Passed | `cargo fmt --all --check` |
 | Clippy | Passed | `cargo clippy --workspace --all-targets` clean |
-| Core tests | Passed | 37 unit plus repo integration; new tests for symlink walk, oversized files, decimal scale, git host/injection, sync merge |
+| Core tests | Passed | 46 unit plus repo integration; adversarial tests cover effective push URLs, askpass prompts, executable transports and filters, retained pipes, special files, private modes, legacy token names, and sync driver settings |
 | Workspace tests | Passed | Full suite green, including the git subprocess tests through the new timeout wrapper |
 | Manual threat model | Complete | Repo parsing, git subprocess, Keychain, session/store, settings sync, local persistence, value formatting traced through consumers |
 | Change-scope analysis | Reviewed | `impact` on the edited symbols; `route_message`-class hubs avoided; git host parse and sync merge verified against callers |
@@ -55,8 +55,8 @@ core.
 | Boundary | Input | Sensitive sink | Required control |
 | --- | --- | --- | --- |
 | Repo files to parser | zedb.toml, SQL, markers, directory names | SQL, filesystem walk, memory | No symlink follow, bounded reads/depth, identifier grammar |
-| Repo `.git` to git | fsmonitor/hooks config | Subprocess execution | Neutralize repo-local hooks/fsmonitor, bound runtime |
-| Remote URL to git | clone/ls-remote argument | git option parser, broker token | `--` separator, reject option-like URLs, correct host parse |
+| Repo `.git` to git | executable config, filters, helpers, transports | Subprocess execution | Override or reject execution-bearing config, allowlist transports, kill process groups |
+| Remote URL to git | clone/ls-remote argument, effective fetch/push URL, askpass prompt | git option parser, broker token | `--` separator, allowlisted transport, effective-host and prompt-host checks |
 | Sync payload to local state | connection list, preferences | Keychain routing, DDL, execution | Preserve local endpoint/safety, validate, bound size |
 | In-memory secrets to disk | SQL, tokens, endpoints | Local files | Private modes, atomic writes |
 | Server value to UI | decimal scale, strings | Display formatting | No panic, no control-character passthrough at the sink |
@@ -84,6 +84,14 @@ core.
 | ZCORE-17 | Low | Medium | Deferred | `Value::String`/`Enum` Display passes control characters to the grid copy path | CWE-150 |
 | ZCORE-18 | Info | High | Accepted | FNV-1a content hash gates reconciliation (not a security digest) | CWE-328 |
 | ZCORE-19 | Low | Medium | Deferred | Duplicate connection names within a local set (sync payload deduped; local not) | CWE-694 |
+| ZCORE-20 | Critical | High | Fixed | Synced driver settings bypass the preserved read-only posture | CWE-602, CWE-829 |
+| ZCORE-21 | Critical | High | Fixed | `pushurl`/`insteadOf` route a broker token to a different effective host | CWE-346, CWE-522 |
+| ZCORE-22 | Critical | High | Fixed | Remaining repo-local Git execution paths survive hooks/fsmonitor hardening | CWE-426, CWE-78 |
+| ZCORE-23 | High | High | Fixed | Lazy token migration leaves the legacy Keychain collision reachable | CWE-706 |
+| ZCORE-24 | Medium | High | Fixed | Git diagnostics log credential-bearing URLs to a permissive file | CWE-532, CWE-732 |
+| ZCORE-25 | Medium | High | Fixed | Metadata-first size caps follow special files and race a second open | CWE-59, CWE-400 |
+| ZCORE-26 | Medium | High | Fixed | Git helper descendants retain pipes past the subprocess deadline | CWE-400 |
+| ZCORE-27 | Low | High | Fixed | Fixed temp names and unrepaired directory modes weaken private persistence | CWE-377, CWE-732 |
 
 ## Findings
 
@@ -254,6 +262,81 @@ this path. Not a security digest; documented, left as is.
 `merge_synced_connections` now dedupes names within a pulled payload, closing
 the sync vector. A duplicate arising purely from local edits is a
 connections-controller (zedb-app) concern; deferred there.
+
+## Adversarial follow-up findings
+
+The first remediation pass was reviewed as an attacker rather than only
+against its registered cases. Eight bypasses or incomplete guarantees were
+confirmed and fixed before this review was closed.
+
+### ZCORE-20: synced driver settings bypass read-only (Fixed)
+
+The initial merge preserved the top-level `read_only` flag but still copied
+the pulled `driver`, `user`, and `database`. On HTTP, driver parameters are
+added after `readonly=2`, so a remote `readonly=0` setting could conflict with
+the safety guard. Existing connections now remain wholly local, including
+their order and presence. A new synced connection is parsed as a real URL,
+cannot contain URL credentials, and arrives read-only, production-marked,
+without driver settings or Cloud provenance. Regression coverage includes a
+remote `readonly=0` driver row.
+
+### ZCORE-21: effective Git destination differs from declared URL (Fixed)
+
+The first host fix parsed `remote.origin.url`, while Git push can use
+`remote.origin.pushurl` or an `insteadOf` rewrite. zeDB now resolves Git's
+effective fetch or push URL before enabling broker credentials. The askpass
+mode independently parses Git's actual prompt and returns an empty answer
+unless that prompt names the exact approved host. Regression coverage uses a
+GitHub fetch URL with an attacker-host push URL.
+
+### ZCORE-22: remaining repo-local Git execution paths (Fixed)
+
+Disabling hooks and fsmonitor did not cover signing programs, credential
+helpers, Git proxies, clean/smudge filters, SSH command overrides, or external
+remote helpers. Every command now disables signing, repo credential helpers,
+Git proxies, external transports, and repo SSH commands through highest
+precedence config. Network protocols are allowlisted. Automatic add/pull
+rejects local filter programs, and add also rejects an attributed clean
+filter on every staged path.
+
+### ZCORE-23: lazy legacy-token collision (Fixed)
+
+Moving plain tokens to a new service did not remove old items until each token
+was read. `get_password` and `delete_password` could therefore still reach an
+unmigrated token first. All shipped legacy token accounts use the reserved
+`zedb-` prefix; password fallback and deletion now refuse that legacy
+namespace while protected connection passwords remain available normally.
+
+### ZCORE-24: Git diagnostics leak remote credentials (Fixed)
+
+Clone diagnostics logged the complete URL and stderr into a default-mode log.
+They now retain only the remote scheme and host plus byte counts, filter
+controls, cap the log, refuse a symlink target, and repair the directory/file
+to 0700/0600.
+
+### ZCORE-25: metadata-first caps and special files (Fixed)
+
+The initial caps checked metadata and then reopened the path for an unbounded
+`read_to_string`; sync also followed symlinks. A symlink to `/dev/zero` could
+therefore bypass the size check. A shared bounded reader now opens with
+no-follow semantics, requires a regular file, checks that same descriptor,
+and reads at most `limit + 1`. Repo, sync, history, saved tabs, session,
+connections, preferences, and sync state all use it before deserialization.
+
+### ZCORE-26: descendant-held Git pipes outlive timeout (Fixed)
+
+Killing only Git and joining reader threads could wait forever when a helper
+retained stdout or stderr. Git now starts in a fresh process group; timeout or
+retained-pipe cleanup kills that group, and output collection itself has a
+deadline. A regression alias forks a background pipe holder.
+
+### ZCORE-27: private persistence edge cases (Fixed)
+
+The first writer neither repaired an existing directory nor protected its
+fixed temp name from reuse. It now reapplies 0700, creates a unique 0600 temp
+with `create_new` and no-follow semantics, syncs file and parent, renames
+atomically, and repairs the final file to 0600. Sync payloads use the same
+safe file primitive without changing the user's checkout-directory mode.
 
 ## Checked and clean
 

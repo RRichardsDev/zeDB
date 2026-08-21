@@ -16,6 +16,13 @@ const LEGACY_SERVICE: &str = "zedb";
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
 
+/// Every legacy plain-token account shipped by zeDB uses this prefix. The
+/// old service also held connection passwords, so password migration must
+/// refuse this reserved namespace until token reads have moved the item.
+fn is_legacy_plain_account(name: &str) -> bool {
+    name.starts_with("zedb-")
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
     #[error("macOS Keychain error: {0}")]
@@ -76,6 +83,12 @@ pub fn get_password(connection_name: &str) -> Result<Option<String>, SecretError
         return Ok(Some(password));
     }
 
+    // Legacy plain tokens and passwords once shared a service. Never treat a
+    // reserved token account as a connection password, even before its lazy
+    // token migration has run.
+    if is_legacy_plain_account(connection_name) {
+        return Ok(None);
+    }
     let Some(password) = read(connection_name, false)? else {
         return Ok(None);
     };
@@ -140,7 +153,11 @@ pub fn delete_plain(name: &str) -> Result<(), SecretError> {
 
 pub fn delete_password(connection_name: &str) -> Result<(), SecretError> {
     delete(connection_name, true)?;
-    delete(connection_name, false)
+    if is_legacy_plain_account(connection_name) {
+        Ok(())
+    } else {
+        delete(connection_name, false)
+    }
 }
 
 /// Move a stored password when a connection is renamed.
@@ -150,4 +167,17 @@ pub fn rename(old_name: &str, new_name: &str) -> Result<(), SecretError> {
         delete_password(old_name)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_legacy_plain_account;
+
+    #[test]
+    fn legacy_plain_token_namespace_is_never_a_password_namespace() {
+        assert!(is_legacy_plain_account("zedb-github-oauth"));
+        assert!(is_legacy_plain_account("zedb-git-elevated-github.com"));
+        assert!(is_legacy_plain_account("zedb-clickhouse-cloud-org-1"));
+        assert!(!is_legacy_plain_account("production"));
+    }
 }

@@ -45,10 +45,11 @@ pub fn load_history() -> Vec<HistoryEntry> {
     let Ok(path) = history_path() else {
         return Vec::new();
     };
-    let mut entries: Vec<HistoryEntry> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
+    let mut entries: Vec<HistoryEntry> =
+        crate::store::read_bounded_string(&path, crate::store::MAX_LOCAL_STATE_BYTES)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
     entries.truncate(HISTORY_CAP);
     entries
 }

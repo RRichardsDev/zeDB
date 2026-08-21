@@ -51,9 +51,17 @@ pub fn sanitized_preferences(preferences: &Preferences) -> Preferences {
 /// (a file, an ssh command, a `-`-leading option) is dropped rather than
 /// connected to.
 fn is_syncable_endpoint(endpoint: &str) -> bool {
-    let endpoint = endpoint.trim();
-    (endpoint.starts_with("http://") || endpoint.starts_with("https://"))
-        && endpoint.len() > "https://".len()
+    let trimmed = endpoint.trim();
+    if trimmed.is_empty() || endpoint != trimmed {
+        return false;
+    }
+    let Ok(url) = url::Url::parse(trimmed) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https")
+        && url.host().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
 }
 
 /// Merge a pulled connection list into the local one, secure by default.
@@ -69,33 +77,33 @@ pub fn merge_synced_connections(
     pulled: &[ConnectionConfig],
 ) -> Vec<ConnectionConfig> {
     use std::collections::HashSet;
-    let mut seen: HashSet<&str> = HashSet::new();
-    let mut merged = Vec::new();
+    // Keep every local record and its ordering. A remote payload may add a
+    // connection, but it cannot delete, reorder, or mutate local authority.
+    let mut merged = local.to_vec();
+    let mut seen: HashSet<&str> = local
+        .iter()
+        .map(|connection| connection.name.as_str())
+        .collect();
     for incoming in pulled {
         if incoming.name.is_empty() || !seen.insert(incoming.name.as_str()) {
             continue;
         }
-        match local.iter().find(|existing| existing.name == incoming.name) {
-            Some(existing) => {
-                // Keep the credential-routing and safety fields local; take
-                // only cosmetic fields (user, database, driver) from sync.
-                let mut connection = incoming.clone();
-                connection.nodes = existing.nodes.clone();
-                connection.read_only = existing.read_only;
-                connection.tier = existing.tier;
-                connection.cloud = existing.cloud.clone();
-                merged.push(connection);
-            }
-            None => {
-                if incoming
-                    .nodes
-                    .iter()
-                    .all(|node| is_syncable_endpoint(&node.endpoint))
-                    && !incoming.nodes.is_empty()
-                {
-                    merged.push(incoming.clone());
-                }
-            }
+        if incoming
+            .nodes
+            .iter()
+            .all(|node| is_syncable_endpoint(&node.endpoint))
+            && !incoming.nodes.is_empty()
+        {
+            // A connection arriving for the first time has no local trust
+            // decision yet. Import its address and login identity, but make
+            // it read-only, visibly production-sensitive, and free of remote
+            // driver or Cloud authority until the user edits it locally.
+            let mut connection = incoming.clone();
+            connection.read_only = true;
+            connection.tier = crate::connection::EnvTier::Production;
+            connection.driver = Default::default();
+            connection.cloud = None;
+            merged.push(connection);
         }
     }
     merged
@@ -143,19 +151,7 @@ const MAX_PAYLOAD_BYTES: u64 = 5 * 1024 * 1024;
 
 pub fn read_payload(root: &Path) -> Result<Option<Payload>, String> {
     let path = root.join(PAYLOAD_FILE);
-    match std::fs::metadata(&path) {
-        Ok(metadata) if metadata.len() > MAX_PAYLOAD_BYTES => {
-            return Err(format!(
-                "{} is {} bytes, over the {MAX_PAYLOAD_BYTES} byte sync limit",
-                path.display(),
-                metadata.len()
-            ));
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("could not read {}: {error}", path.display())),
-    }
-    let data = match std::fs::read_to_string(&path) {
+    let data = match crate::store::read_bounded_string(&path, MAX_PAYLOAD_BYTES) {
         Ok(data) => data,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("could not read {}: {error}", path.display())),
@@ -168,7 +164,7 @@ pub fn read_payload(root: &Path) -> Result<Option<Payload>, String> {
 pub fn write_payload(root: &Path, payload: &Payload) -> Result<(), String> {
     let path = root.join(PAYLOAD_FILE);
     let data = serde_json::to_string_pretty(payload).expect("serializable");
-    crate::store::write_private_atomic(&path, data.as_bytes())
+    crate::store::write_atomic_file(&path, data.as_bytes())
         .map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
@@ -193,7 +189,7 @@ pub fn load_state() -> SyncState {
     let Some(path) = state_path() else {
         return SyncState::default();
     };
-    std::fs::read_to_string(path)
+    crate::store::read_bounded_string(&path, crate::store::MAX_LOCAL_STATE_BYTES)
         .ok()
         .and_then(|data| serde_json::from_str(&data).ok())
         .unwrap_or_default()
@@ -424,6 +420,16 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn payload_reader_rejects_symlinks_before_reading_their_target() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        symlink("/dev/zero", directory.path().join(PAYLOAD_FILE)).unwrap();
+        assert!(read_payload(directory.path()).is_err());
+    }
+
     #[test]
     fn hash_ignores_machine_local_fields() {
         let base = Preferences::default();
@@ -508,11 +514,16 @@ mod tests {
                 endpoint: "https://attacker.example:8123".into(),
                 native_port: None,
             }],
-            user: "default".into(),
-            database: None,
+            user: "attacker".into(),
+            database: Some("attacker_db".into()),
             tier: EnvTier::Dev,
             read_only: false,
-            driver: Default::default(),
+            driver: crate::DriverConfig {
+                settings: vec![crate::DriverSetting {
+                    name: "readonly".into(),
+                    value: "0".into(),
+                }],
+            },
             cloud: None,
         }];
         let merged = merge_synced_connections(&local, &pulled);
@@ -523,6 +534,9 @@ mod tests {
         );
         assert!(merged[0].read_only, "read-only must not be weakened");
         assert_eq!(merged[0].tier, EnvTier::Production, "tier must not weaken");
+        assert_eq!(merged[0].user, "default");
+        assert_eq!(merged[0].database, None);
+        assert!(merged[0].driver.settings.is_empty());
     }
 
     #[test]
@@ -544,15 +558,29 @@ mod tests {
             cloud: None,
         };
         let pulled = vec![
-            conn("a", "https://ok.example:8123"),
+            {
+                let mut incoming = conn("a", "https://ok.example:8123");
+                incoming.read_only = false;
+                incoming.tier = EnvTier::Dev;
+                incoming.driver.settings.push(crate::DriverSetting {
+                    name: "readonly".into(),
+                    value: "0".into(),
+                });
+                incoming
+            },
             conn("a", "https://second.example:8123"), // duplicate name
             conn("evil", "file:///etc/passwd"),       // non-http endpoint
             conn("dash", "--upload-pack=x"),          // option-like
+            conn("creds", "https://user:secret@evil.example/repo"),
+            conn("space", " https://evil.example"),
         ];
         let merged = merge_synced_connections(&local, &pulled);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].name, "a");
         assert_eq!(merged[0].nodes[0].endpoint, "https://ok.example:8123");
+        assert!(merged[0].read_only);
+        assert_eq!(merged[0].tier, EnvTier::Production);
+        assert!(merged[0].driver.settings.is_empty());
     }
 
     #[test]

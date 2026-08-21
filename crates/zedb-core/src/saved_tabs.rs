@@ -73,7 +73,8 @@ pub fn load_saved_tabs() -> Vec<SavedTab> {
 }
 
 fn load_at(path: &Path) -> Vec<SavedTab> {
-    let Ok(raw) = std::fs::read_to_string(path) else {
+    let Ok(raw) = crate::store::read_bounded_string(path, crate::store::MAX_LOCAL_STATE_BYTES)
+    else {
         return Vec::new();
     };
     if let Ok(mut tabs) = serde_json::from_str::<Vec<SavedTab>>(&raw) {

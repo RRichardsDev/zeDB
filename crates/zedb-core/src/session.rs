@@ -61,7 +61,8 @@ fn take_at(path: PathBuf) -> Option<SavedSession> {
     // A crash between the temp write and the rename can leave a stale
     // *.tmp behind; clear it so it cannot outlive the session it held.
     let _ = std::fs::remove_file(path.with_extension("tmp"));
-    let data = std::fs::read_to_string(&path).ok()?;
+    let data =
+        crate::store::read_bounded_string(&path, crate::store::MAX_LOCAL_STATE_BYTES).ok()?;
     let _ = std::fs::remove_file(&path);
     serde_json::from_str(&data).ok()
 }
