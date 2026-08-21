@@ -31,9 +31,7 @@ pub fn e2e_binary() -> Option<PathBuf> {
     if let Some(binary) = any_cached_binary() {
         return Some(binary);
     }
-    if std::env::var_os("ZEDB_E2E_DOWNLOAD").is_none() {
-        return None;
-    }
+    std::env::var_os("ZEDB_E2E_DOWNLOAD")?;
     let version = crate::pin::newest_trusted_version()?;
     tokio::runtime::Runtime::new()
         .ok()?
