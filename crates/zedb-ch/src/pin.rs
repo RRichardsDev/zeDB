@@ -1024,7 +1024,9 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    // macOS-only by nature: the Linux asset is a tarball, whose cache
+    // verifies against the reviewed archive instead of the sidecar.
+    #[cfg(target_os = "macos")]
     #[test]
     fn continuity_digest_governs_the_cache_between_downloads() {
         use std::os::unix::fs::PermissionsExt as _;
