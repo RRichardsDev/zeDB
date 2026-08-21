@@ -7,4 +7,7 @@ mod controller_repo_picker;
 mod controller_verification;
 mod view;
 
+#[cfg(test)]
+mod gpui_tests;
+
 pub(crate) use view::FleetState;

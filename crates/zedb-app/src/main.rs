@@ -53,6 +53,8 @@ mod shell_workspace;
 mod storage_advisor;
 #[path = "features/query/tail.rs"]
 mod tail;
+#[cfg(test)]
+mod test_harness;
 #[path = "ui/theme.rs"]
 mod theme;
 #[path = "features/query/type_highlight.rs"]
@@ -432,8 +434,6 @@ impl Workspace {
                 let _ = save_preferences(&preferences);
             }
         }
-        let fleet_repo_path = preferences.fleet_repo.clone();
-        let fleet_cluster = preferences.fleet_cluster.clone();
         // Check for updates now and every five minutes (the health-poll
         // cadence), so long-running instances learn about releases too.
         cx.spawn(async move |this, cx| loop {
@@ -721,117 +721,135 @@ impl Workspace {
                 tab
             })
             .collect();
-        match load_connections() {
-            Ok(connections) => Self {
-                connection: ConnectionState::new(connections),
-                schema: SchemaState::new(schema_filter, schema_provider.clone()),
-                notice: None,
-                notice_warning: false,
-                notice_flash_id: 0,
-                update_available: None,
-                update_phase: UpdatePhase::Available,
-                sidebar_width: 240.0,
-                resizing_sidebar: false,
-                connections_pane_height: 430.0,
-                resizing_sidebar_sections: false,
-                query: QueryState::new(query_tabs, active_query_tab, next_query_tab_id),
-                show_query_editor: false,
-                fleet: FleetState::new(
-                    fleet_repo_path.as_deref().unwrap_or(""),
-                    fleet_cluster.as_deref().unwrap_or(""),
-                    window,
-                    cx,
-                ),
-                show_fleet: false,
-                show_ops: false,
-                history: query_history::HistoryState::new(
-                    zedb_core::load_history(),
-                    zedb_core::load_saved_tabs(),
-                    Self::input("", "Search queries", false, cx),
-                ),
-                agent_fix_target: None,
-                export: None,
-                ops: ops::OpsState::default(),
-                ops_killed: std::collections::HashSet::new(),
-                agent: agent_pane::AgentPaneState::new(
-                    preferences.agent_pane_width.unwrap_or(420.0),
-                ),
-                author: None,
-                regen: None,
-                checks: None,
-                checks_open: false,
-                control_highlight: None,
-                control_highlight_generation: 0,
-                checks_clean: false,
-                regen_status: None,
-                commit: None,
-                health_poll_generation: 0,
-                merges_poll_generation: 0,
-                last_focus_check: None,
-                github: GithubAuth::SignedOut,
-                github_generation: 0,
-                preferences,
-                palette: command_palette::PaletteState::new(cx),
-                settings_sync: settings_sync::SettingsSyncState::new(cx),
-                show_preferences: false,
-                show_about: false,
-            },
-            Err(error) => Self {
-                connection: ConnectionState::new(Vec::new()),
-                schema: SchemaState::new(schema_filter, schema_provider),
-                notice: Some(format!("Could not load connections: {error}")),
-                notice_warning: false,
-                notice_flash_id: 0,
-                update_available: None,
-                update_phase: UpdatePhase::Available,
-                sidebar_width: 240.0,
-                resizing_sidebar: false,
-                connections_pane_height: 430.0,
-                resizing_sidebar_sections: false,
-                query: QueryState::new(query_tabs, active_query_tab, next_query_tab_id),
-                show_query_editor: false,
-                fleet: FleetState::new(
-                    fleet_repo_path.as_deref().unwrap_or(""),
-                    fleet_cluster.as_deref().unwrap_or(""),
-                    window,
-                    cx,
-                ),
-                show_fleet: false,
-                show_ops: false,
-                history: query_history::HistoryState::new(
-                    zedb_core::load_history(),
-                    zedb_core::load_saved_tabs(),
-                    Self::input("", "Search queries", false, cx),
-                ),
-                agent_fix_target: None,
-                export: None,
-                ops: ops::OpsState::default(),
-                ops_killed: std::collections::HashSet::new(),
-                agent: agent_pane::AgentPaneState::new(
-                    preferences.agent_pane_width.unwrap_or(420.0),
-                ),
-                author: None,
-                regen: None,
-                checks: None,
-                checks_open: false,
-                control_highlight: None,
-                control_highlight_generation: 0,
-                checks_clean: false,
-                regen_status: None,
-                commit: None,
-                health_poll_generation: 0,
-                merges_poll_generation: 0,
-                last_focus_check: None,
-                github: GithubAuth::SignedOut,
-                github_generation: 0,
-                preferences,
-                palette: command_palette::PaletteState::new(cx),
-                settings_sync: settings_sync::SettingsSyncState::new(cx),
-                show_preferences: false,
-                show_about: false,
-            },
-        }
+        let (connections, connections_notice) = match load_connections() {
+            Ok(connections) => (connections, None),
+            Err(error) => (
+                Vec::new(),
+                Some(format!("Could not load connections: {error}")),
+            ),
+        };
+        let history = query_history::HistoryState::new(
+            zedb_core::load_history(),
+            zedb_core::load_saved_tabs(),
+            Self::input("", "Search queries", false, cx),
+        );
+        Self::build(
+            preferences,
+            connections,
+            connections_notice,
+            query_tabs,
+            active_query_tab,
+            next_query_tab_id,
+            schema_filter,
+            schema_provider,
+            history,
+            window,
+            cx,
+        )
         .with_startup_notice(preferences_error)
+    }
+
+    /// Assemble the Workspace state from already-loaded inputs. No disk,
+    /// Keychain, or network reads happen here: `new` gathers those first,
+    /// and the gpui window tests supply fixtures directly.
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        preferences: Preferences,
+        connections: Vec<zedb_core::ConnectionConfig>,
+        notice: Option<String>,
+        query_tabs: Vec<QueryTab>,
+        active_query_tab: usize,
+        next_query_tab_id: usize,
+        schema_filter: Entity<TextInput>,
+        schema_provider: Rc<SchemaProvider>,
+        history: query_history::HistoryState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let fleet = FleetState::new(
+            preferences.fleet_repo.as_deref().unwrap_or(""),
+            preferences.fleet_cluster.as_deref().unwrap_or(""),
+            window,
+            cx,
+        );
+        Self {
+            connection: ConnectionState::new(connections),
+            schema: SchemaState::new(schema_filter, schema_provider),
+            notice,
+            notice_warning: false,
+            notice_flash_id: 0,
+            update_available: None,
+            update_phase: UpdatePhase::Available,
+            sidebar_width: 240.0,
+            resizing_sidebar: false,
+            connections_pane_height: 430.0,
+            resizing_sidebar_sections: false,
+            query: QueryState::new(query_tabs, active_query_tab, next_query_tab_id),
+            show_query_editor: false,
+            fleet,
+            show_fleet: false,
+            show_ops: false,
+            history,
+            agent_fix_target: None,
+            export: None,
+            ops: ops::OpsState::default(),
+            ops_killed: std::collections::HashSet::new(),
+            agent: agent_pane::AgentPaneState::new(preferences.agent_pane_width.unwrap_or(420.0)),
+            author: None,
+            regen: None,
+            checks: None,
+            checks_open: false,
+            control_highlight: None,
+            control_highlight_generation: 0,
+            checks_clean: false,
+            regen_status: None,
+            commit: None,
+            health_poll_generation: 0,
+            merges_poll_generation: 0,
+            last_focus_check: None,
+            github: GithubAuth::SignedOut,
+            github_generation: 0,
+            preferences,
+            palette: command_palette::PaletteState::new(cx),
+            settings_sync: settings_sync::SettingsSyncState::new(cx),
+            show_preferences: false,
+            show_about: false,
+        }
+    }
+
+    /// A Workspace with default state and none of `new`'s launch side
+    /// effects: no preferences, session, or connection files, no
+    /// Keychain, and no update/Cloud/GitHub polls. For #[gpui::test]
+    /// window tests only.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let schema_provider = SchemaProvider::new();
+        let query_tabs = vec![Self::make_query_tab(
+            1,
+            DEFAULT_QUERY,
+            schema_provider.clone(),
+            window,
+            cx,
+        )];
+        let schema_filter = Self::input("", "Filter schema", false, cx);
+        let history = query_history::HistoryState::new(
+            Vec::new(),
+            Vec::new(),
+            Self::input("", "Search queries", false, cx),
+        );
+        Self::build(
+            Preferences::default(),
+            Vec::new(),
+            None,
+            query_tabs,
+            0,
+            2,
+            schema_filter,
+            schema_provider,
+            history,
+            window,
+            cx,
+        )
     }
 
     fn with_startup_notice(mut self, notice: Option<String>) -> Self {

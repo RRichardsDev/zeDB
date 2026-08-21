@@ -1,3 +1,19 @@
+## 2026-08-21: gpui window-test framework
+
+- zedb-app now has `#[gpui::test]` window tests: the real Workspace in a
+  headless test window on gpui's deterministic executor, with the app theme
+  and key bindings installed. `src/test_harness.rs` holds the shared
+  scaffolding (headless workspace, fixture migration repo, fixture connected
+  cluster); suites live in a `gpui_tests.rs` next to their feature.
+- `Workspace::new` was split: the field assembly moved into a shared
+  `build` (also removing the duplicated Ok/Err struct literals), and a
+  test-only `new_for_test` builds a Workspace with no disk, Keychain, or
+  network side effects.
+- First suite covers the fleet safety ladder end to end: write-lock
+  refusal, the production typed phrase (driven by simulated keystrokes into
+  the rendered modal input), and confirmation invalidation when the
+  connection changes under a pending action.
+
 ## 2026-08-20: dependency advisory gate
 
 - CI now runs cargo-deny against the all-features graph for the supported macOS

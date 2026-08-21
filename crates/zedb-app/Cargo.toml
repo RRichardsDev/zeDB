@@ -30,3 +30,6 @@ lsp-types = "0.97"
 tempfile = "3"
 
 [dev-dependencies]
+# Headless windows, simulated input, and the deterministic executor
+# for #[gpui::test] window tests.
+gpui = { workspace = true, features = ["test-support"] }
