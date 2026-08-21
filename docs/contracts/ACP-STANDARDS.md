@@ -74,21 +74,28 @@ asks where something is; never as a reflex on seeing a failure.
 ## Session mechanics (for maintainers)
 
 - The MCP server is this same executable in `zedb-mcp-serve` mode.
-  Config travels in the server's environment (`ZEDB_MCP_*`), never
-  argv (world-readable) and never a file (agent runtimes respawn MCP
-  servers; a delete-on-read file killed respawns and silently cost
-  sessions their tools).
+  Non-secret config travels in its environment (`ZEDB_MCP_*`), never argv or
+  a file. Database credentials never enter ACP session data or the
+  agent-spawned child's environment. Connection-dependent read tools execute
+  inside the app through the authenticated bridge, using a client forced
+  read-only for that call.
 - State follows the app live: the migration repo is resolved per call
   over the app bridge socket, so a repo attached, switched, or grown
   mid-session is seen on the next tool call. Do not capture app state
   at session start.
-- App-hosted tools forward over a unix socket in the user's data dir;
-  replies carry `isError` so failures surface in the agent, not in
-  the app.
+- App-hosted tools forward over a private unix socket in the user's data dir.
+  Every request carries a random capability rotated for each session
+  registration; frames, queues, and waits are bounded. Replies carry `isError`
+  so failures surface in the agent, not in the app.
 - The primer (`AGENT_PRIMER` in `features/agent/mod.rs`) is
   orientation, not restriction: it must never be the only thing
   standing between the agent and a write. Safety lives in what the
   tools can reach.
+- Permission choices are request-scoped. ACP tool titles are human-readable
+  text supplied by the agent, not stable authority identifiers, so zeDB never
+  reuses a past approval merely because a later request has the same title.
+  Every selected option must be one the current request actually offered, and
+  cancelling a turn cancels all of that session's outstanding requests.
 
 ## Git credentials (the broker)
 

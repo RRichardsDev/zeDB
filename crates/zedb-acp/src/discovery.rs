@@ -9,6 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
+const CLAUDE_ADAPTER: &str = "@agentclientprotocol/claude-agent-acp@0.70.0";
+const CODEX_ADAPTER: &str = "@zed-industries/codex-acp@0.16.0";
+
 /// How usable an agent is right now, with a hint a human can act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Availability {
@@ -106,7 +109,7 @@ pub fn discover_known() -> Vec<DiscoveredAgent> {
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "npx".into()),
-        args: vec!["-y".into(), "@agentclientprotocol/claude-agent-acp".into()],
+        args: vec!["-y".into(), CLAUDE_ADAPTER.into()],
         availability: if npx.is_none() {
             Availability::Missing {
                 hint: "needs Node (npx not found); install Node.js".into(),
@@ -134,7 +137,7 @@ pub fn discover_known() -> Vec<DiscoveredAgent> {
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "npx".into()),
-        args: vec!["-y".into(), "@zed-industries/codex-acp".into()],
+        args: vec!["-y".into(), CODEX_ADAPTER.into()],
         availability: if npx.is_none() {
             Availability::Missing {
                 hint: "needs Node (npx not found); install Node.js".into(),
@@ -210,8 +213,13 @@ mod tests {
     fn known_agents_always_enumerate() {
         let agents = discover_known();
         assert_eq!(agents.len(), 2);
-        assert!(agents.iter().any(|agent| agent.id == "claude-code"));
-        assert!(agents.iter().any(|agent| agent.id == "codex"));
+        let claude = agents
+            .iter()
+            .find(|agent| agent.id == "claude-code")
+            .unwrap();
+        assert_eq!(claude.args, ["-y", CLAUDE_ADAPTER]);
+        let codex = agents.iter().find(|agent| agent.id == "codex").unwrap();
+        assert_eq!(codex.args, ["-y", CODEX_ADAPTER]);
     }
 
     #[test]

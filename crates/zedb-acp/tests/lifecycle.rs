@@ -1,7 +1,7 @@
 //! The full connection lifecycle against the scripted fake agent,
 //! including the ugly exits.
 
-use zedb_acp::{AgentConnection, AgentEvent, PermissionOutcome};
+use zedb_acp::{AcpError, AgentConnection, AgentEvent, PermissionOutcome};
 
 fn spawn_fake(scenario: &str) -> AgentConnection {
     AgentConnection::spawn(
@@ -40,7 +40,7 @@ async fn happy_lifecycle_streams_and_ends() {
         tokio::time::timeout(std::time::Duration::from_secs(5), events.recv()).await
     {
         match event.expect("event stream open") {
-            AgentEvent::MessageChunk { text: chunk } => text.push_str(&chunk),
+            AgentEvent::MessageChunk { text: chunk, .. } => text.push_str(&chunk),
             AgentEvent::ToolCall { id, status, .. } => {
                 assert_eq!(id, "tc-1");
                 assert_eq!(status, "in_progress");
@@ -95,7 +95,7 @@ async fn permission_round_trip() {
                     .expect("respond");
                 answered = true;
             }
-            AgentEvent::MessageChunk { text } => {
+            AgentEvent::MessageChunk { text, .. } => {
                 echoed.push_str(&text);
                 break;
             }
@@ -176,4 +176,22 @@ async fn agent_death_fails_pending_and_closes() {
         }
     }
     assert!(closed, "Closed event must arrive when the agent dies");
+}
+
+#[tokio::test]
+async fn oversized_outgoing_prompt_is_rejected_before_send() {
+    let agent = spawn_fake("happy");
+    agent.initialize().await.expect("initialize");
+    let session = agent
+        .new_session(std::path::Path::new("/tmp"), Vec::new())
+        .await
+        .expect("new session");
+
+    let oversized = "x".repeat(2 * 1024 * 1024);
+    let error = agent
+        .prompt(&session.session_id, &oversized)
+        .await
+        .expect_err("oversized frame must not enter the writer queue");
+    assert!(matches!(error, AcpError::Limit(_)));
+    agent.shutdown().await;
 }

@@ -35,6 +35,9 @@ pub fn sanitized_preferences(preferences: &Preferences) -> Preferences {
     preferences.fleet_repo = None;
     preferences.settings_sync_url = None;
     preferences.settings_sync_repo = None;
+    preferences.custom_agents.clear();
+    preferences.agent_always_allow.clear();
+    preferences.last_agent = None;
     preferences
 }
 
@@ -271,6 +274,9 @@ pub fn apply_preferences(local: &Preferences, pulled: &Preferences) -> Preferenc
     merged.fleet_repo = local.fleet_repo.clone();
     merged.settings_sync_url = local.settings_sync_url.clone();
     merged.settings_sync_repo = local.settings_sync_repo.clone();
+    merged.custom_agents = local.custom_agents.clone();
+    merged.agent_always_allow = local.agent_always_allow.clone();
+    merged.last_agent = local.last_agent.clone();
     merged
 }
 
@@ -306,6 +312,13 @@ mod tests {
         };
         preferences.settings_sync_url = Some("git@example.com:me/settings.git".into());
         preferences.settings_sync_repo = Some("/local/sync".into());
+        preferences.custom_agents = vec![crate::CustomAgent {
+            name: "Local agent".into(),
+            command: "/usr/local/bin/local-agent".into(),
+            args: vec!["--acp".into()],
+        }];
+        preferences.agent_always_allow = vec!["Local agent|Read file".into()];
+        preferences.last_agent = Some("Local agent".into());
 
         let payload = build_payload(
             &preferences,
@@ -328,6 +341,8 @@ mod tests {
             !raw.contains("settings.git"),
             "sync config itself never syncs"
         );
+        assert!(!raw.contains("local-agent"), "agent commands stay local");
+        assert!(!raw.contains("Read file"), "permission grants stay local");
 
         let read = read_payload(directory.path()).unwrap().unwrap();
         assert_eq!(read, payload);
@@ -373,11 +388,25 @@ mod tests {
             fleet_repo: Some("/mine".into()),
             settings_sync_url: Some("url".into()),
             settings_sync_repo: Some("/sync".into()),
+            custom_agents: vec![crate::CustomAgent {
+                name: "Mine".into(),
+                command: "/mine/agent".into(),
+                args: vec![],
+            }],
+            agent_always_allow: vec!["Mine|Read file".into()],
+            last_agent: Some("Mine".into()),
             ..Preferences::default()
         };
         let pulled = Preferences {
             vim_mode: true,
             fleet_repo: Some("/theirs".into()),
+            custom_agents: vec![crate::CustomAgent {
+                name: "Theirs".into(),
+                command: "/theirs/agent".into(),
+                args: vec![],
+            }],
+            agent_always_allow: vec!["Theirs|Delete all".into()],
+            last_agent: Some("Theirs".into()),
             ..Preferences::default()
         };
         let merged = apply_preferences(&local, &pulled);
@@ -385,5 +414,8 @@ mod tests {
         assert_eq!(merged.fleet_repo.as_deref(), Some("/mine"));
         assert_eq!(merged.settings_sync_url.as_deref(), Some("url"));
         assert_eq!(merged.settings_sync_repo.as_deref(), Some("/sync"));
+        assert_eq!(merged.custom_agents, local.custom_agents);
+        assert_eq!(merged.agent_always_allow, local.agent_always_allow);
+        assert_eq!(merged.last_agent, local.last_agent);
     }
 }

@@ -81,7 +81,11 @@ impl Workspace {
         full_text.push_str(&text);
         agent_log(
             "prompt",
-            serde_json::json!({ "session_id": session_id, "text": full_text }),
+            serde_json::json!({
+                "session_id": session_id,
+                "bytes": full_text.len(),
+                "included_context": include_context,
+            }),
         );
         let handle =
             rt::tokio().spawn(async move { connection.prompt(&session_id, &full_text).await });
@@ -112,7 +116,10 @@ impl Workspace {
                         }
                     }
                     Err(error) => {
-                        agent_log("turn_error", serde_json::json!({ "error": error }));
+                        agent_log(
+                            "turn_error",
+                            serde_json::json!({ "error_bytes": error.len() }),
+                        );
                         thread.status = Some(error);
                     }
                 }
@@ -263,11 +270,14 @@ impl Workspace {
     }
 
     pub(crate) fn agent_cancel(&mut self, cx: &mut Context<Self>) {
-        let Some(thread) = self.agent.thread.as_ref() else {
+        let Some(thread) = self.agent.thread.as_mut() else {
             return;
         };
         if let Some(session_id) = &thread.session_id {
             let _ = thread.connection.cancel(session_id);
+        }
+        for pending in thread.pending_permissions.drain(..) {
+            let _ = pending.responder.send(PermissionOutcome::Cancelled);
         }
         cx.notify();
     }
@@ -280,43 +290,34 @@ impl Workspace {
         let Some(thread) = self.agent.thread.as_mut() else {
             return;
         };
-        let Some(responder) = thread.pending_permissions.pop_front() else {
+        let Some(pending) = thread.pending_permissions.pop_front() else {
             return;
         };
         let outcome = match &option_id {
-            Some(option_id) => PermissionOutcome::Selected {
-                option_id: option_id.clone(),
-            },
-            None => PermissionOutcome::Cancelled,
+            Some(option_id) if pending.option_ids.contains(option_id) => {
+                PermissionOutcome::Selected {
+                    option_id: option_id.clone(),
+                }
+            }
+            Some(_) | None => PermissionOutcome::Cancelled,
         };
         agent_log(
             "permission_answer",
-            serde_json::json!({ "option": option_id }),
+            serde_json::json!({ "selected": option_id.is_some() }),
         );
-        let _ = responder.send(outcome);
-        // Mark the OLDEST unanswered card (queue order), and remember
-        // permanent grants across sessions.
-        let agent_name = thread.agent_name.clone();
-        let mut remember: Option<String> = None;
+        let _ = pending.responder.send(outcome);
+        // Mark the oldest unanswered card. ACP tool titles are display text,
+        // not authority identities, so approvals are never reused by title.
         for entry in thread.entries.iter_mut() {
             if let ThreadEntry::Permission {
-                title, answered, ..
+                title: _, answered, ..
             } = entry
             {
                 if answered.is_none() {
                     let chosen = option_id.clone().unwrap_or_else(|| "cancelled".into());
-                    if chosen.contains("always") {
-                        remember = Some(format!("{agent_name}|{title}"));
-                    }
                     *answered = Some(chosen);
                     break;
                 }
-            }
-        }
-        if let Some(key) = remember {
-            if !self.preferences.agent_always_allow.contains(&key) {
-                self.preferences.agent_always_allow.push(key);
-                let _ = zedb_core::save_preferences(&self.preferences);
             }
         }
         cx.notify();

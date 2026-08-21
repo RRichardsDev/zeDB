@@ -44,10 +44,10 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy -p zedb-core -p zedb-ch -p zedb-cli --all-targets -- -D warnings
+        run: cargo clippy -p zedb-core -p zedb-ch -p zedb-cli -p zedb-acp --all-targets -- -D warnings
       - name: Test
         run: |
-          cargo test -p zedb-core -p zedb-cli
+          cargo test -p zedb-core -p zedb-cli -p zedb-acp
           # zedb-ch's integration tests each stand up their own ephemeral
           # ClickHouse and interfere with each other when run concurrently:
           # a test reads state from a server it never wrote to. Serial is

@@ -24,7 +24,7 @@ async fn main() {
     let pump = tokio::spawn(async move {
         while let Some(event) = events.recv().await {
             match event {
-                AgentEvent::MessageChunk { text } => print!("{text}"),
+                AgentEvent::MessageChunk { text, .. } => print!("{text}"),
                 AgentEvent::ThoughtChunk { .. } => {}
                 AgentEvent::ToolCall { title, status, .. } => {
                     eprintln!("\n[tool] {title} ({status})")

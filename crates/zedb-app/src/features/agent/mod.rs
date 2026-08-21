@@ -22,6 +22,49 @@ use crate::rt;
 use crate::theme;
 use crate::Workspace;
 
+const MAX_PERSISTED_TRANSCRIPT_ENTRIES: usize = 200;
+const MAX_PERSISTED_ENTRY_BYTES: usize = 32 * 1024;
+const MAX_AGENT_LOG_BYTES: u64 = 1024 * 1024;
+const MAX_PENDING_PERMISSIONS: usize = 64;
+const MAX_LIVE_TRANSCRIPT_ENTRIES: usize = 600;
+
+fn private_directory(path: &std::path::Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder.create(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn force_private_file(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+fn truncate_for_disk(text: &str) -> String {
+    if text.len() <= MAX_PERSISTED_ENTRY_BYTES {
+        return text.to_string();
+    }
+    let mut end = MAX_PERSISTED_ENTRY_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &text[..end])
+}
+
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json, no_register)]
 pub struct StartAgentThread {
@@ -50,9 +93,17 @@ pub enum AgentEffect {
 
 /// One forwarded tool call awaiting the app's answer.
 struct BridgeRequest {
+    token: String,
     tool: String,
     arguments: serde_json::Value,
     respond: oneshot::Sender<(String, bool)>,
+}
+
+/// One live permission request, including the exact option IDs the agent
+/// offered for this request. Display text is never an authority identity.
+struct PendingPermission {
+    responder: oneshot::Sender<PermissionOutcome>,
+    option_ids: std::collections::HashSet<String>,
 }
 
 /// Sent once at the start of every thread: orientation on zeDB and
@@ -159,7 +210,7 @@ pub struct ThreadState {
     pub input: Entity<InputState>,
     pub running: bool,
     pub status: Option<String>,
-    pub pending_permissions: std::collections::VecDeque<oneshot::Sender<PermissionOutcome>>,
+    pending_permissions: std::collections::VecDeque<PendingPermission>,
     pub generation: u64,
 }
 
@@ -179,6 +230,14 @@ pub struct AgentPaneState {
     /// The unix socket where app-hosted tools (propose_*, navigate)
     /// arrive from the MCP serve subprocess; created lazily once.
     pub bridge_socket: Option<std::path::PathBuf>,
+    /// Random capability required on every bridge request and rotated for each
+    /// session registration. The ACP agent can use the documented propose-only
+    /// bridge, but unrelated or stale clients cannot invoke it by guessing the
+    /// PID-named socket.
+    pub bridge_token: Option<String>,
+    /// Listener-side copy of the current token, shared only with the bridge
+    /// task so a new session can invalidate older MCP children.
+    bridge_token_state: Option<std::sync::Arc<std::sync::Mutex<String>>>,
     /// Effects that need a Window (editor creation); queued by the
     /// bridge pump and drained at the top of render.
     pub pending_effects: Vec<AgentEffect>,
@@ -209,10 +268,20 @@ impl AgentPaneState {
             agents: Vec::new(),
             connections: std::collections::HashMap::new(),
             bridge_socket: None,
+            bridge_token: None,
+            bridge_token_state: None,
             pending_effects: Vec::new(),
             add_form: None,
             restored: None,
             pending_ask: None,
+        }
+    }
+}
+
+impl Drop for AgentPaneState {
+    fn drop(&mut self) {
+        if let Some(path) = self.bridge_socket.take() {
+            let _ = std::fs::remove_file(path);
         }
     }
 }
@@ -230,6 +299,9 @@ fn persist_transcript(thread: &ThreadState) {
     let entries: Vec<serde_json::Value> = thread
         .entries
         .iter()
+        .rev()
+        .take(MAX_PERSISTED_TRANSCRIPT_ENTRIES)
+        .rev()
         .map(|entry| {
             let (kind, text) = match entry {
                 ThreadEntry::User(text) => ("user", text.clone()),
@@ -243,14 +315,32 @@ fn persist_transcript(thread: &ThreadState) {
                 ),
                 ThreadEntry::Info(text) => ("info", text.clone()),
             };
-            serde_json::json!({ "kind": kind, "text": text })
+            serde_json::json!({ "kind": kind, "text": truncate_for_disk(&text) })
         })
         .collect();
     let value = serde_json::json!({ "agent": thread.agent_name, "entries": entries });
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if private_directory(parent).is_err() {
+            return;
+        }
     }
-    let _ = std::fs::write(path, value.to_string());
+    let temporary = path.with_extension("json.tmp");
+    let serialized = value.to_string();
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let written = options.open(&temporary).and_then(|mut file| {
+        use std::io::Write as _;
+        file.write_all(serialized.as_bytes())
+    });
+    if written.is_ok() && force_private_file(&temporary).is_ok() {
+        let _ = std::fs::rename(&temporary, &path);
+        let _ = force_private_file(&path);
+    }
 }
 
 /// Load the persisted transcript, if any.
@@ -279,18 +369,35 @@ fn agent_log(kind: &str, data: serde_json::Value) {
     let Some(dir) = dirs::data_local_dir().map(|dir| dir.join("zedb")) else {
         return;
     };
-    let _ = std::fs::create_dir_all(&dir);
+    if private_directory(&dir).is_err() {
+        return;
+    }
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis())
         .unwrap_or(0);
+    let serialized_data = data.to_string();
+    let data = if serialized_data.len() > MAX_PERSISTED_ENTRY_BYTES {
+        serde_json::json!({ "truncated": true, "bytes": serialized_data.len() })
+    } else {
+        data
+    };
     let line = serde_json::json!({ "ts": millis, "kind": kind, "data": data });
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("agent-log.jsonl"))
+    let path = dir.join("agent-log.jsonl");
+    if std::fs::metadata(&path).is_ok_and(|metadata| metadata.len() >= MAX_AGENT_LOG_BYTES) {
+        let _ = std::fs::remove_file(dir.join("agent-log.previous.jsonl"));
+        let _ = std::fs::rename(&path, dir.join("agent-log.previous.jsonl"));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    if let Ok(mut file) = options.open(&path) {
         use std::io::Write;
+        let _ = force_private_file(&path);
         let _ = writeln!(file, "{line}");
     }
 }

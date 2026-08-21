@@ -30,8 +30,9 @@ pub struct Preferences {
     pub fleet_cluster: Option<String>,
     /// User-added ACP agents for the agent pane, beyond the built-ins.
     pub custom_agents: Vec<CustomAgent>,
-    /// Tools the user chose Always Allow for, as "agent|tool" keys;
-    /// matching permission requests auto-approve across sessions.
+    /// Legacy title-based grants retained only for settings compatibility.
+    /// They are ignored by the app and excluded from settings sync because ACP
+    /// display titles are not stable authority identities.
     pub agent_always_allow: Vec<String>,
     /// Agent pane width, remembered across launches.
     pub agent_pane_width: Option<f32>,

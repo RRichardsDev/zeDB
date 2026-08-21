@@ -63,6 +63,7 @@ pub struct McpServer {
     /// navigate) are offered and forwarded over this unix socket to the
     /// running zeDB app, which owns the editors these tools fill.
     app_socket: Option<std::path::PathBuf>,
+    app_token: Option<String>,
     /// When set, schema_search and lint_sql serve from this on-disk
     /// schema snapshot, re-read per call so background refreshes land.
     schema_cache_path: Option<std::path::PathBuf>,
@@ -80,6 +81,7 @@ impl McpServer {
             config,
             caps,
             app_socket: None,
+            app_token: None,
             schema_cache_path: None,
         }
     }
@@ -91,8 +93,9 @@ impl McpServer {
     }
 
     /// Enable the app-hosted tools, forwarded to `socket`.
-    pub fn with_app_bridge(mut self, socket: std::path::PathBuf) -> Self {
+    pub fn with_app_bridge(mut self, socket: std::path::PathBuf, token: String) -> Self {
         self.app_socket = Some(socket);
+        self.app_token = Some(token);
         self
     }
 
@@ -114,12 +117,15 @@ impl McpServer {
         let Some(socket) = &self.app_socket else {
             return Err("this tool needs the zeDB app; the pane provides it".into());
         };
+        let Some(token) = &self.app_token else {
+            return Err("app bridge capability missing".into());
+        };
         use tokio::io::{AsyncWriteExt, BufReader};
         let stream = tokio::net::UnixStream::connect(socket)
             .await
             .map_err(|error| format!("app bridge unavailable: {error}"))?;
         let (read_half, mut write_half) = stream.into_split();
-        let request = json!({ "tool": name, "arguments": arguments });
+        let request = json!({ "token": token, "tool": name, "arguments": arguments });
         let request = request.to_string();
         if request.len() > MAX_MCP_REQUEST_BYTES {
             return Err("app bridge request exceeds the MCP safety limit".into());
@@ -256,6 +262,27 @@ impl McpServer {
             .and_then(Value::as_str)
             .ok_or("tool call without a name")?;
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+        const CONNECTION_TOOLS: [&str; 7] = [
+            "fleet_status",
+            "dry_run",
+            "drift",
+            "list_databases",
+            "list_tables",
+            "describe",
+            "run_query",
+        ];
+        if self.config.is_none() && self.app_socket.is_some() && CONNECTION_TOOLS.contains(&name) {
+            let text = self
+                .forward_app_tool("mcp_call", &json!({ "name": name, "arguments": arguments }))
+                .await;
+            return Ok(match text {
+                Ok(text) => json!({ "content": [{ "type": "text", "text": bounded_text(&text) }] }),
+                Err(text) => json!({
+                    "content": [{ "type": "text", "text": bounded_text(&text) }],
+                    "isError": true,
+                }),
+            });
+        }
         let outcome = match name {
             "fleet_status" => self.tool_fleet_status().await,
             "list_migrations" => self.tool_list_migrations().await,
@@ -782,12 +809,49 @@ mod tests {
             let (_stream, _) = listener.accept().await.unwrap();
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         });
-        let server = bare_server().with_app_bridge(socket);
+        let server = bare_server().with_app_bridge(socket, "test-capability".into());
         let error = server
             .forward_app_tool("navigate", &json!({"view": "fleet"}))
             .await
             .unwrap_err();
         assert!(error.contains("deadline"), "{error}");
         peer.abort();
+    }
+
+    #[tokio::test]
+    async fn connection_tools_bridge_without_a_local_credential() {
+        use tokio::io::{AsyncWriteExt, BufReader};
+
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("bridge.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let peer = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read_half, mut write_half) = stream.into_split();
+            let mut reader = BufReader::new(read_half);
+            let BoundedLine::Line(line) = read_bounded_line(&mut reader, 4096).await.unwrap()
+            else {
+                panic!("expected bridge request");
+            };
+            let request: Value = serde_json::from_slice(&line).unwrap();
+            assert_eq!(request["token"], "test-capability");
+            assert_eq!(request["tool"], "mcp_call");
+            assert_eq!(request["arguments"]["name"], "run_query");
+            assert_eq!(request["arguments"]["arguments"]["sql"], "SELECT 1");
+            write_half
+                .write_all(b"{\"text\":\"one\\n1\\n\",\"isError\":false}\n")
+                .await
+                .unwrap();
+        });
+        let server = bare_server().with_app_bridge(socket, "test-capability".into());
+        let response = server
+            .handle(json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "run_query", "arguments": { "sql": "SELECT 1" } },
+            }))
+            .await
+            .unwrap();
+        assert_eq!(response["result"]["content"][0]["text"], "one\n1\n");
+        peer.await.unwrap();
     }
 }

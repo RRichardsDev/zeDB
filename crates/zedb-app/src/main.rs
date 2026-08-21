@@ -1015,10 +1015,10 @@ fn quit_ze_db(_: &QuitZeDb, cx: &mut App) {
 }
 
 /// Hidden server mode: the agent pane spawns this same executable as
-/// its MCP server (the bundle ships no separate CLI). Config arrives
-/// in the environment (ZEDB_MCP_*), which survives the agent runtime
-/// respawning the server; a config-file argument remains supported
-/// for older registrations (0600, deleted on read).
+/// its MCP server (the bundle ships no separate CLI). Non-secret app
+/// registration arrives in the environment (ZEDB_MCP_*), which
+/// survives agent-runtime respawns. Direct and older registrations may
+/// still supply connection config or a 0600 delete-on-read file.
 fn run_mcp_serve(config_path: &str) -> ! {
     let outcome = (|| -> Result<(), String> {
         let config: serde_json::Value = if config_path.is_empty() {
@@ -1029,6 +1029,7 @@ fn run_mcp_serve(config_path: &str) -> ! {
                 ("user", "ZEDB_MCP_USER"),
                 ("password", "ZEDB_MCP_PASSWORD"),
                 ("app_socket", "ZEDB_MCP_APP_SOCKET"),
+                ("app_token", "ZEDB_MCP_APP_TOKEN"),
                 ("schema_cache", "ZEDB_MCP_SCHEMA_CACHE"),
             ] {
                 if let Ok(value) = std::env::var(name) {
@@ -1066,8 +1067,11 @@ fn run_mcp_serve(config_path: &str) -> ! {
                 native_port: None,
             });
         let mut server = zedb_ch::mcp::McpServer::new(repo, connection, Default::default());
-        if let Some(socket) = config.get("app_socket").and_then(|value| value.as_str()) {
-            server = server.with_app_bridge(std::path::PathBuf::from(socket));
+        if let (Some(socket), Some(token)) = (
+            config.get("app_socket").and_then(|value| value.as_str()),
+            config.get("app_token").and_then(|value| value.as_str()),
+        ) {
+            server = server.with_app_bridge(std::path::PathBuf::from(socket), token.to_string());
         }
         if let Some(cache) = config.get("schema_cache").and_then(|value| value.as_str()) {
             server = server.with_schema_cache(std::path::PathBuf::from(cache));

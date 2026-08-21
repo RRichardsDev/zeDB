@@ -9,6 +9,18 @@ GitHub release notes.
 
 ## Unreleased
 
+- Built-in ACP adapters now run exact reviewed npm versions instead of mutable
+  latest releases, and settings sync no longer imports custom agent commands,
+  remembered agent selection, or persistent permission grants between machines.
+- Agent permission requests are bound to the active ACP session and their exact
+  offered choices. Cancelling a turn cancels its pending approvals, and zeDB no
+  longer reuses approvals based on agent-supplied display titles.
+- Agent protocol traffic, queues, and waits now have safety limits. The local
+  app bridge requires a random capability and private filesystem modes, while
+  transcripts and diagnostics are private, bounded, and avoid raw tool data.
+- ClickHouse passwords no longer cross the ACP session or enter an
+  agent-spawned process. Connection-dependent agent tools execute inside zeDB
+  through a bounded read-only bridge while preserving the same MCP interface.
 - ClickHouse connections no longer send credentials to `/ping` or follow HTTP
   redirects, and URLs that embed credentials are rejected. Plain `http://`
   endpoints remain supported for clusters without TLS; the native transport
