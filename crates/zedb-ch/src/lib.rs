@@ -8,6 +8,7 @@
 //! the `clickhouse` crate: it is built around compile-time serde row
 //! structs, while an explorer discovers column types at runtime.
 
+pub mod analytics;
 pub mod checks;
 mod client;
 pub mod ephemeral;

@@ -35,3 +35,6 @@ test-support = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros"] }
+# Integration tests compile as external crates, so the crate pulls its
+# own test-support feature in through a self-dependency.
+zedb-ch = { path = ".", features = ["test-support"] }

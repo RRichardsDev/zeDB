@@ -27,6 +27,13 @@ const SERVER_CONFIG: &str = r#"<clickhouse>
         <local_directory><path>{path}/access/</path></local_directory>
     </user_directories>
     <mark_cache_size>268435456</mark_cache_size>
+    <!-- The minimal config replaces the embedded defaults wholesale,
+         so query_log must be declared or the server logs no queries
+         and the analytics tests have nothing to read. -->
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+    </query_log>
     <logger><level>warning</level><console>1</console></logger>
     {cluster_config}
 </clickhouse>
