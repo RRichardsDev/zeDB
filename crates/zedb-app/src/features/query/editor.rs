@@ -84,6 +84,8 @@ impl Workspace {
                 grid_spike::GridEvent::FilterRequested { column, predicate } => {
                     this.grid_filter_requested(id, column.clone(), predicate.clone(), window, cx);
                 }
+                // Query tabs have no row drill-in; the analytics view does.
+                grid_spike::GridEvent::RowActivated { .. } => {}
             },
         )
         .detach();

@@ -695,7 +695,7 @@ impl Workspace {
             agent_fix_target: None,
             export: None,
             ops: ops::OpsState::default(),
-            analytics: analytics::AnalyticsState::default(),
+            analytics: analytics::AnalyticsState::new(cx),
             show_analytics: false,
             ops_killed: std::collections::HashSet::new(),
             agent: agent_pane::AgentPaneState::new(preferences.agent_pane_width.unwrap_or(420.0)),

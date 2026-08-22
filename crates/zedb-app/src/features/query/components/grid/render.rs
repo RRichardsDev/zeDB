@@ -482,6 +482,9 @@ impl Render for GridSpike {
                                                     this.selected =
                                                         Some(Selection::cell((row, col)));
                                                 }
+                                                if event.click_count == 2 {
+                                                    cx.emit(GridEvent::RowActivated { row });
+                                                }
                                                 this.selecting = true;
                                                 // Take keyboard focus so the
                                                 // grid's (now focus-scoped)

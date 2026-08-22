@@ -31,6 +31,9 @@ pub enum GridEvent {
         column: String,
         predicate: Option<String>,
     },
+    /// A row was double-clicked; owners that drill into rows listen,
+    /// everyone else ignores it.
+    RowActivated { row: usize },
 }
 
 /// Header context-menu choice; routed back via the workspace so it

@@ -1,29 +1,13 @@
 //! Window-level tests of the query-analytics surface: view
-//! exclusivity, fetch failure landing honestly, drill-in state
-//! clearing on window changes, and a full render with injected data.
+//! exclusivity, fetch failure landing honestly, grid events driving
+//! sort/filter refetches and drill-in, and a full render with the
+//! detail pane open.
 
 use gpui::TestAppContext;
-use zedb_ch::analytics::{AnalyticsWindow, FingerprintRun, QueryFingerprint, QueryTestimony};
+use zedb_ch::analytics::{AnalyticsWindow, FingerprintRun, QueryTestimony};
 
+use crate::grid_spike::GridEvent;
 use crate::test_harness;
-
-fn fingerprint(hash: &str) -> QueryFingerprint {
-    QueryFingerprint {
-        hash: hash.into(),
-        sample: "SELECT count() FROM events WHERE kind = ?".into(),
-        runs: 12,
-        errors: 1,
-        p50_ms: 4.0,
-        p95_ms: 60.0,
-        p99_ms: 180.0,
-        total_ms: 900,
-        max_memory: 64 * 1024 * 1024,
-        read_rows: 5_000_000,
-        read_bytes: 995 * 1024 * 1024,
-        users: 2,
-        last_seen: "2026-08-22 10:00:00".into(),
-    }
-}
 
 #[gpui::test]
 fn analytics_needs_a_connection_and_views_stay_exclusive(cx: &mut TestAppContext) {
@@ -69,8 +53,71 @@ fn fetch_failure_lands_as_an_error_not_a_spinner(cx: &mut TestAppContext) {
     });
     workspace.update(cx, |workspace, _| {
         assert!(workspace.analytics.error.is_some(), "the failure is shown");
-        assert!(workspace.analytics.fingerprints.is_empty());
+        assert!(workspace.analytics.rows_meta.is_empty());
         assert!(workspace.analytics.fetched_at.is_some());
+    });
+}
+
+#[gpui::test]
+fn grid_events_drive_sort_filter_and_drill_in(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    workspace.update(cx, |workspace, cx| {
+        workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
+        workspace.show_analytics = true;
+        workspace.analytics.rows_meta = vec![
+            (
+                "111".into(),
+                "SELECT count() FROM events WHERE kind = ?".into(),
+            ),
+            ("222".into(), "INSERT INTO events SELECT ?".into()),
+        ];
+
+        // Sort request lands in state and starts a refetch.
+        workspace.analytics_grid_event(
+            &GridEvent::SortRequested {
+                sort: vec![("p95_ms".into(), false)],
+            },
+            cx,
+        );
+        assert_eq!(workspace.analytics.sort, vec![("p95_ms".into(), false)]);
+        assert!(workspace.analytics.loading);
+        workspace.analytics.loading = false;
+
+        // Filter request replaces per column; clearing removes it.
+        workspace.analytics_grid_event(
+            &GridEvent::FilterRequested {
+                column: "shape".into(),
+                predicate: Some("shape ILIKE '%tenant%'".into()),
+            },
+            cx,
+        );
+        assert_eq!(
+            workspace.analytics.filters,
+            vec![("shape".into(), "shape ILIKE '%tenant%'".into())]
+        );
+        workspace.analytics.loading = false;
+        workspace.analytics_grid_event(
+            &GridEvent::FilterRequested {
+                column: "shape".into(),
+                predicate: None,
+            },
+            cx,
+        );
+        assert!(workspace.analytics.filters.is_empty());
+        workspace.analytics.loading = false;
+
+        // Double-clicked row drills in via the row metadata.
+        workspace.analytics_grid_event(&GridEvent::RowActivated { row: 1 }, cx);
+        assert_eq!(workspace.analytics.selected.as_deref(), Some("222"));
+        assert_eq!(
+            workspace.analytics.selected_shape,
+            "INSERT INTO events SELECT ?"
+        );
+        assert!(workspace.analytics.runs_loading);
+
+        // An out-of-range row does nothing.
+        workspace.analytics_grid_event(&GridEvent::RowActivated { row: 9 }, cx);
+        assert_eq!(workspace.analytics.selected.as_deref(), Some("222"));
     });
 }
 
@@ -80,8 +127,8 @@ fn window_change_clears_the_drill_in(cx: &mut TestAppContext) {
     workspace.update(cx, |workspace, cx| {
         workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
         workspace.show_analytics = true;
-        workspace.analytics.fingerprints = vec![fingerprint("111"), fingerprint("222")];
         workspace.analytics.selected = Some("111".into());
+        workspace.analytics.selected_shape = "SELECT 1".into();
         workspace.analytics.runs = vec![FingerprintRun {
             query_id: "q-1".into(),
             at: "2026-08-22 10:00:00".into(),
@@ -91,25 +138,11 @@ fn window_change_clears_the_drill_in(cx: &mut TestAppContext) {
             exception: String::new(),
             host: String::new(),
         }];
-        workspace.analytics.testimony = Some((
-            "q-1".into(),
-            QueryTestimony {
-                query: "SELECT 1".into(),
-                duration_ms: 5,
-                memory: 1024,
-                read_rows: 10,
-                read_bytes: 100,
-                result_rows: 1,
-                exception: String::new(),
-                events: vec![("SelectedRows".into(), 10)],
-            },
-        ));
 
         workspace.analytics_set_window(1, cx);
         assert_eq!(workspace.analytics.window, AnalyticsWindow::LastHour);
         assert!(workspace.analytics.selected.is_none());
         assert!(workspace.analytics.runs.is_empty());
-        assert!(workspace.analytics.testimony.is_none());
         assert!(workspace.analytics.loading, "a fresh fetch started");
 
         // Same window again is a no-op, not a refetch storm.
@@ -120,44 +153,57 @@ fn window_change_clears_the_drill_in(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn panel_renders_with_data_and_open_detail(cx: &mut TestAppContext) {
+fn panel_renders_with_grid_data_and_open_detail(cx: &mut TestAppContext) {
     let (workspace, cx) = test_harness::workspace(cx);
     workspace.update(cx, |workspace, cx| {
         workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
         workspace.show_analytics = true;
-        workspace.analytics.fingerprints = vec![fingerprint("111"), fingerprint("222")];
+        workspace.analytics.rows_meta = vec![("111".into(), "SELECT count()".into())];
+        workspace.analytics.grid.update(cx, |grid, cx| {
+            grid.begin_result(
+                vec![
+                    zedb_core::ColumnMeta {
+                        name: "shape".into(),
+                        type_name: "String".into(),
+                    },
+                    zedb_core::ColumnMeta {
+                        name: "runs".into(),
+                        type_name: "UInt64".into(),
+                    },
+                ],
+                None,
+                cx,
+            );
+            grid.append_rows(
+                vec![vec![
+                    zedb_core::Value::String("SELECT count()".into()),
+                    zedb_core::Value::UInt(12),
+                ]],
+                cx,
+            );
+            grid.finish_result(false, cx);
+        });
         workspace.analytics.selected = Some("111".into());
-        workspace.analytics.runs = vec![FingerprintRun {
-            query_id: "q-1".into(),
-            at: "2026-08-22 10:00:00".into(),
-            duration_ms: 1500,
-            memory: 4 * 1024 * 1024,
-            read_rows: 100,
-            exception: "boom".into(),
-            host: "node-1".into(),
-        }];
+        workspace.analytics.selected_shape = "SELECT count()".into();
         workspace.analytics.testimony = Some((
             "q-1".into(),
             QueryTestimony {
-                query: "SELECT count() FROM events".into(),
+                query: "SELECT count()".into(),
                 duration_ms: 1500,
                 memory: 4 * 1024 * 1024,
                 read_rows: 100,
                 read_bytes: 4096,
                 result_rows: 1,
-                exception: "boom".into(),
-                events: vec![
-                    ("SelectedRows".into(), 100),
-                    ("RealTimeMicroseconds".into(), 42),
-                ],
+                exception: String::new(),
+                events: vec![("SelectedRows".into(), 100)],
             },
         ));
         cx.notify();
     });
-    // The render must survive a full frame with the detail pane open;
-    // a panic here is the test failure.
+    // The render must survive a full frame with the grid populated and
+    // the detail pane open; a panic here is the test failure.
     cx.run_until_parked();
-    workspace.update(cx, |workspace, _| {
-        assert_eq!(workspace.analytics.fingerprints.len(), 2);
+    workspace.update(cx, |workspace, cx| {
+        assert_eq!(workspace.analytics.grid.read(cx).row_count(), 1);
     });
 }

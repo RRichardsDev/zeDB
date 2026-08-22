@@ -128,6 +128,82 @@ fn fingerprints_sql(window: AnalyticsWindow, cluster: Option<&str>) -> String {
     )
 }
 
+/// Display columns of the grid-shaped fingerprint query, in order,
+/// with the ORDER BY expression each maps to. The alias is what the
+/// grid shows and what filter conjuncts reference (they run in
+/// HAVING, where aliases of aggregates are legal); the expression is
+/// what sorting really uses, so formatted columns still sort by their
+/// raw number.
+const GRID_COLUMNS: [(&str, &str); 11] = [
+    ("shape", "shape"),
+    ("runs", "runs"),
+    ("err", "err"),
+    ("p50_ms", "p50_ms"),
+    ("p95_ms", "p95_ms"),
+    ("p99_ms", "p99_ms"),
+    ("total_ms", "total_ms"),
+    ("peak_mem", "max(memory_usage)"),
+    ("read", "sum(read_bytes)"),
+    ("users", "users"),
+    ("last_seen", "last_seen"),
+];
+
+/// The grid-shaped fingerprint aggregation: display-formatted columns
+/// plus the drill-in hash last. `order` names display columns (unknown
+/// names are ignored); `having` holds the grid's managed filter
+/// conjuncts verbatim.
+pub fn fingerprint_grid_sql(
+    window: AnalyticsWindow,
+    cluster: Option<&str>,
+    order: &[(String, bool)],
+    having: &[String],
+) -> String {
+    let having_clause = if having.is_empty() {
+        String::new()
+    } else {
+        format!("HAVING ({}) ", having.join(") AND ("))
+    };
+    let mut order_terms: Vec<String> = order
+        .iter()
+        .filter_map(|(column, ascending)| {
+            GRID_COLUMNS
+                .iter()
+                .find(|(alias, _)| alias == column)
+                .map(|(_, expression)| {
+                    format!("{expression} {}", if *ascending { "ASC" } else { "DESC" })
+                })
+        })
+        .collect();
+    if order_terms.is_empty() {
+        order_terms.push("total_ms DESC".into());
+    }
+    format!(
+        "SELECT any(normalizeQuery(query)) AS shape, \
+            toUInt64(countIf(type = 'QueryFinish')) AS runs, \
+            toUInt64(countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing'))) AS err, \
+            toFloat64(round(quantileIf(0.5)(query_duration_ms, type = 'QueryFinish'), 1)) AS p50_ms, \
+            toFloat64(round(quantileIf(0.95)(query_duration_ms, type = 'QueryFinish'), 1)) AS p95_ms, \
+            toFloat64(round(quantileIf(0.99)(query_duration_ms, type = 'QueryFinish'), 1)) AS p99_ms, \
+            toUInt64(sum(query_duration_ms)) AS total_ms, \
+            formatReadableSize(max(memory_usage)) AS peak_mem, \
+            formatReadableSize(sum(read_bytes)) AS read, \
+            toUInt64(uniqExact(user)) AS users, \
+            toString(max(event_time)) AS last_seen, \
+            toString(normalized_query_hash) AS hash \
+         FROM {} \
+         WHERE event_time > now() - INTERVAL {} HOUR \
+           AND type != 'QueryStart' \
+           AND is_initial_query \
+           AND query NOT ILIKE '%system.query_log%' \
+         GROUP BY normalized_query_hash \
+         {having_clause}ORDER BY {} \
+         LIMIT 100",
+        log_source(cluster),
+        window.hours(),
+        order_terms.join(", ")
+    )
+}
+
 fn runs_sql(hash: &str, window: AnalyticsWindow, cluster: Option<&str>) -> String {
     let host = match cluster {
         Some(_) => "hostName()",
@@ -323,6 +399,29 @@ mod tests {
         let sql = fingerprints_sql(AnalyticsWindow::LastHour, Some("zedb_cluster"));
         assert!(sql.contains("clusterAllReplicas(`zedb_cluster`, system.query_log)"));
         assert!(sql.contains("INTERVAL 1 HOUR"));
+    }
+
+    #[test]
+    fn grid_sql_maps_sort_and_injects_filters_safely() {
+        let sql = fingerprint_grid_sql(AnalyticsWindow::LastDay, None, &[], &[]);
+        assert!(sql.contains("ORDER BY total_ms DESC"), "default sort");
+        assert!(sql.ends_with("LIMIT 100"));
+
+        let sql = fingerprint_grid_sql(
+            AnalyticsWindow::LastDay,
+            None,
+            &[
+                ("peak_mem".into(), true),
+                ("nonsense".into(), true),
+                ("runs".into(), false),
+            ],
+            &["shape ILIKE '%tenant%'".into(), "err > 0".into()],
+        );
+        assert!(
+            sql.contains("ORDER BY max(memory_usage) ASC, runs DESC"),
+            "formatted columns sort by their raw expression; unknown columns are dropped: {sql}"
+        );
+        assert!(sql.contains("HAVING (shape ILIKE '%tenant%') AND (err > 0)"));
     }
 
     #[test]

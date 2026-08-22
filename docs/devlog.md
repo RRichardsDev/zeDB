@@ -1,3 +1,16 @@
+## 2026-08-22: analytics list is the grid now
+
+- User feedback on the first slice ("we already did this for the data
+  view"): the bespoke fingerprint table is gone; the analytics list is
+  a real GridSpike, so sorting, header filter popovers, selection, and
+  copy behave exactly like query results everywhere else. Sort and
+  filter stay honest by re-running the aggregation (grid events map to
+  a whitelisted ORDER BY and HAVING conjuncts on the aggregate
+  aliases; formatted columns sort by their raw expressions). The grid
+  gains a RowActivated event (double-click), which analytics uses for
+  drill-in and query tabs ignore. The trailing hash column is stripped
+  before display and kept as row metadata.
+
 ## 2026-08-22: query analytics (Phase 16 Track A, first slice)
 
 - zedb-ch grows an analytics module: fingerprints over query_log

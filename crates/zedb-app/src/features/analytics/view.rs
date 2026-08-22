@@ -137,41 +137,17 @@ impl Workspace {
                 },
             ));
 
-        let column = |width: f32, label: &'static str| {
-            div().w(px(width)).flex_none().text_right().child(label)
-        };
-        let list_header = div()
-            .flex_none()
-            .px_3()
-            .py_1()
-            .flex()
-            .items_center()
-            .gap_2()
-            .text_sm()
-            .text_color(theme::text_dim())
-            .border_b_1()
-            .border_color(theme::border())
-            .child(div().flex_1().min_w_0().child("query shape"))
-            .child(column(52., "runs"))
-            .child(column(44., "err"))
-            .child(column(64., "p50"))
-            .child(column(64., "p95"))
-            .child(column(64., "p99"))
-            .child(column(72., "total"))
-            .child(column(72., "peak mem"))
-            .child(column(72., "read"));
-
         let mut list = div()
             .id("analytics-fingerprints")
             .flex_1()
+            .min_w_0()
             .min_h_0()
-            .overflow_y_scroll()
             .flex()
             .flex_col();
         if let Some(error) = &self.analytics.error {
             list = list.child(div().p_3().text_color(theme::danger()).child(error.clone()));
         }
-        if self.analytics.fingerprints.is_empty()
+        if self.analytics.rows_meta.is_empty()
             && !self.analytics.loading
             && self.analytics.error.is_none()
         {
@@ -182,73 +158,13 @@ impl Workspace {
                     .child("Nothing in the window. Queries land here once query_log has them."),
             );
         }
-        for fingerprint in &self.analytics.fingerprints {
-            let hash = fingerprint.hash.clone();
-            let selected = self.analytics.selected.as_deref() == Some(fingerprint.hash.as_str());
-            let value = |text: String, width: f32| {
-                div()
-                    .w(px(width))
-                    .flex_none()
-                    .text_right()
-                    .text_color(theme::text_dim())
-                    .child(text)
-            };
-            list = list.child(
-                div()
-                    .id(gpui::SharedString::from(format!("fp-{}", fingerprint.hash)))
-                    .px_3()
-                    .py_1()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_sm()
-                    .when(selected, |row| row.bg(theme::selected()))
-                    .hover(|row| row.bg(theme::hover()).cursor_pointer())
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_color(theme::text())
-                            .child(fingerprint.sample.clone()),
-                    )
-                    .child(value(fmt_count(fingerprint.runs), 52.))
-                    .child(
-                        div()
-                            .w(px(44.))
-                            .flex_none()
-                            .text_right()
-                            .text_color(if fingerprint.errors > 0 {
-                                theme::danger()
-                            } else {
-                                theme::text_dim()
-                            })
-                            .child(fmt_count(fingerprint.errors)),
-                    )
-                    .child(value(fmt_ms(fingerprint.p50_ms), 64.))
-                    .child(value(fmt_ms(fingerprint.p95_ms), 64.))
-                    .child(value(fmt_ms(fingerprint.p99_ms), 64.))
-                    .child(value(fmt_ms(fingerprint.total_ms as f64), 72.))
-                    .child(value(Self::format_bytes(fingerprint.max_memory), 72.))
-                    .child(value(Self::format_bytes(fingerprint.read_bytes), 72.))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.analytics_select(hash.clone(), cx);
-                    })),
-            );
-        }
+        // The fingerprint grid: the same results surface as query tabs,
+        // so sorting, column filters, selection, and copy all behave
+        // identically. Double-click a row to drill in.
+        list = list.child(div().flex_1().min_h_0().child(self.analytics.grid.clone()));
 
         let mut body = div().flex_1().min_h_0().flex();
-        body = body.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .child(list_header)
-                .child(list),
-        );
+        body = body.child(div().flex_1().min_w_0().flex().flex_col().child(list));
         if self.analytics.selected.is_some() {
             body = body.child(self.analytics_detail(cx));
         }
@@ -260,26 +176,12 @@ impl Workspace {
             .on_action(cx.listener(|this, action: &SetAnalyticsScope, _, cx| {
                 this.analytics_set_scope(action.cluster.clone(), cx);
             }))
-            .on_action(cx.listener(|this, action: &SetAnalyticsWindow, _, cx| {
-                this.analytics_set_window(action.hours, cx);
-            }))
             .child(header)
             .child(body)
     }
 
     fn analytics_detail(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let sample = self
-            .analytics
-            .selected
-            .as_deref()
-            .and_then(|hash| {
-                self.analytics
-                    .fingerprints
-                    .iter()
-                    .find(|fingerprint| fingerprint.hash == hash)
-            })
-            .map(|fingerprint| fingerprint.sample.clone())
-            .unwrap_or_default();
+        let sample = self.analytics.selected_shape.clone();
 
         let mut runs_list = div()
             .id("analytics-runs")

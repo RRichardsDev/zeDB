@@ -25,12 +25,20 @@ impl Workspace {
     /// target immediately. The new target may not know the old
     /// scope's cluster, so scope resets to the node.
     pub(crate) fn analytics_reset(&mut self, cx: &mut Context<Self>) {
-        self.analytics = AnalyticsState {
-            window: self.analytics.window,
-            detail_width: self.analytics.detail_width,
-            generation: self.analytics.generation + 1,
-            ..AnalyticsState::default()
-        };
+        self.analytics.generation += 1;
+        self.analytics.scope = AnalyticsScope::Node;
+        self.analytics.rows_meta.clear();
+        self.analytics.sort.clear();
+        self.analytics.filters.clear();
+        self.analytics.loading = false;
+        self.analytics.error = None;
+        self.analytics.fetched_at = None;
+        self.analytics_clear_drill_in();
+        self.analytics.grid.update(cx, |grid, cx| {
+            grid.release_rows();
+            grid.set_filters(Vec::new(), cx);
+            grid.set_sort(Vec::new(), cx);
+        });
         if self.connection.connected.is_none() {
             self.show_analytics = false;
         } else if self.show_analytics {
@@ -54,9 +62,22 @@ impl Workspace {
         let cluster = self.analytics.scope.cluster().map(str::to_string);
         cx.notify();
 
+        let sort = self.analytics.sort.clone();
+        let having: Vec<String> = self
+            .analytics
+            .filters
+            .iter()
+            .map(|(_, predicate)| predicate.clone())
+            .collect();
         let handle = rt::tokio().spawn(async move {
             let client = zedb_ch::ChClient::new(config);
-            client.query_fingerprints(window, cluster.as_deref()).await
+            let sql = zedb_ch::analytics::fingerprint_grid_sql(
+                window,
+                cluster.as_deref(),
+                &sort,
+                &having,
+            );
+            client.query(&sql).await
         });
         cx.spawn(async move |this, cx| {
             let result = handle.await;
@@ -67,7 +88,36 @@ impl Workspace {
                 this.analytics.loading = false;
                 this.analytics.fetched_at = Some(chrono::Local::now());
                 match result {
-                    Ok(Ok(fingerprints)) => this.analytics.fingerprints = fingerprints,
+                    Ok(Ok(mut result)) => {
+                        // The trailing hash column is drill-in metadata,
+                        // not display.
+                        result.columns.pop();
+                        this.analytics.rows_meta = result
+                            .rows
+                            .iter_mut()
+                            .map(|row| {
+                                let hash = match row.pop() {
+                                    Some(zedb_core::Value::String(hash)) => hash,
+                                    _ => String::new(),
+                                };
+                                let shape = match row.first() {
+                                    Some(zedb_core::Value::String(shape)) => shape.clone(),
+                                    _ => String::new(),
+                                };
+                                (hash, shape)
+                            })
+                            .collect();
+                        let columns = result.columns.clone();
+                        let sort = this.analytics.sort.clone();
+                        let filters = this.analytics.filters.clone();
+                        this.analytics.grid.update(cx, |grid, cx| {
+                            grid.begin_result(columns, None, cx);
+                            grid.append_rows(result.rows, cx);
+                            grid.finish_result(false, cx);
+                            grid.set_sort(sort, cx);
+                            grid.set_filters(filters, cx);
+                        });
+                    }
                     Ok(Err(error)) => this.analytics.error = Some(error.to_string()),
                     Err(error) => this.analytics.error = Some(error.to_string()),
                 }
@@ -76,6 +126,38 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    /// Grid events from the fingerprint grid: sort and filter re-run
+    /// the aggregation; a double-clicked row drills in.
+    pub(crate) fn analytics_grid_event(
+        &mut self,
+        event: &crate::grid_spike::GridEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            crate::grid_spike::GridEvent::SortRequested { sort } => {
+                self.analytics.sort = sort.clone();
+                self.analytics_fetch(cx);
+            }
+            crate::grid_spike::GridEvent::FilterRequested { column, predicate } => {
+                self.analytics.filters.retain(|(name, _)| name != column);
+                if let Some(predicate) = predicate {
+                    self.analytics
+                        .filters
+                        .push((column.clone(), predicate.clone()));
+                }
+                self.analytics_fetch(cx);
+            }
+            crate::grid_spike::GridEvent::RowActivated { row } => {
+                if let Some((hash, shape)) = self.analytics.rows_meta.get(*row).cloned() {
+                    if !hash.is_empty() {
+                        self.analytics.selected_shape = shape;
+                        self.analytics_select(hash, cx);
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) fn analytics_set_window(&mut self, hours: u32, cx: &mut Context<Self>) {
