@@ -192,6 +192,23 @@ fn working_scope_drives_analytics_fan_out(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn refresh_icon_starts_a_fetch(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    workspace.update(cx, |workspace, cx| {
+        workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
+        workspace.show_analytics = true;
+        cx.notify();
+    });
+    test_harness::click(cx, "analytics-refresh");
+    workspace.update(cx, |workspace, _| {
+        assert!(
+            workspace.analytics.loading || workspace.analytics.error.is_some(),
+            "clicking the refresh icon started a fetch"
+        );
+    });
+}
+
+#[gpui::test]
 fn window_change_clears_the_drill_in(cx: &mut TestAppContext) {
     let (workspace, cx) = test_harness::workspace(cx);
     workspace.update(cx, |workspace, cx| {

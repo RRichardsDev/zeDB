@@ -98,10 +98,25 @@ impl Workspace {
                 },
             ))
             .child(
-                Button::new("analytics-refresh")
-                    .label("Refresh")
-                    .compact()
-                    .outline()
+                div()
+                    .id("analytics-refresh")
+                    .debug_selector(|| "analytics-refresh".into())
+                    .size(px(22.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(3.))
+                    .child(
+                        gpui::svg()
+                            .path("icons/refresh.svg")
+                            .size(px(13.))
+                            .text_color(theme::text_dim()),
+                    )
+                    .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                    .tooltip(|window, cx| {
+                        gpui_component::tooltip::Tooltip::new("Refresh").build(window, cx)
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.analytics_fetch(cx))),
             )
             .child(div().text_sm().text_color(theme::text_dim()).child(
