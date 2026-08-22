@@ -86,6 +86,7 @@ impl Workspace {
         self.schema.provider.set_context(None, None);
         self.clear_schema();
         self.ops_reset(cx);
+        self.analytics_reset(cx);
         cx.notify();
     }
 
@@ -173,6 +174,7 @@ impl Workspace {
         );
         self.load_schema_databases(cx);
         self.ops_reset(cx);
+        self.analytics_reset(cx);
         self.restart_visible_tails(previous_config, cx);
         cx.notify();
     }

@@ -1,6 +1,6 @@
 # Phase 16: what the die-hard is still missing
 
-Status: CANDIDATES (2026-08-22). Not a commitment; a ranked map of
+Status: TRACK A IN PROGRESS (2026-08-22, feature/query-analytics); the rest stay candidates. Not a commitment; a ranked map of
 the gaps between zeDB-as-built (shaped by its author's own use) and
 the daily life of a die-hard ClickHouse practitioner. Written after
 the v0.1.34 security release, when the question "who else is this

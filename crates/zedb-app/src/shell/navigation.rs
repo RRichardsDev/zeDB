@@ -40,6 +40,7 @@ impl Workspace {
                             this.show_query_editor = false;
                             this.show_fleet = false;
                             this.show_ops = false;
+                            this.show_analytics = false;
                         }
                         this.connection.selected = Some(index);
                         this.connection.pending_delete = None;

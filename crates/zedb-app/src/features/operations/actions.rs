@@ -14,6 +14,7 @@ impl Workspace {
         self.show_ops = !self.show_ops;
         if self.show_ops {
             self.show_query_editor = false;
+            self.show_analytics = false;
             self.show_fleet = false;
             self.ops_start_poll(cx);
         }
@@ -107,7 +108,7 @@ impl Workspace {
     /// log_queries=0 so a fast cadence does not flood query_log (and
     /// the ops view does not mostly show itself). Kills and every
     /// user-initiated query still log normally.
-    fn ops_poll_config(config: &zedb_ch::ChConfig) -> zedb_ch::ChConfig {
+    pub(crate) fn ops_poll_config(config: &zedb_ch::ChConfig) -> zedb_ch::ChConfig {
         let mut config = config.clone();
         config.driver.settings.push(zedb_core::DriverSetting {
             name: "log_queries".into(),

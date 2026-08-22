@@ -192,6 +192,7 @@ impl Workspace {
         if self.show_fleet {
             self.show_query_editor = false;
             self.show_ops = false;
+            self.show_analytics = false;
             if self.fleet.repo.is_none() && !self.fleet.repo_path.read(cx).text().trim().is_empty()
             {
                 self.fleet_open_repo(cx);

@@ -1,3 +1,21 @@
+## 2026-08-22: query analytics (Phase 16 Track A, first slice)
+
+- zedb-ch grows an analytics module: fingerprints over query_log
+  (normalized_query_hash, quantiles cast to stable scalars, error
+  counts split from finishes), per-fingerprint recent runs, and the
+  ProfileEvents testimony of one run serialized server-side into
+  ordered name=value lines to keep decoding map-free. Drill-in keys
+  are digit-validated before touching SQL. The ephemeral fixture had
+  to learn to declare query_log: its minimal config replaces the
+  embedded defaults wholesale, so the server logged nothing at all.
+  Integration test proves the round trip on a real server.
+- The app view follows the ops panel's architecture (no poll though:
+  history does not need watching; fetch on open, on scope or window
+  change, and on Refresh). Fingerprint table with a resizable detail
+  pane (fleet's splitter pattern), runs list, testimony block, and
+  Open in editor. Analytics reads carry log_queries=0 like the ops
+  polls, so the observer stays out of the observed.
+
 ## 2026-08-22: Phase 14 retired into a cadence tune
 
 - Phase 14 (ops on native TCP) is retired without the transport work.

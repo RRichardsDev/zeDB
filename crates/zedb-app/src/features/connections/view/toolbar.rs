@@ -171,6 +171,64 @@ impl Workspace {
                     )
                     .child(
                         div()
+                            .id("open-analytics")
+                            .group("btn-analytics")
+                            .size(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(3.))
+                            .border_1()
+                            .map(|button| {
+                                if self.connection.connected.is_none() {
+                                    button
+                                        .border_color(theme::disabled_border())
+                                        .child(
+                                            svg()
+                                                .path("icons/analytics.svg")
+                                                .size(px(14.))
+                                                .text_color(theme::disabled()),
+                                        )
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(
+                                                "Connect to a cluster first",
+                                            )
+                                            .build(window, cx)
+                                        })
+                                } else {
+                                    button
+                                        .border_color(theme::border())
+                                        .when(self.show_analytics, |button| {
+                                            button.bg(theme::selected())
+                                        })
+                                        .child(
+                                            svg()
+                                                .path("icons/analytics.svg")
+                                                .size(px(14.))
+                                                .text_color(if self.show_analytics {
+                                                    theme::text()
+                                                } else {
+                                                    theme::text_dim()
+                                                })
+                                                .group_hover("btn-analytics", |icon| {
+                                                    icon.text_color(theme::text())
+                                                }),
+                                        )
+                                        .hover(|button| button.bg(theme::hover()).cursor_pointer())
+                                        .tooltip(|window, cx| {
+                                            gpui_component::tooltip::Tooltip::new(
+                                                "Query analytics: what ran, and why it was slow",
+                                            )
+                                            .build(window, cx)
+                                        })
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.analytics_toggle(cx)),
+                                        )
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
                             .id("open-query-editor")
                             .group("btn-query")
                             .size(px(28.))

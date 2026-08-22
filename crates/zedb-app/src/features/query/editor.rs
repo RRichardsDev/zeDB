@@ -6,6 +6,7 @@ impl Workspace {
         self.show_query_editor = true;
         self.show_fleet = false;
         self.show_ops = false;
+        self.show_analytics = false;
         cx.notify();
     }
 

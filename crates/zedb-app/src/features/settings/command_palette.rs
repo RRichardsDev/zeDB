@@ -49,6 +49,7 @@ pub enum PaletteCommand {
     ThemeLight,
     ThemeSystem,
     ToggleOps,
+    ToggleQueryAnalytics,
     ToggleQueryHistory,
     ExplainQuery,
     EstimateQuery,
@@ -70,6 +71,7 @@ const ALL_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand::ThemeLight,
     PaletteCommand::ThemeSystem,
     PaletteCommand::ToggleOps,
+    PaletteCommand::ToggleQueryAnalytics,
     PaletteCommand::ToggleQueryHistory,
     PaletteCommand::ExplainQuery,
     PaletteCommand::EstimateQuery,
@@ -93,6 +95,7 @@ impl PaletteCommand {
             Self::ThemeLight => "Theme: Light",
             Self::ThemeSystem => "Theme: System",
             Self::ToggleOps => "Ops view",
+            Self::ToggleQueryAnalytics => "Query analytics",
             Self::ToggleQueryHistory => "Query history and saved queries",
             Self::ExplainQuery => "Explain query (plan and index pruning)",
             Self::EstimateQuery => "Estimate query cost (parts, rows, marks)",
@@ -108,6 +111,7 @@ impl PaletteCommand {
             | Self::NewQuery
             | Self::ToggleFleet
             | Self::ToggleOps
+            | Self::ToggleQueryAnalytics
             | Self::ExplainQuery
             | Self::EstimateQuery => workspace.connection.connected.is_some(),
             Self::ExportResults => workspace.export_available(),
@@ -130,6 +134,7 @@ impl PaletteCommand {
             Self::ThemeLight => workspace.set_theme_preference("light", window, cx),
             Self::ThemeSystem => workspace.set_theme_preference("system", window, cx),
             Self::ToggleOps => workspace.ops_toggle(cx),
+            Self::ToggleQueryAnalytics => workspace.analytics_toggle(cx),
             Self::ToggleQueryHistory => workspace.history_toggle(cx),
             Self::ExplainQuery => workspace.explain_query(window, cx),
             Self::EstimateQuery => workspace.estimate_query(window, cx),

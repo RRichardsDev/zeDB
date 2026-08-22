@@ -171,6 +171,7 @@ impl Workspace {
         self.show_query_editor = true;
         self.show_fleet = false;
         self.show_ops = false;
+        self.show_analytics = false;
         self.notice = Some("Agent fix applied to the failed statement".into());
         self.notice_warning = false;
         self.notice_flash_id += 1;

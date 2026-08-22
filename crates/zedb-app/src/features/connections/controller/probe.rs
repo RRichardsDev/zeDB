@@ -182,6 +182,7 @@ impl Workspace {
                 this.load_schema_databases(cx);
                 this.settings_sync_tick(cx);
                 this.ops_reset(cx);
+                this.analytics_reset(cx);
                 cx.notify();
             })
             .ok();

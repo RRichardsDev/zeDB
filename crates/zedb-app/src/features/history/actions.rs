@@ -44,6 +44,7 @@ impl Workspace {
         if self.connection.connected.is_some() {
             self.show_query_editor = true;
             self.show_ops = false;
+            self.show_analytics = false;
             self.show_fleet = false;
         }
         self.flash_notice(format!("Saved tab {name}"), cx);
@@ -120,6 +121,7 @@ impl Workspace {
         self.show_query_editor = true;
         self.show_fleet = false;
         self.show_ops = false;
+        self.show_analytics = false;
         self.flash_notice(format!("Opened saved tab {name}"), cx);
     }
 
@@ -129,6 +131,7 @@ impl Workspace {
         if self.history.open && self.connection.connected.is_some() && !self.show_query_editor {
             self.show_query_editor = true;
             self.show_ops = false;
+            self.show_analytics = false;
             self.show_fleet = false;
         }
         cx.notify();

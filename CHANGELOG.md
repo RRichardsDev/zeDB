@@ -9,6 +9,16 @@ GitHub release notes.
 
 ## Unreleased
 
+- New: Query analytics, the fourth main view (toolbar chart icon or
+  "Query analytics" in the palette). Every query shape from
+  system.query_log over the last hour, day, or week, normalized so
+  different literals collapse into one fingerprint: runs, errors,
+  p50/p95/p99, total time, peak memory, and bytes read, heaviest
+  first, node or cluster scoped. Drill into a shape for its recent
+  runs, then into a run for its ProfileEvents testimony: what was
+  actually read, why, and where the time went, the measured
+  counterpart to EXPLAIN. One click opens the shape in the editor.
+  Reading the log never writes the log.
 - The ops view refreshes every second while zeDB is frontmost and eases
   to every five seconds while it is in the background; the header
   states the live cadence. Poll queries no longer land in query_log

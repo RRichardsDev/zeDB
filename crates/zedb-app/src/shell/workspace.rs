@@ -775,6 +775,7 @@ impl Workspace {
                         this.connection.selected = Some(index);
                     }
                     this.show_ops = false;
+                    this.show_analytics = false;
                     this.show_query_editor = false;
                     this.show_fleet = false;
                     this.connection.usage.tab = Some(UsageTab::Cost);

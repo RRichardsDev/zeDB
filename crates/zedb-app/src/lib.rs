@@ -1,5 +1,7 @@
 #[path = "features/agent/mod.rs"]
 mod agent_pane;
+#[path = "features/analytics/mod.rs"]
+mod analytics;
 #[path = "features/fleet/author.rs"]
 mod author;
 #[path = "platform/clickhouse_cloud.rs"]
@@ -179,6 +181,7 @@ impl AssetSource for Assets {
             "icons/github.svg" => Some(include_bytes!("../assets/icons/github.svg")),
             "icons/gitlab.svg" => Some(include_bytes!("../assets/icons/gitlab.svg")),
             "icons/ops.svg" => Some(include_bytes!("../assets/icons/ops.svg")),
+            "icons/analytics.svg" => Some(include_bytes!("../assets/icons/analytics.svg")),
             "icons/history.svg" => Some(include_bytes!("../assets/icons/history.svg")),
             "icons/bookmark.svg" => Some(include_bytes!("../assets/icons/bookmark.svg")),
             "icons/star.svg" => Some(include_bytes!("../assets/icons/star.svg")),
@@ -372,6 +375,8 @@ struct Workspace {
     /// The export dialog, when open.
     export: Option<export::ExportState>,
     ops: ops::OpsState,
+    analytics: analytics::AnalyticsState,
+    show_analytics: bool,
     /// query_ids killed from the ops view; errors on these statements
     /// report the kill instead of a transport failure.
     ops_killed: std::collections::HashSet<String>,
@@ -690,6 +695,8 @@ impl Workspace {
             agent_fix_target: None,
             export: None,
             ops: ops::OpsState::default(),
+            analytics: analytics::AnalyticsState::default(),
+            show_analytics: false,
             ops_killed: std::collections::HashSet::new(),
             agent: agent_pane::AgentPaneState::new(preferences.agent_pane_width.unwrap_or(420.0)),
             author: None,

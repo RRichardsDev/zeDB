@@ -196,6 +196,12 @@ impl Render for Workspace {
                         .clamp(280.0, (viewport_width - 400.0).max(280.0));
                     cx.notify();
                 }
+                if this.analytics.resizing_detail {
+                    let viewport_width = f32::from(window.viewport_size().width);
+                    this.analytics.detail_width = (viewport_width - f32::from(event.position.x))
+                        .clamp(320.0, (viewport_width - 400.0).max(320.0));
+                    cx.notify();
+                }
                 if let Some((start_width, start_x)) = this.history.resizing {
                     let width = start_width + (start_x - f32::from(event.position.x));
                     this.history.width = width.clamp(240.0, 640.0);
@@ -224,6 +230,7 @@ impl Render for Workspace {
                     this.resizing_sidebar = false;
                     this.resizing_sidebar_sections = false;
                     this.fleet.resizing_detail = false;
+                    this.analytics.resizing_detail = false;
                     if this.agent.resizing {
                         this.agent.resizing = false;
                         this.preferences.agent_pane_width = Some(this.agent.width);
@@ -239,6 +246,7 @@ impl Render for Workspace {
                     this.resizing_sidebar = false;
                     this.resizing_sidebar_sections = false;
                     this.fleet.resizing_detail = false;
+                    this.analytics.resizing_detail = false;
                     this.agent.resizing = false;
                     this.query.resize = None;
                     this.history.resizing = None;
@@ -299,23 +307,31 @@ impl Render for Workspace {
                                         div()
                                             .flex_1()
                                             .min_h_0()
-                                            .when(self.show_ops, |content| {
-                                                content.child(self.ops_panel(cx))
+                                            .when(self.show_analytics, |content| {
+                                                content.child(self.analytics_panel(cx))
                                             })
                                             .when(
-                                                !self.show_ops && self.show_query_editor,
+                                                !self.show_analytics && self.show_ops,
+                                                |content| content.child(self.ops_panel(cx)),
+                                            )
+                                            .when(
+                                                !self.show_analytics
+                                                    && !self.show_ops
+                                                    && self.show_query_editor,
                                                 |content| {
                                                     content.child(self.query_editor_panel(cx))
                                                 },
                                             )
                                             .when(
-                                                !self.show_ops
+                                                !self.show_analytics
+                                                    && !self.show_ops
                                                     && !self.show_query_editor
                                                     && self.show_fleet,
                                                 |content| content.child(self.fleet_panel(cx)),
                                             )
                                             .when(
-                                                !self.show_ops
+                                                !self.show_analytics
+                                                    && !self.show_ops
                                                     && !self.show_query_editor
                                                     && !self.show_fleet,
                                                 |content| {
