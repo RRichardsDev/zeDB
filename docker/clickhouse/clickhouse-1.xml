@@ -3,8 +3,14 @@
         <zedb_cluster>
             <shard>
                 <internal_replication>true</internal_replication>
-                <replica><host>clickhouse-1</host><port>9000</port></replica>
-                <replica><host>clickhouse-2</host><port>9000</port></replica>
+                <replica>
+                    <host>clickhouse-1</host><port>9000</port>
+                    <user>zedb</user><password>zedb</password>
+                </replica>
+                <replica>
+                    <host>clickhouse-2</host><port>9000</port>
+                    <user>zedb</user><password>zedb</password>
+                </replica>
             </shard>
         </zedb_cluster>
         <!-- Same two nodes as two shards of one replica each: the
