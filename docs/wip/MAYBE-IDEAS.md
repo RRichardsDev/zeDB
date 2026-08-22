@@ -5,6 +5,12 @@ Looser than a phase ideas list: stray thoughts, half-wishes, and
 duty. Promote anything that grows legs into the current phase ideas
 doc; delete freely.
 
+- Badge known bridge clients in the ops and workload views: queries
+  arriving via pg_clickhouse (the official Postgres FDW) or the
+  postgres/mysql wire protocols already carry client signatures in
+  system.processes; a "via pg_clickhouse" tag answers "humans or the
+  bridge?" at a glance. String match, ClickHouse-side only; zeDB
+  never becomes a Postgres client (2026-08-22 thread-pull verdict).
 - Query history drawer: run an entry directly from the drawer
   (today it inserts; a second affordance could execute).
 - History: record cancelled runs too, marked as such.

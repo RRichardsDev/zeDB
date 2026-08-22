@@ -20,6 +20,13 @@ they leave the list when shipped.
   -> fixed (unreleased): toolbar controls bring the fleet view with
   them (narrated); detail-panel controls refuse honestly with the
   navigation hint when no database is selected
+- external table engines (PostgreSQL, MySQL, ...) render with blank
+  sizes and unguarded probes: NULL total_bytes should read as
+  "external" in the inspector, and the sampling probes (cardinality,
+  workload measurement) should sit behind a confirm because they
+  execute fetch-heavy queries against a remote database someone else
+  pays for (probed 2026-08-22 with a PostgreSQL-engine table; browse,
+  query, export, and credential masking are all fine)
 - zedb-cli `upgrade --dry-run` without `--write` refuses with "this
   connection is read-only; re-run with --write to consent", but a dry
   run is exactly what you want before consenting; it should run on the

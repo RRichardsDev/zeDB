@@ -5,6 +5,14 @@ haunting design discussions. Promote to SPEC.md (or a phase doc) only
 with a phase assignment. Shipped items get pruned; this is the list
 of what is NOT built.
 
+## ClickPipes on the Cloud dashboard
+
+The Cloud API exposes ClickPipes (managed ingestion: Kafka/S3/CDC
+from Postgres and MySQL) management endpoints. zeDB's connection
+dashboard could list a service's pipes with status and lag, and the
+inspector could mark a table as "fed by ClickPipe X". Zero of this is
+needed for such tables to work today; they are ordinary tables.
+
 ## ClickHouse Cloud (Phase 10.5 remainder)
 
 The front door (10.5a), the truthfulness fixes (10.5b), and the
