@@ -186,7 +186,7 @@ impl Workspace {
                     .child("loading runs..."),
             );
         }
-        for run in &self.analytics.runs {
+        for (index, run) in self.analytics.runs.iter().enumerate() {
             let query_id = run.query_id.clone();
             let active = self
                 .analytics
@@ -197,6 +197,7 @@ impl Workspace {
             runs_list = runs_list.child(
                 div()
                     .id(gpui::SharedString::from(format!("run-{}", run.query_id)))
+                    .debug_selector(move || format!("analytics-run-{index}"))
                     .px_3()
                     .py_0p5()
                     .flex()

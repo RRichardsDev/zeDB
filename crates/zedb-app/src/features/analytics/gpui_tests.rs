@@ -192,6 +192,35 @@ fn working_scope_drives_analytics_fan_out(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn clicking_a_run_row_fetches_its_testimony(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    workspace.update(cx, |workspace, cx| {
+        workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
+        workspace.show_analytics = true;
+        workspace.analytics.selected = Some("111".into());
+        workspace.analytics.selected_shape = "SELECT 1".into();
+        let run = |id: &str| FingerprintRun {
+            query_id: id.into(),
+            at: "2026-08-22 10:00:00".into(),
+            duration_ms: 5,
+            memory: 1024,
+            read_rows: 10,
+            exception: String::new(),
+            host: String::new(),
+        };
+        workspace.analytics.runs = vec![run("q-1"), run("q-2")];
+        cx.notify();
+    });
+    test_harness::click(cx, "analytics-run-1");
+    workspace.update(cx, |workspace, _| {
+        assert!(
+            workspace.analytics.testimony_loading || workspace.analytics.error.is_some(),
+            "clicking a run row started its testimony fetch"
+        );
+    });
+}
+
+#[gpui::test]
 fn refresh_icon_starts_a_fetch(cx: &mut TestAppContext) {
     let (workspace, cx) = test_harness::workspace(cx);
     workspace.update(cx, |workspace, cx| {

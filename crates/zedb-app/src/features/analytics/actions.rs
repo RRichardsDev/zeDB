@@ -313,14 +313,8 @@ impl Workspace {
 
     /// Fetch the testimony (ProfileEvents story) of one run.
     pub(crate) fn analytics_select_run(&mut self, query_id: String, cx: &mut Context<Self>) {
-        if self
-            .analytics
-            .testimony
-            .as_ref()
-            .is_some_and(|(current, _)| *current == query_id)
-        {
-            return;
-        }
+        // Re-clicking the shown run re-fetches: a click always answers,
+        // and the query is a point lookup.
         let Some(connected) = &self.connection.connected else {
             return;
         };

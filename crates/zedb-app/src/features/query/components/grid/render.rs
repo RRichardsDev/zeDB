@@ -509,17 +509,31 @@ impl Render for GridSpike {
                                             }
                                         },
                                     ))
-                                    .on_click(cx.listener(move |this: &mut GridSpike, _, _, cx| {
-                                        // A plain click (no drag) opens the
-                                        // inspector on an expandable cell.
-                                        if this
-                                            .selected
-                                            .is_some_and(|s| s.is_single() && s.focus == (row, col))
-                                        {
-                                            this.inspected = expandable.then_some((row, col));
-                                            cx.notify();
-                                        }
-                                    }))
+                                    .on_click(cx.listener(
+                                        move |this: &mut GridSpike,
+                                              event: &gpui::ClickEvent,
+                                              _,
+                                              cx| {
+                                            // A double-click is activation
+                                            // (row drill-in), not inspection:
+                                            // close what the first click
+                                            // opened.
+                                            if event.click_count() >= 2 {
+                                                if this.inspected.take().is_some() {
+                                                    cx.notify();
+                                                }
+                                                return;
+                                            }
+                                            // A plain click (no drag) opens the
+                                            // inspector on an expandable cell.
+                                            if this.selected.is_some_and(|s| {
+                                                s.is_single() && s.focus == (row, col)
+                                            }) {
+                                                this.inspected = expandable.then_some((row, col));
+                                                cx.notify();
+                                            }
+                                        },
+                                    ))
                                     // Right-click selects the cell if it is
                                     // outside the current selection, then opens
                                     // the copy menu; an existing region is kept
