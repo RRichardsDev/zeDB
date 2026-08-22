@@ -36,7 +36,8 @@ GitHub release notes.
   render humanized (4.05 s, 765.80 MiB) while sorting, filtering, and
   copy see the raw numbers; timestamps get the grid's usual date
   tinting; shapes that never finished show blank percentiles instead
-  of NaN.
+  of NaN; shapes themselves are syntax-colored like the editor
+  (visible rows only, cached, so a 42k-run log costs nothing extra).
 - The ops view refreshes every second while zeDB is frontmost and eases
   to every five seconds while it is in the background; the header
   states the live cadence. Poll queries no longer land in query_log

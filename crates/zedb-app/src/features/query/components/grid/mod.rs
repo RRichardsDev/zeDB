@@ -165,6 +165,10 @@ pub struct GridSpike {
     /// raw (so sort/filter/copy see the real number) and only the
     /// rendering humanizes it.
     column_display: HashMap<String, ColumnDisplay>,
+    /// Owner-declared grammars for string columns ("sqlstmt"): the
+    /// visible cells get tree-sitter coloring through the same lazy
+    /// per-cell cache the JSON faces use.
+    column_grammar: HashMap<String, &'static str>,
 }
 
 /// How an owner wants a raw numeric column rendered.
@@ -244,6 +248,7 @@ impl GridSpike {
             inspector_cache: None,
             needs_autofit: false,
             column_display: HashMap::new(),
+            column_grammar: HashMap::new(),
         }
     }
 
@@ -254,6 +259,15 @@ impl GridSpike {
         self.column_display = displays
             .iter()
             .map(|(name, display)| (name.to_string(), *display))
+            .collect();
+    }
+
+    /// Declare grammars for named string columns ("sqlstmt" parses
+    /// full statements). Owner-managed like the display hints.
+    pub fn set_column_grammars(&mut self, grammars: &[(&str, &'static str)]) {
+        self.column_grammar = grammars
+            .iter()
+            .map(|(name, grammar)| (name.to_string(), *grammar))
             .collect();
     }
 
@@ -860,10 +874,31 @@ impl GridSpike {
         })
     }
 
+    /// Face for a grammar-hinted string cell: the value verbatim,
+    /// colored by the hinted grammar. Oversized cells stay plain (the
+    /// visible slice is a fraction of the string anyway).
+    fn cell_grammar_face(
+        &self,
+        row: usize,
+        column: usize,
+    ) -> Option<(String, String, Option<&'static str>)> {
+        let grammar = self
+            .columns
+            .get(column)
+            .and_then(|meta| self.column_grammar.get(&meta.name))?;
+        match self.rows.get(row)?.get(column)? {
+            Value::String(text) if !text.is_empty() && text.len() <= 2048 => {
+                Some((text.clone(), String::new(), Some(grammar)))
+            }
+            _ => None,
+        }
+    }
+
     /// Tree-sitter runs for `text` under `lang`, via the long-lived
     /// highlighters. Bare literals parse as nothing in the SQL
     /// grammar, so they parse as `SELECT <literal>` with ranges
-    /// shifted back over the displayed text.
+    /// shifted back over the displayed text; "sqlstmt" is the same
+    /// grammar fed a full statement as-is.
     fn highlight_runs(
         &mut self,
         lang: &'static str,
@@ -880,12 +915,14 @@ impl GridSpike {
         } else {
             (text.to_string(), 0)
         };
-        let slot = if lang == "sql" {
-            &mut self.hl_sql
-        } else {
+        let slot = if lang == "json" {
             &mut self.hl_json
+        } else {
+            &mut self.hl_sql
         };
-        let highlighter = slot.get_or_insert_with(|| SyntaxHighlighter::new(lang));
+        let highlighter = slot.get_or_insert_with(|| {
+            SyntaxHighlighter::new(if lang == "sqlstmt" { "sql" } else { lang })
+        });
         highlighter.replace_all(&gpui_component::Rope::from(parse_text.as_str()));
         let highlight_theme = &gpui_component::Theme::global(cx).highlight_theme;
         let runs: HighlightRuns = highlighter

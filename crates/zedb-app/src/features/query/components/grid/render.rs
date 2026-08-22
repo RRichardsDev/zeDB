@@ -441,6 +441,7 @@ impl Render for GridSpike {
                                     this.cell_display_parts(row, col)
                                         .map(|(main, dim)| (main, dim, None))
                                         .or_else(|| this.cell_composite_parts(row, col))
+                                        .or_else(|| this.cell_grammar_face(row, col))
                                 } else {
                                     None
                                 };

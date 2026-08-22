@@ -53,6 +53,9 @@ impl AnalyticsState {
                 ("peak_mem", Bytes),
                 ("read", Bytes),
             ]);
+            // Shapes are SQL; visible cells color lazily through the
+            // grid's per-cell highlight cache.
+            grid.set_column_grammars(&[("shape", "sqlstmt")]);
         });
         cx.subscribe(&grid, |this: &mut Workspace, _, event, cx| {
             this.analytics_grid_event(event, cx);
