@@ -9,6 +9,13 @@ GitHub release notes.
 
 ## Unreleased
 
+- One working scope instead of three cluster pickers: the top bar now
+  shows "connected to" (the node picker, which no longer hides behind
+  a cluster label) and "working on" (this node or a cluster). That
+  single choice drives what ops and analytics aggregate over AND what
+  schema and fleet mutations target with ON CLUSTER; the per-view
+  scope dropdowns are gone, and each view states its scope in its
+  header.
 - New: Query analytics, the fourth main view (toolbar chart icon or
   "Query analytics" in the palette). Every query shape from
   system.query_log over the last hour, day, or week, normalized so

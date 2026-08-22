@@ -27,8 +27,6 @@ impl Workspace {
     /// cadence from zero.
     pub(crate) fn ops_reset(&mut self, cx: &mut Context<Self>) {
         self.ops_clear_data();
-        // The new target may not know the old scope's cluster.
-        self.ops.scope = OpsScope::Node;
         if self.connection.connected.is_none() {
             self.show_ops = false;
         } else if self.show_ops {
@@ -76,22 +74,6 @@ impl Workspace {
             .collect();
         clusters.dedup();
         clusters
-    }
-
-    pub fn ops_set_scope(&mut self, cluster: Option<String>, cx: &mut Context<Self>) {
-        let scope = match cluster {
-            Some(name) => OpsScope::Cluster(name),
-            None => OpsScope::Node,
-        };
-        if self.ops.scope == scope {
-            return;
-        }
-        self.ops_clear_data();
-        self.ops.scope = scope;
-        if self.show_ops {
-            self.ops_start_poll(cx);
-        }
-        cx.notify();
     }
 
     /// The current fast-lane cadence: watching eyes get fresh data,
@@ -169,7 +151,7 @@ impl Workspace {
         let config = Self::ops_poll_config(&connected.client_config);
         // Cluster scope fans out to every replica; hostName() names
         // the node each row came from.
-        let cluster = self.ops.scope.cluster().map(quoted);
+        let cluster = self.view_scope_cluster().as_deref().map(quoted);
         let from = |table: &str| match &cluster {
             Some(name) => format!("clusterAllReplicas({name}, {table})"),
             None => table.to_string(),
@@ -333,7 +315,7 @@ impl Workspace {
         self.ops.slow_fetch_in_flight = true;
         let config = Self::ops_poll_config(&connected.client_config);
         let top_clause = self.ops.top_limit.clause();
-        let cluster = self.ops.scope.cluster().map(quoted);
+        let cluster = self.view_scope_cluster().as_deref().map(quoted);
         let from = |table: &str| match &cluster {
             Some(name) => format!("clusterAllReplicas({name}, {table})"),
             None => table.to_string(),
@@ -640,10 +622,8 @@ impl Workspace {
         // In cluster scope the query may run on another node; ON
         // CLUSTER reaches it via the distributed DDL queue.
         let on_cluster = self
-            .ops
-            .scope
-            .cluster()
-            .map(|name| format!(" ON CLUSTER {}", quoted(name)))
+            .view_scope_cluster()
+            .map(|name| format!(" ON CLUSTER {}", quoted(&name)))
             .unwrap_or_default();
         let handle = rt::tokio().spawn(async move {
             let client = zedb_ch::ChClient::new(config);

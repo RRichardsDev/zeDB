@@ -163,35 +163,31 @@ fn header_actions_route_to_the_visible_grid(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn scope_selection_dispatches_from_the_menu_overlay(cx: &mut TestAppContext) {
-    use gpui::Focusable as _;
-
+fn working_scope_drives_analytics_fan_out(cx: &mut TestAppContext) {
     let (workspace, cx) = test_harness::workspace(cx);
-    let grid = workspace.update(cx, |workspace, cx| {
+    workspace.update(cx, |workspace, cx| {
         workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
         workspace.show_analytics = true;
-        cx.notify();
-        workspace.analytics.grid.clone()
-    });
-    // Menus dispatch actions from an overlay via the focused path;
-    // focus the grid, as a user interacting with the view would have.
-    cx.run_until_parked();
-    workspace.update_in(cx, |_, window, cx| {
-        window.focus(&grid.focus_handle(cx));
-    });
-    cx.dispatch_action(crate::analytics::SetAnalyticsScope {
-        cluster: Some("zedb_cluster".into()),
-    });
-    workspace.update(cx, |workspace, _| {
+        workspace.analytics.selected = Some("111".into());
+
+        // The top bar's working scope is the single source of truth:
+        // switching it clears the drill-in and refetches cluster-wide.
+        workspace.set_apply_cluster(Some("zedb_cluster".into()), cx);
         assert_eq!(
-            workspace.analytics.scope.cluster(),
-            Some("zedb_cluster"),
-            "the scope selection reached the workspace"
+            workspace.view_scope_cluster().as_deref(),
+            Some("zedb_cluster")
         );
+        assert!(workspace.analytics.selected.is_none());
         assert!(
             workspace.analytics.loading || workspace.analytics.error.is_some(),
-            "and a refetch started (dead endpoint may already have failed it)"
+            "a refetch started"
         );
+
+        // Same scope again is a no-op.
+        workspace.analytics.loading = false;
+        workspace.analytics.error = None;
+        workspace.set_apply_cluster(Some("zedb_cluster".into()), cx);
+        assert!(!workspace.analytics.loading && workspace.analytics.error.is_none());
     });
 }
 

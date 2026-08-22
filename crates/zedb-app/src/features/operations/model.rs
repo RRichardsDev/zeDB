@@ -13,25 +13,6 @@ pub(crate) const POLL_ACTIVE_SECS: u64 = 1;
 pub(crate) const POLL_INACTIVE_SECS: u64 = 5;
 pub(crate) const SLOW_POLL_SECS: u64 = 10;
 
-/// Which node(s) the panels ask about. Cluster scope fans every
-/// query out via clusterAllReplicas()/cluster() and exists only for
-/// topologies the nodes reported at connect time.
-#[derive(Clone, PartialEq, Eq, Default)]
-pub enum OpsScope {
-    #[default]
-    Node,
-    Cluster(String),
-}
-
-impl OpsScope {
-    pub(crate) fn cluster(&self) -> Option<&str> {
-        match self {
-            OpsScope::Node => None,
-            OpsScope::Cluster(name) => Some(name),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct OpsProcess {
     pub query_id: String,
@@ -210,13 +191,6 @@ pub struct SetOpsTopLimit {
     pub limit: OpsTopLimit,
 }
 
-#[derive(Clone, PartialEq, Action)]
-#[action(no_json, no_register)]
-pub struct SetOpsScope {
-    /// None selects the connected node; Some(name) a known cluster.
-    pub cluster: Option<String>,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum OpsTab {
     #[default]
@@ -279,7 +253,6 @@ pub struct OpsState {
     pub slow_fetch_in_flight: bool,
     pub tab: OpsTab,
     pub top_limit: OpsTopLimit,
-    pub scope: OpsScope,
 }
 
 pub(crate) fn number(value: Option<&Value>) -> u64 {

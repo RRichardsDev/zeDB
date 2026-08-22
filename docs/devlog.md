@@ -1,3 +1,18 @@
+## 2026-08-22: one working scope
+
+- The survey for "why two pickers" found three: the top selector was
+  already a node/cluster hybrid feeding apply_cluster (ON CLUSTER for
+  schema and fleet), while ops and analytics each carried a private
+  read-scope dropdown. Consolidated on the user's model: "connected
+  to" (transport, a node, never relabeled) beside "working on" (node
+  or cluster), one value read by everything via view_scope_cluster().
+  set_apply_cluster now re-aggregates open views on change. OpsScope,
+  SetOpsScope, and SetAnalyticsScope are deleted; the old hybrid's
+  label-swapping (which hid the node while showing the cluster) is
+  retired. Also fixed on the way: the dev docker zedb_cluster
+  definition lacked per-replica credentials, so every
+  clusterAllReplicas fan-out failed against the second node.
+
 ## 2026-08-22: analytics list is the grid now
 
 - User feedback on the first slice ("we already did this for the data

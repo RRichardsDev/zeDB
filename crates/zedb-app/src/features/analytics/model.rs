@@ -4,17 +4,14 @@
 //! filters re-run the aggregation (grid events → SQL), so the table
 //! is always an honest window onto a query that actually ran.
 
-use gpui::{prelude::*, Action, Context, Entity};
+use gpui::{prelude::*, Context, Entity};
 use zedb_ch::analytics::{AnalyticsWindow, FingerprintRun, QueryTestimony};
 
 use crate::grid_spike::GridSpike;
 use crate::Workspace;
 
-pub(crate) use crate::ops::OpsScope as AnalyticsScope;
-
 pub(crate) struct AnalyticsState {
     pub window: AnalyticsWindow,
-    pub scope: AnalyticsScope,
     /// The fingerprint grid; display columns only.
     pub grid: Entity<GridSpike>,
     /// (hash, shape) per grid row, same order, for drill-in.
@@ -50,7 +47,6 @@ impl AnalyticsState {
         .detach();
         Self {
             window: AnalyticsWindow::LastDay,
-            scope: AnalyticsScope::Node,
             grid,
             rows_meta: Vec::new(),
             sort: Vec::new(),
@@ -69,11 +65,4 @@ impl AnalyticsState {
             resizing_detail: false,
         }
     }
-}
-
-#[derive(Clone, PartialEq, Action)]
-#[action(no_json, no_register)]
-pub struct SetAnalyticsScope {
-    /// None selects the connected node; Some(name) a known cluster.
-    pub cluster: Option<String>,
 }

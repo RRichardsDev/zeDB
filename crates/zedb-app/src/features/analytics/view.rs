@@ -1,11 +1,7 @@
 use gpui::{div, prelude::*, px, Context, MouseButton, MouseDownEvent};
-use gpui_component::{
-    button::Button,
-    menu::{DropdownMenu, PopupMenu},
-};
+use gpui_component::button::Button;
 use zedb_ch::analytics::AnalyticsWindow;
 
-use super::model::*;
 use crate::{theme, Workspace};
 
 fn fmt_ms(ms: f64) -> String {
@@ -40,7 +36,6 @@ impl Workspace {
             .fetched_at
             .map(|stamp| format!("as of {}", stamp.format("%H:%M:%S")))
             .unwrap_or_else(|| "loading...".into());
-        let scope_options = self.ops_cluster_options();
         let window = self.analytics.window;
 
         let window_button = |id: &'static str, choice: AnalyticsWindow, hours: u32| {
@@ -96,32 +91,12 @@ impl Workspace {
                         168,
                     )),
             )
-            .when(!scope_options.is_empty(), |header| {
-                let label = match self.analytics.scope.cluster() {
-                    Some(name) => format!("Cluster: {name}"),
-                    None => "This node".to_string(),
-                };
-                header.child(
-                    Button::new("analytics-scope")
-                        .label(label)
-                        .dropdown_caret(true)
-                        .compact()
-                        .outline()
-                        .dropdown_menu(move |menu: PopupMenu, _, _| {
-                            let menu = menu
-                                .min_w(px(160.))
-                                .menu("This node", Box::new(SetAnalyticsScope { cluster: None }));
-                            scope_options.iter().fold(menu, |menu, name| {
-                                menu.menu(
-                                    format!("Cluster: {name}"),
-                                    Box::new(SetAnalyticsScope {
-                                        cluster: Some(name.clone()),
-                                    }),
-                                )
-                            })
-                        }),
-                )
-            })
+            .child(div().text_sm().text_color(theme::text_dim()).child(
+                match self.view_scope_cluster() {
+                    Some(name) => format!("cluster {name}"),
+                    None => "this node".to_string(),
+                },
+            ))
             .child(
                 Button::new("analytics-refresh")
                     .label("Refresh")

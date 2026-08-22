@@ -48,6 +48,7 @@ impl Workspace {
                         row.child(connection.name.clone())
                             .child(Self::tier_badge(connection.tier))
                             .when_some(self.node_selector(cx), |row, selector| row.child(selector))
+                            .when_some(self.scope_selector(cx), |row, selector| row.child(selector))
                     })
                     .when(header_connection.is_none(), |row| {
                         row.child("Select a connection")

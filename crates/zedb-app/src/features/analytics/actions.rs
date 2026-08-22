@@ -1,7 +1,6 @@
 use gpui::{Context, Window};
 use zedb_ch::analytics::AnalyticsWindow;
 
-use super::model::*;
 use crate::{rt, Workspace};
 
 impl Workspace {
@@ -26,7 +25,6 @@ impl Workspace {
     /// scope's cluster, so scope resets to the node.
     pub(crate) fn analytics_reset(&mut self, cx: &mut Context<Self>) {
         self.analytics.generation += 1;
-        self.analytics.scope = AnalyticsScope::Node;
         self.analytics.rows_meta.clear();
         self.analytics.sort.clear();
         self.analytics.filters.clear();
@@ -59,7 +57,7 @@ impl Workspace {
         self.analytics.generation += 1;
         let generation = self.analytics.generation;
         let window = self.analytics.window;
-        let cluster = self.analytics.scope.cluster().map(str::to_string);
+        let cluster = self.view_scope_cluster();
         cx.notify();
 
         let sort = self.analytics.sort.clone();
@@ -159,7 +157,7 @@ impl Workspace {
         let config = Self::ops_poll_config(&connected.client_config);
         let base = zedb_ch::analytics::fingerprint_grid_sql(
             self.analytics.window,
-            self.analytics.scope.cluster(),
+            self.view_scope_cluster().as_deref(),
             &[],
             &self
                 .analytics
@@ -257,20 +255,7 @@ impl Workspace {
         self.analytics_fetch(cx);
     }
 
-    pub(crate) fn analytics_set_scope(&mut self, cluster: Option<String>, cx: &mut Context<Self>) {
-        let scope = match cluster {
-            Some(name) => AnalyticsScope::Cluster(name),
-            None => AnalyticsScope::Node,
-        };
-        if self.analytics.scope == scope {
-            return;
-        }
-        self.analytics.scope = scope;
-        self.analytics_clear_drill_in();
-        self.analytics_fetch(cx);
-    }
-
-    fn analytics_clear_drill_in(&mut self) {
+    pub(crate) fn analytics_clear_drill_in(&mut self) {
         self.analytics.selected = None;
         self.analytics.runs.clear();
         self.analytics.runs_loading = false;
@@ -294,7 +279,7 @@ impl Workspace {
         self.analytics.testimony_loading = false;
         let generation = self.analytics.generation;
         let window = self.analytics.window;
-        let cluster = self.analytics.scope.cluster().map(str::to_string);
+        let cluster = self.view_scope_cluster();
         cx.notify();
 
         let request = hash.clone();
@@ -343,7 +328,7 @@ impl Workspace {
         self.analytics.testimony = None;
         self.analytics.testimony_loading = true;
         let generation = self.analytics.generation;
-        let cluster = self.analytics.scope.cluster().map(str::to_string);
+        let cluster = self.view_scope_cluster();
         cx.notify();
 
         let request = query_id.clone();

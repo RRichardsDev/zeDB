@@ -45,21 +45,7 @@ impl Workspace {
             .get(connected.active_node)
             .map(|node| node.name.clone())
             .unwrap_or_else(|| "Select node".into());
-        // Clusters the connected node belongs to. Picking one runs
-        // schema-apply actions ON CLUSTER instead of just this node.
-        // Never offered on Cloud: a warehouse shares one catalog, so
-        // DDL runs once and ON CLUSTER has nothing to add.
-        let clusters = if connection.cloud.is_some() {
-            Vec::new()
-        } else {
-            self.ops_cluster_options()
-        };
-        let apply_cluster = connected.apply_cluster.clone();
-        // In cluster scope the label reads the cluster, not the node.
-        let label = match &apply_cluster {
-            Some(name) => format!("Cluster: {name}"),
-            None => active_name,
-        };
+        let label = active_name;
         // The toolbar renders on every view, including with no query tab
         // open at all (closing the last one returns to the overview), so
         // the editor's focus handle is optional here.
@@ -80,24 +66,55 @@ impl Workspace {
                         Some(handle) => menu.action_context(handle),
                         None => menu,
                     };
-                    let mut menu = nodes.iter().cloned().fold(
+                    nodes.iter().cloned().fold(
                         base.min_w(px(180.)),
                         |menu, (index, name, reachable)| {
                             menu.menu_with_enable(name, Box::new(SelectNode { index }), reachable)
                         },
-                    );
-                    if !clusters.is_empty() {
-                        menu = menu.separator();
-                        for cluster in &clusters {
-                            menu = menu.menu(
-                                format!("Cluster: {cluster}"),
-                                Box::new(SetApplyCluster {
-                                    cluster: Some(cluster.clone()),
-                                }),
-                            );
-                        }
-                    }
-                    menu
+                    )
+                }),
+        )
+    }
+
+    /// The working-scope control beside the node picker: what ops and
+    /// analytics show, and what schema and fleet mutations target
+    /// (ON CLUSTER). Hidden when the topology offers no cluster.
+    pub(crate) fn scope_selector(&self, _cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let connected = self.connection.connected.as_ref()?;
+        let connection = self
+            .connection
+            .connections
+            .iter()
+            .find(|connection| connection.name == connected.name)?;
+        if connection.cloud.is_some() {
+            return None;
+        }
+        let clusters = self.ops_cluster_options();
+        if clusters.is_empty() {
+            return None;
+        }
+        let scope_label = match &connected.apply_cluster {
+            Some(name) => format!("working on: cluster {name}"),
+            None => "working on: this node".to_string(),
+        };
+        Some(
+            Button::new("working-scope-selector")
+                .label(scope_label)
+                .dropdown_caret(true)
+                .compact()
+                .outline()
+                .dropdown_menu(move |menu: PopupMenu, _, _| {
+                    let menu = menu
+                        .min_w(px(200.))
+                        .menu("This node", Box::new(SetApplyCluster { cluster: None }));
+                    clusters.iter().fold(menu, |menu, cluster| {
+                        menu.menu(
+                            format!("Cluster: {cluster}"),
+                            Box::new(SetApplyCluster {
+                                cluster: Some(cluster.clone()),
+                            }),
+                        )
+                    })
                 }),
         )
     }

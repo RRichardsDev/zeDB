@@ -104,9 +104,31 @@ impl Workspace {
             return;
         }
         if let Some(connected) = self.connection.connected.as_mut() {
+            if connected.apply_cluster == cluster {
+                return;
+            }
             connected.apply_cluster = cluster;
+            // The working scope also drives read fan-out: open views
+            // re-aggregate for the new context immediately.
+            if self.show_ops {
+                self.ops_clear_data();
+                self.ops_start_poll(cx);
+            }
+            if self.show_analytics {
+                self.analytics_clear_drill_in();
+                self.analytics_fetch(cx);
+            }
             cx.notify();
         }
+    }
+
+    /// The working scope every read view fans out to and every
+    /// mutation targets: the top bar's single source of truth.
+    pub(crate) fn view_scope_cluster(&self) -> Option<String> {
+        self.connection
+            .connected
+            .as_ref()
+            .and_then(|connected| connected.apply_cluster.clone())
     }
 
     pub(crate) fn select_node(&mut self, index: usize, cx: &mut Context<Self>) {

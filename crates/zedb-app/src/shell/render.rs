@@ -109,16 +109,6 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, action: &ops::SetOpsTopLimit, _, cx| {
                 this.ops_set_top_limit(action.limit, cx)
             }))
-            .on_action(cx.listener(|this, action: &ops::SetOpsScope, _, cx| {
-                this.ops_set_scope(action.cluster.clone(), cx)
-            }))
-            // Dropdown menus dispatch from an overlay, so scope
-            // selection must be handled here, not on the panel.
-            .on_action(
-                cx.listener(|this, action: &analytics::SetAnalyticsScope, _, cx| {
-                    this.analytics_set_scope(action.cluster.clone(), cx)
-                }),
-            )
             .on_action(cx.listener(|this, action: &ViewObjectDdl, window, cx| {
                 let object = this
                     .schema

@@ -27,6 +27,10 @@ they leave the list when shipped.
   distinct labels at minimum ("connected to" vs "showing"), possibly
   the scope control absorbing the node identity (raised 2026-08-22,
   and possibly earlier without being filed)
+  -> fixed (unreleased): the top bar shows two labeled controls,
+  the node picker (transport, never relabeled) and "working on"
+  (node vs cluster), the single scope every read view fans out to
+  and every mutation targets; per-view scope dropdowns removed
 - the grid's text-field column filter treats whatever is typed as a
   literal value and wraps it in `col LIKE '...'`, so typing an
   expression (`not like 'SELECT%'`) becomes a nonsense quoted literal

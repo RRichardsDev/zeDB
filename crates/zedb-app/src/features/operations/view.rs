@@ -20,42 +20,20 @@ impl Workspace {
             .as_of
             .map(|stamp| format!("as of {}", stamp.format("%H:%M:%S")))
             .unwrap_or_else(|| "loading...".into());
-        let cluster_scope = self.ops.scope.cluster().is_some();
-        let scope_options = self.ops_cluster_options();
+        let scope = self.view_scope_cluster();
+        let cluster_scope = scope.is_some();
+        let scope_caption = match &scope {
+            Some(name) => format!("cluster {name}"),
+            None => "this node".to_string(),
+        };
 
         let header_row = div()
             .flex()
             .items_center()
             .gap_3()
             .child(div().text_lg().text_color(theme::text()).child("Ops"))
-            .when(!scope_options.is_empty(), |header| {
-                let label = match self.ops.scope.cluster() {
-                    Some(name) => format!("Cluster: {name}"),
-                    None => "This node".to_string(),
-                };
-                header.child(
-                    Button::new("ops-scope")
-                        .label(label)
-                        .dropdown_caret(true)
-                        .compact()
-                        .outline()
-                        .dropdown_menu(move |menu: PopupMenu, _, _| {
-                            let menu = menu
-                                .min_w(px(160.))
-                                .menu("This node", Box::new(SetOpsScope { cluster: None }));
-                            scope_options.iter().fold(menu, |menu, name| {
-                                menu.menu(
-                                    format!("Cluster: {name}"),
-                                    Box::new(SetOpsScope {
-                                        cluster: Some(name.clone()),
-                                    }),
-                                )
-                            })
-                        }),
-                )
-            })
             .child(div().text_sm().text_color(theme::text_dim()).child(format!(
-                "queries now \u{b7} {as_of} \u{b7} refreshes every {}s",
+                "{scope_caption} \u{b7} queries now \u{b7} {as_of} \u{b7} refreshes every {}s",
                 self.ops_poll_secs()
             )))
             .when(!self.ops.connections.is_empty(), |header| {

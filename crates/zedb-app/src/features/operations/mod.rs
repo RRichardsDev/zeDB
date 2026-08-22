@@ -4,4 +4,4 @@ mod gpui_tests;
 mod model;
 mod view;
 
-pub(crate) use model::{OpsScope, OpsState, SetOpsScope, SetOpsTopLimit};
+pub(crate) use model::{OpsState, SetOpsTopLimit};
