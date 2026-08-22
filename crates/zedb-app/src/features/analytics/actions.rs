@@ -128,6 +128,89 @@ impl Workspace {
         .detach();
     }
 
+    /// A header asked to filter a fingerprint column: open the grid's
+    /// panel, then probe distinct values within the aggregation and
+    /// the other columns' filters, exactly like a query tab does.
+    pub(crate) fn analytics_open_column_filter(
+        &mut self,
+        column: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prefill = self
+            .analytics
+            .filters
+            .iter()
+            .find(|(name, _)| *name == column)
+            .map(|(_, predicate)| predicate.clone());
+        let grid = self.analytics.grid.clone();
+        let needs_probe = grid.update(cx, |grid, cx| {
+            grid.begin_filter_panel(column.clone(), prefill, cx)
+        });
+        if !needs_probe {
+            return;
+        }
+        let Some(connected) = self.connection.connected.as_ref() else {
+            grid.update(cx, |grid, cx| {
+                grid.finish_filter_panel(&column, None, window, cx)
+            });
+            return;
+        };
+        let config = Self::ops_poll_config(&connected.client_config);
+        let base = zedb_ch::analytics::fingerprint_grid_sql(
+            self.analytics.window,
+            self.analytics.scope.cluster(),
+            &[],
+            &self
+                .analytics
+                .filters
+                .iter()
+                .filter(|(name, _)| *name != column)
+                .map(|(_, predicate)| predicate.clone())
+                .collect::<Vec<_>>(),
+        );
+        let probe = format!(
+            "SELECT DISTINCT `{}` AS value FROM (\n{base}\n) LIMIT 11",
+            column.replace('`', "")
+        );
+        let task = rt::tokio().spawn(async move {
+            zedb_ch::ChClient::new(config)
+                .query_guarded(&probe, 5, 32, 10 * 1024 * 1024 * 1024, 4 * 1024 * 1024)
+                .await
+        });
+        cx.spawn_in(window, async move |_, cx| {
+            let values = match task.await {
+                Ok(Ok(result)) => {
+                    let has_null = result
+                        .rows
+                        .iter()
+                        .any(|row| matches!(row.first(), Some(zedb_core::Value::Null)));
+                    Some((
+                        result
+                            .rows
+                            .into_iter()
+                            .filter_map(|row| {
+                                row.first().and_then(|value| match value {
+                                    zedb_core::Value::Null => None,
+                                    other => Some(other.to_string()),
+                                })
+                            })
+                            .collect::<Vec<_>>(),
+                        has_null,
+                    ))
+                }
+                _ => None,
+            };
+            cx.update(|window, cx| {
+                grid.update(cx, |grid, cx| {
+                    grid.finish_filter_panel(&column, values, window, cx)
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Grid events from the fingerprint grid: sort and filter re-run
     /// the aggregation; a double-clicked row drills in.
     pub(crate) fn analytics_grid_event(

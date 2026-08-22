@@ -125,6 +125,19 @@ impl Workspace {
     /// Open the filter popover for a column, probing the server for its
     /// distinct values (capped, short-circuiting past ten) so even
     /// non-dictionary columns get checkboxes when they are small.
+    /// The grid the user is looking at: header actions dispatch to the
+    /// window root, so the router must know which surface owns the
+    /// visible grid.
+    pub(crate) fn visible_grid(&self) -> Option<gpui::Entity<crate::grid_spike::GridSpike>> {
+        if self.show_analytics {
+            return Some(self.analytics.grid.clone());
+        }
+        self.query
+            .tabs
+            .get(self.query.active_tab)
+            .map(|tab| tab.result_grid.clone())
+    }
+
     pub(crate) fn open_column_filter(
         &mut self,
         column: String,

@@ -122,6 +122,47 @@ fn grid_events_drive_sort_filter_and_drill_in(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn header_actions_route_to_the_visible_grid(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
+
+        // The router follows what is on screen.
+        workspace.show_analytics = true;
+        assert_eq!(
+            workspace.visible_grid(),
+            Some(workspace.analytics.grid.clone())
+        );
+        workspace.show_analytics = false;
+        assert_eq!(
+            workspace.visible_grid(),
+            Some(workspace.query.tabs[0].result_grid.clone())
+        );
+
+        // The filter panel opens on the analytics grid, not a hidden
+        // query tab (the "filter does nothing" regression).
+        workspace.show_analytics = true;
+        workspace.analytics.grid.update(cx, |grid, cx| {
+            grid.begin_result(
+                vec![zedb_core::ColumnMeta {
+                    name: "shape".into(),
+                    type_name: "String".into(),
+                }],
+                None,
+                cx,
+            );
+            grid.finish_result(false, cx);
+        });
+        workspace.analytics_open_column_filter("shape".into(), window, cx);
+        let opened = workspace
+            .analytics
+            .grid
+            .update(cx, |grid, cx| grid.close_filter_panel(cx));
+        assert!(opened, "the panel opened on the analytics grid");
+    });
+}
+
+#[gpui::test]
 fn window_change_clears_the_drill_in(cx: &mut TestAppContext) {
     let (workspace, cx) = test_harness::workspace(cx);
     workspace.update(cx, |workspace, cx| {

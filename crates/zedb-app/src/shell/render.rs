@@ -80,8 +80,7 @@ impl Render for Workspace {
                 this.request_delete(cx)
             }))
             .on_action(cx.listener(|this, action: &grid_spike::HeaderSort, _, cx| {
-                if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
-                    let grid = tab.result_grid.clone();
+                if let Some(grid) = this.visible_grid() {
                     grid.update(cx, |grid, cx| grid.header_sort_action(action, cx));
                 }
             }))
@@ -89,20 +88,22 @@ impl Render for Workspace {
             // to the window root, so handle it here and delegate to the
             // active tab's grid (cmd-C is handled on the grid itself).
             .on_action(cx.listener(|this, _: &grid_spike::Copy, _, cx| {
-                if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
-                    let grid = tab.result_grid.clone();
+                if let Some(grid) = this.visible_grid() {
                     grid.update(cx, |grid, cx| grid.copy_selected(cx));
                 }
             }))
             .on_action(cx.listener(|this, _: &grid_spike::CopyAsCsv, _, cx| {
-                if let Some(tab) = this.query.tabs.get(this.query.active_tab) {
-                    let grid = tab.result_grid.clone();
+                if let Some(grid) = this.visible_grid() {
                     grid.update(cx, |grid, cx| grid.copy_selected_csv(cx));
                 }
             }))
             .on_action(
                 cx.listener(|this, action: &grid_spike::HeaderFilter, window, cx| {
-                    this.open_column_filter(action.column.clone(), window, cx)
+                    if this.show_analytics {
+                        this.analytics_open_column_filter(action.column.clone(), window, cx);
+                    } else {
+                        this.open_column_filter(action.column.clone(), window, cx);
+                    }
                 }),
             )
             .on_action(cx.listener(|this, action: &ops::SetOpsTopLimit, _, cx| {
