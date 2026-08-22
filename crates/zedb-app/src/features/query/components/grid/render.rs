@@ -486,6 +486,14 @@ impl Render for GridSpike {
                                                         Some(Selection::cell((row, col)));
                                                 }
                                                 if event.click_count == 2 {
+                                                    // Activation, not inspection:
+                                                    // close what the first click
+                                                    // of the pair opened. Done on
+                                                    // the down event because the
+                                                    // paired up-click can be lost
+                                                    // to the relayout activation
+                                                    // causes.
+                                                    this.inspected = None;
                                                     cx.emit(GridEvent::RowActivated { row });
                                                 }
                                                 this.selecting = true;
