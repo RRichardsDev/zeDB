@@ -94,8 +94,8 @@ impl Workspace {
             return None;
         }
         let scope_label = match &connected.apply_cluster {
-            Some(name) => format!("working on: cluster {name}"),
-            None => "working on: this node".to_string(),
+            Some(name) => format!("cluster {name}"),
+            None => "this node".to_string(),
         };
         Some(
             Button::new("working-scope-selector")
