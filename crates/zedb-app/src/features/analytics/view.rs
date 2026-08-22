@@ -9,10 +9,15 @@ use super::model::*;
 use crate::{theme, Workspace};
 
 fn fmt_ms(ms: f64) -> String {
-    if ms >= 10_000.0 {
+    if ms.is_nan() {
+        // No finished runs: there is no percentile to report.
+        "\u{2013}".into()
+    } else if ms >= 10_000.0 {
         format!("{:.1} s", ms / 1000.0)
     } else if ms >= 1_000.0 {
         format!("{:.2} s", ms / 1000.0)
+    } else if ms > 0.0 && ms < 1.0 {
+        "<1 ms".into()
     } else {
         format!("{ms:.0} ms")
     }
@@ -506,5 +511,20 @@ impl Workspace {
                     .child("testimony"),
             )
             .child(testimony_block)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn milliseconds_render_honestly() {
+        assert_eq!(fmt_ms(f64::NAN), "\u{2013}", "no runs, no percentile");
+        assert_eq!(fmt_ms(0.0), "0 ms");
+        assert_eq!(fmt_ms(0.4), "<1 ms");
+        assert_eq!(fmt_ms(42.0), "42 ms");
+        assert_eq!(fmt_ms(1_500.0), "1.50 s");
+        assert_eq!(fmt_ms(12_500.0), "12.5 s");
     }
 }

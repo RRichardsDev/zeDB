@@ -30,6 +30,11 @@ was it slow?"
   so query_log is not polluted by the watcher.
 - Honest ceiling: query_log is per-node; cluster scope needs
   clusterAllReplicas like the ops view already does.
+- Shipped v1 feedback (2026-08-22, first real-data session): add a
+  "hide zeDB's own traffic" toggle; the app's health probes fingerprint
+  as `SELECT ?` and dominate run counts. The app's queries are
+  identifiable by client identity, so this is a WHERE clause and a
+  toggle, defaulting to hidden with the count still stated.
 
 ## Track B: the data wrangler (clickhouse-local on files)
 
