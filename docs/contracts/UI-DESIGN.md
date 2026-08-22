@@ -28,6 +28,21 @@ closer to Zed than to a web dashboard or mobile application.
 - Primary workflow actions may use filled buttons. Secondary actions use quiet
   or outlined styling.
 
+### Icons versus text labels
+
+- A familiar utility action with an established icon uses that icon, not a
+  word. If `assets/icons` already has the glyph (refresh, close, copy), a
+  labeled button for the same action is a defect: it reads as a different,
+  heavier control and breaks cross-surface consistency.
+- An icon-only control always carries a tooltip with the word, so the icon
+  never has to be guessed.
+- Use text where the action is not self-evident from a glyph: uncommon
+  operations, consequential or destructive verbs ("Apply to cluster",
+  "Drop table"), and choices between named alternatives. A wrong guess at an
+  icon's meaning costs more than the space a word takes.
+- Do not invent a new glyph for a one-off action. If no existing icon fits
+  naturally, that is the signal to use text.
+
 ## Forms
 
 - Labels are compact and secondary to their values.
