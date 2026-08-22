@@ -36,7 +36,12 @@ they leave the list when shipped.
     stripped. A preview line shows the parsed interpretation
     (`-> shape NOT LIKE 'SELECT%'`) before Apply, so the panel never
     silently guesses; quoting forces literal-substring mode for
-    values that collide with operator words
+    values that collide with operator words. A leading identifier
+    that is a DIFFERENT known column (`runs like 'x%'` typed in the
+    shape panel) turns the preview into a warning pointing at that
+    column's own header rather than silently substring-matching or
+    auto-routing; unknown identifiers stay substring mode with the
+    preview showing it
   - multi-stage: a + adds another operator+value row for the same
     column, rows joined with AND into the one managed conjunct
   All of it is panel-local UI: the grid already hands its owner a
