@@ -29,9 +29,14 @@ they leave the list when shipped.
   - an operator dropdown (like, not like, =, !=, >, <, >=, <=, in,
     not in) beside the value field; plain text stays the substring
     convenience via like
-  - smart input: typing or pasting a full predicate (`shape not like
-    'SELECT%'`) is recognized, the operator auto-selects, and the
-    value lands in the field
+  - smart input: typing or pasting a predicate is recognized, the
+    operator auto-selects, and the value lands in the field. The
+    column name is optional (the panel already knows its column):
+    `not like 'SELECT%'` works bare, and a leading `shape` is
+    stripped. A preview line shows the parsed interpretation
+    (`-> shape NOT LIKE 'SELECT%'`) before Apply, so the panel never
+    silently guesses; quoting forces literal-substring mode for
+    values that collide with operator words
   - multi-stage: a + adds another operator+value row for the same
     column, rows joined with AND into the one managed conjunct
   All of it is panel-local UI: the grid already hands its owner a
