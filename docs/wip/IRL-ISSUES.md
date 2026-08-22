@@ -20,6 +20,14 @@ they leave the list when shipped.
   -> fixed (unreleased): toolbar controls bring the fleet view with
   them (narrated); detail-panel controls refuse honestly with the
   navigation hint when no database is selected
+- the grid's text-field column filter treats whatever is typed as a
+  literal value and wraps it in `col LIKE '...'`, so typing an
+  expression (`not like 'SELECT%'`) becomes a nonsense quoted literal
+  (`` `shape` LIKE 'shape not like \'SELECT%\'' ``). Either detect
+  operator-shaped input and pass it through as the predicate, or make
+  the value-vs-expression contract visible in the panel (seen
+  2026-08-22 filtering the analytics shape column; pre-existing grid
+  behavior, not specific to analytics)
 - external table engines (PostgreSQL, MySQL, ...) render with blank
   sizes and unguarded probes: NULL total_bytes should read as
   "external" in the inspector, and the sampling probes (cardinality,
