@@ -269,6 +269,27 @@ fn window_change_clears_the_drill_in(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn open_in_editor_lands_in_a_visible_query_tab(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
+        workspace.show_analytics = true;
+        let tabs_before = workspace.query.tabs.len();
+
+        workspace.analytics_open_sample("SELECT count() FROM events".into(), window, cx);
+
+        assert!(
+            !workspace.show_analytics,
+            "the editor must actually be shown, not open behind analytics"
+        );
+        assert!(workspace.show_query_editor && !workspace.show_ops);
+        assert_eq!(workspace.query.tabs.len(), tabs_before + 1);
+        let tab = &workspace.query.tabs[workspace.query.active_tab];
+        assert_eq!(tab.editor.read(cx).value(), "SELECT count() FROM events");
+    });
+}
+
+#[gpui::test]
 fn panel_renders_with_grid_data_and_open_detail(cx: &mut TestAppContext) {
     let (workspace, cx) = test_harness::workspace(cx);
     workspace.update(cx, |workspace, cx| {

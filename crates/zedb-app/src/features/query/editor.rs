@@ -168,8 +168,12 @@ impl Workspace {
         tab.connection = self.active_connection_name();
         self.query.tabs.push(tab);
         self.query.active_tab = self.query.tabs.len() - 1;
+        // Opening a tab means showing it: clear every view that
+        // outranks the editor in the shell's precedence.
         self.show_query_editor = true;
         self.show_fleet = false;
+        self.show_ops = false;
+        self.show_analytics = false;
         cx.notify();
     }
 
