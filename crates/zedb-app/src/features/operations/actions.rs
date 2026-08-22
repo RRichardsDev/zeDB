@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gpui::{Context, Timer};
+use gpui::Context;
 
 use super::model::*;
 use crate::{rt, Workspace};
@@ -93,9 +93,32 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Fetch immediately, then every POLL_SECS while the view stays
-    /// visible. Generation-guarded like the health poll; hiding the
-    /// view or reconnecting ends the loop.
+    /// The current fast-lane cadence: watching eyes get fresh data,
+    /// a backgrounded window does not burn queries nobody sees.
+    pub(crate) fn ops_poll_secs(&self) -> u64 {
+        if self.window_active {
+            POLL_ACTIVE_SECS
+        } else {
+            POLL_INACTIVE_SECS
+        }
+    }
+
+    /// The connection config for poll queries only: identical, plus
+    /// log_queries=0 so a fast cadence does not flood query_log (and
+    /// the ops view does not mostly show itself). Kills and every
+    /// user-initiated query still log normally.
+    fn ops_poll_config(config: &zedb_ch::ChConfig) -> zedb_ch::ChConfig {
+        let mut config = config.clone();
+        config.driver.settings.push(zedb_core::DriverSetting {
+            name: "log_queries".into(),
+            value: "0".into(),
+        });
+        config
+    }
+
+    /// Fetch immediately, then on the adaptive cadence while the view
+    /// stays visible. Generation-guarded like the health poll; hiding
+    /// the view or reconnecting ends the loop.
     pub(crate) fn ops_start_poll(&mut self, cx: &mut Context<Self>) {
         self.ops.poll_generation += 1;
         let generation = self.ops.poll_generation;
@@ -103,16 +126,24 @@ impl Workspace {
         self.ops_fetch(cx);
         self.ops_fetch_slow(cx);
         cx.spawn(async move |this, cx| loop {
-            Timer::after(Duration::from_secs(POLL_SECS)).await;
+            let Ok(delay) = this.update(cx, |this, _| this.ops_poll_secs()) else {
+                break;
+            };
+            // The executor's timer, so window tests drive the cadence
+            // with the simulated clock.
+            cx.background_executor()
+                .timer(Duration::from_secs(delay))
+                .await;
             let live = this
                 .update(cx, |this, cx| {
                     let live = this.ops.poll_generation == generation
                         && this.show_ops
                         && this.connection.connected.is_some();
                     if live {
-                        this.ops.tick += 1;
+                        this.ops.tick += delay;
                         this.ops_fetch(cx);
-                        if this.ops.tick % 5 == 0 {
+                        if this.ops.tick >= SLOW_POLL_SECS {
+                            this.ops.tick = 0;
                             this.ops_fetch_slow(cx);
                         }
                     }
@@ -134,7 +165,7 @@ impl Workspace {
             return;
         };
         self.ops.fetch_in_flight = true;
-        let config = connected.client_config.clone();
+        let config = Self::ops_poll_config(&connected.client_config);
         // Cluster scope fans out to every replica; hostName() names
         // the node each row came from.
         let cluster = self.ops.scope.cluster().map(quoted);
@@ -299,7 +330,7 @@ impl Workspace {
             return;
         };
         self.ops.slow_fetch_in_flight = true;
-        let config = connected.client_config.clone();
+        let config = Self::ops_poll_config(&connected.client_config);
         let top_clause = self.ops.top_limit.clause();
         let cluster = self.ops.scope.cluster().map(quoted);
         let from = |table: &str| match &cluster {

@@ -6,7 +6,12 @@
 use gpui::Action;
 use zedb_core::Value;
 
-pub(crate) const POLL_SECS: u64 = 2;
+/// Poll cadence: fast while zeDB is frontmost (the user is watching),
+/// gentle while it is in the background (nobody is). The slow lane
+/// keeps its own wall-clock period either way.
+pub(crate) const POLL_ACTIVE_SECS: u64 = 1;
+pub(crate) const POLL_INACTIVE_SECS: u64 = 5;
+pub(crate) const SLOW_POLL_SECS: u64 = 10;
 
 /// Which node(s) the panels ask about. Cluster scope fans every
 /// query out via clusterAllReplicas()/cluster() and exists only for
@@ -256,7 +261,8 @@ pub struct OpsState {
     pub connections: Vec<(String, u64)>,
     pub merges: Vec<OpsMerge>,
     pub mutations: Vec<OpsMutation>,
-    /// Ticks since the view opened; the slow queries run every fifth.
+    /// Polled seconds accumulated since the last slow fetch; the slow
+    /// queries run each time it crosses SLOW_POLL_SECS.
     pub tick: u64,
     pub replica_total: u64,
     pub replica_problems: Vec<OpsReplicaProblem>,

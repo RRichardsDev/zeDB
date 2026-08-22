@@ -55,7 +55,8 @@ impl Workspace {
                 )
             })
             .child(div().text_sm().text_color(theme::text_dim()).child(format!(
-                "queries now \u{b7} {as_of} \u{b7} refreshes every {POLL_SECS}s"
+                "queries now \u{b7} {as_of} \u{b7} refreshes every {}s",
+                self.ops_poll_secs()
             )))
             .when(!self.ops.connections.is_empty(), |header| {
                 let summary = self

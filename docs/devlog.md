@@ -1,3 +1,19 @@
+## 2026-08-22: Phase 14 retired into a cadence tune
+
+- Phase 14 (ops on native TCP) is retired without the transport work.
+  Its own doc established that push is impossible for the ops tables
+  (transient snapshots, no cursor), which left the phase's value at
+  "poll faster"; and transport does not decide poll cost, cadence
+  does. The tune delivers the perceivable part: adaptive cadence
+  (1 s frontmost via a new Workspace.window_active flag, 5 s
+  backgrounded, header shows the live number) and log_queries=0 on
+  poll queries only, so the fast lane does not flood query_log or
+  show up as most of system.query_log itself. Window-tested on the
+  simulated clock, including the armed-timer semantics (a cadence
+  change takes effect after the already-armed tick) and loop
+  shutdown when the view hides. Native ops stays unbuilt until a
+  real irritation asks for it; the pool and discovery remain.
+
 ## 2026-08-21: pin-cache continuity digest
 
 - The Aug 20 hardening made `cached_binary` recompute the at-rest file

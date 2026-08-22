@@ -7,6 +7,14 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- The ops view refreshes every second while zeDB is frontmost and eases
+  to every five seconds while it is in the background; the header
+  states the live cadence. Poll queries no longer land in query_log
+  (kills and your own queries still do), so watching the ops view does
+  not fill it with the watching.
+
 ## v0.1.34 - 2026-08-21
 
 The security release: a boundary-by-boundary hardening review of every

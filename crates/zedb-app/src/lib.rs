@@ -396,6 +396,9 @@ struct Workspace {
     show_query_editor: bool,
     /// Last window-refocus health/update check, for debounce.
     last_focus_check: Option<Instant>,
+    /// The window is frontmost; polls that exist for watching eyes
+    /// (the ops view) slow down while it is not.
+    window_active: bool,
     github: GithubAuth,
     github_generation: u64,
     preferences: Preferences,
@@ -521,7 +524,8 @@ impl Workspace {
         // Coming back to the window re-checks cluster health and
         // updates, debounced so focus flapping stays quiet.
         cx.observe_window_activation(window, |this, window, cx| {
-            if !window.is_window_active() {
+            this.window_active = window.is_window_active();
+            if !this.window_active {
                 return;
             }
             let now = Instant::now();
@@ -700,6 +704,7 @@ impl Workspace {
             health_poll_generation: 0,
             merges_poll_generation: 0,
             last_focus_check: None,
+            window_active: true,
             github: GithubAuth::SignedOut,
             github_generation: 0,
             preferences,
