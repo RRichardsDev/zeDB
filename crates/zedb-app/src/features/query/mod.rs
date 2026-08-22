@@ -1,5 +1,7 @@
 mod buffer;
 mod editor;
+#[path = "editor/cluster_scope.rs"]
+mod editor_cluster_scope;
 #[path = "editor/diagnostics.rs"]
 mod editor_diagnostics;
 mod execution;

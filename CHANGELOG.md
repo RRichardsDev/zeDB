@@ -9,6 +9,13 @@ GitHub release notes.
 
 ## Unreleased
 
+- Hand-written DDL is honest about the executing scope: with a cluster
+  selected, a DDL statement without ON CLUSTER gets a hint in the
+  editor (it will run on the connected node only), and the right-click
+  menu offers "Add ON CLUSTER", which puts the clause visibly into
+  your SQL at the right spot; zeDB never rewrites what you typed
+  behind your back. Statements whose shape has no unambiguous spot get
+  the hint without the shortcut.
 - One working scope instead of three cluster pickers: the top bar now
   shows "connected to" (the node picker, which no longer hides behind
   a cluster label) and "working on" (this node or a cluster). That

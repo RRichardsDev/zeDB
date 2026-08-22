@@ -117,3 +117,47 @@ fn export_opens_with_a_csv_default_and_cancels_clean(cx: &mut TestAppContext) {
         assert!(workspace.export.is_none());
     });
 }
+
+/// The executing-scope honesty loop: with a cluster selected, the
+/// context-menu fix inserts ON CLUSTER into the buffer at the right
+/// spot, visibly, and warns instead of guessing when no cluster is
+/// picked.
+#[gpui::test]
+fn add_on_cluster_edits_the_buffer_explicitly(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
+        let editor = workspace.query.tabs[0].editor.clone();
+        editor.update(cx, |editor, cx| {
+            editor.set_value(
+                "SELECT 1;\nCREATE TABLE t (x UInt64) ENGINE = MergeTree ORDER BY x;",
+                window,
+                cx,
+            );
+        });
+
+        // No cluster picked: the handler says so and touches nothing.
+        workspace.add_on_cluster_at(15, window, cx);
+        assert!(
+            workspace
+                .notice
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Executing on"),
+            "notice: {:?}",
+            workspace.notice
+        );
+        assert!(!editor.read(cx).value().contains("ON CLUSTER"));
+
+        // Cluster picked: the clause lands after the table name.
+        workspace.set_apply_cluster(Some("zedb_cluster".into()), cx);
+        workspace.add_on_cluster_at(15, window, cx);
+        let sql = editor.read(cx).value().to_string();
+        assert!(
+            sql.contains("CREATE TABLE t ON CLUSTER `zedb_cluster` (x UInt64)"),
+            "sql: {sql}"
+        );
+        // The untouched statement stays untouched.
+        assert!(sql.starts_with("SELECT 1;"));
+    });
+}

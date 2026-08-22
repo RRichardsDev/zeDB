@@ -118,6 +118,8 @@ impl Workspace {
                 self.analytics_clear_drill_in();
                 self.analytics_fetch(cx);
             }
+            // Hand-written DDL hints follow the scope.
+            self.refresh_schema_diagnostics(cx);
             cx.notify();
         }
     }

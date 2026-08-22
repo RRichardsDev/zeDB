@@ -236,6 +236,14 @@ impl AssetSource for Assets {
 
 #[derive(Clone, PartialEq, Action)]
 #[action(no_json, no_register)]
+/// Insert ON CLUSTER (of the executing scope) into the statement at
+/// this byte offset of the active editor.
+struct AddOnCluster {
+    offset: usize,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(no_json, no_register)]
 struct SelectNode {
     index: usize,
 }

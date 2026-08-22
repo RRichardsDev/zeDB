@@ -120,9 +120,11 @@ impl Workspace {
         let generation = tab.schema_analysis_generation;
         let sql = editor.read(cx).value().to_string();
         let Some((snapshot, default_database)) = self.schema.provider.snapshot() else {
+            let scope_hints = self.cluster_hint_diagnostics(&sql);
             editor.update(cx, |editor, cx| {
                 if let Some(diagnostics) = editor.diagnostics_mut() {
                     diagnostics.clear();
+                    diagnostics.extend(scope_hints);
                 }
                 cx.notify();
             });
@@ -156,6 +158,7 @@ impl Workspace {
                 if tab.schema_analysis_generation != generation {
                     return;
                 }
+                let scope_hints = this.cluster_hint_diagnostics(&sql);
                 editor.update(cx, |editor, cx| {
                     let Some(diagnostics) = editor.diagnostics_mut() else {
                         return;
@@ -171,6 +174,7 @@ impl Workspace {
                             ..Default::default()
                         }
                     }));
+                    diagnostics.extend(scope_hints);
                     cx.notify();
                 });
             })
@@ -199,10 +203,13 @@ impl Workspace {
         let snapshot = self.schema.provider.snapshot();
         for (tab_id, generation, editor) in jobs {
             let Some((snapshot, default_database)) = snapshot.clone() else {
-                // No schema context: clear any stale diagnostics outright.
+                // No schema context: only the scope hints remain.
+                let sql = editor.read(cx).value().to_string();
+                let scope_hints = self.cluster_hint_diagnostics(&sql);
                 editor.update(cx, |editor, cx| {
                     if let Some(diagnostics) = editor.diagnostics_mut() {
                         diagnostics.clear();
+                        diagnostics.extend(scope_hints);
                     }
                     cx.notify();
                 });
@@ -228,6 +235,7 @@ impl Workspace {
                     if tab.schema_analysis_generation != generation {
                         return;
                     }
+                    let scope_hints = this.cluster_hint_diagnostics(&sql);
                     editor.update(cx, |editor, cx| {
                         let Some(diagnostics) = editor.diagnostics_mut() else {
                             return;
@@ -243,6 +251,7 @@ impl Workspace {
                                 ..Default::default()
                             }
                         }));
+                        diagnostics.extend(scope_hints);
                         cx.notify();
                     });
                 })

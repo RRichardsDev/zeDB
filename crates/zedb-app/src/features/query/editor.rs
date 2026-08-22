@@ -27,10 +27,20 @@ impl Workspace {
             // Right-clicking a recognized table adds "View DDL" to the
             // editor's context menu.
             editor.context_menu_extension = Some(Rc::new(move |text, offset, menu| {
+                let sql = text.to_string();
+                // A DDL statement without ON CLUSTER offers the explicit
+                // fix; whether a cluster is even selected is the
+                // handler's business (it says so if not).
+                let menu =
+                    match super::editor_cluster_scope::statement_wants_on_cluster(&sql, offset) {
+                        true => menu
+                            .separator()
+                            .menu("Add ON CLUSTER", Box::new(AddOnCluster { offset })),
+                        false => menu,
+                    };
                 let Some((snapshot, default_database)) = schema_provider.snapshot() else {
                     return menu;
                 };
-                let sql = text.to_string();
                 match zedb_ch::schema_intelligence::object_at(
                     &snapshot,
                     default_database.as_deref(),

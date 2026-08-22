@@ -1,3 +1,16 @@
+## 2026-08-23: the scope honesty hint
+
+- The user asked the right question: with "Executing on: cluster"
+  selected, what does raw editor DDL do? Answer: it ran node-only and
+  the label lied. The fix is advisory, never a rewrite: a hint
+  diagnostic on clusterable DDL lacking ON CLUSTER (comment- and
+  string-aware tokenizing; a quoted 'ON CLUSTER' neither hides nor
+  fakes the clause), plus a context-menu "Add ON CLUSTER" that edits
+  the buffer visibly at a grammar-confident spot (CREATE/ALTER/DROP/
+  TRUNCATE/OPTIMIZE/ATTACH/DETACH families; RENAME/EXCHANGE get the
+  hint only). Hints follow scope changes via the existing diagnostics
+  refresh, and appear even without a schema snapshot.
+
 ## 2026-08-22: one working scope
 
 - The survey for "why two pickers" found three: the top selector was

@@ -63,6 +63,9 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, action: &SelectNode, _, cx| this.select_node(action.index, cx)),
             )
+            .on_action(cx.listener(|this, action: &AddOnCluster, window, cx| {
+                this.add_on_cluster_at(action.offset, window, cx)
+            }))
             .on_action(cx.listener(|this, action: &SetApplyCluster, _, cx| {
                 this.set_apply_cluster(action.cluster.clone(), cx)
             }))
