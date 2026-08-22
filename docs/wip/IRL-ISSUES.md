@@ -23,11 +23,20 @@ they leave the list when shipped.
 - the grid's text-field column filter treats whatever is typed as a
   literal value and wraps it in `col LIKE '...'`, so typing an
   expression (`not like 'SELECT%'`) becomes a nonsense quoted literal
-  (`` `shape` LIKE 'shape not like \'SELECT%\'' ``). Either detect
-  operator-shaped input and pass it through as the predicate, or make
-  the value-vs-expression contract visible in the panel (seen
-  2026-08-22 filtering the analytics shape column; pre-existing grid
-  behavior, not specific to analytics)
+  (`` `shape` LIKE 'shape not like \'SELECT%\'' ``) (seen 2026-08-22
+  filtering the analytics shape column; pre-existing grid behavior,
+  not specific to analytics). Desired shape of the fix (2026-08-22):
+  - an operator dropdown (like, not like, =, !=, >, <, >=, <=, in,
+    not in) beside the value field; plain text stays the substring
+    convenience via like
+  - smart input: typing or pasting a full predicate (`shape not like
+    'SELECT%'`) is recognized, the operator auto-selects, and the
+    value lands in the field
+  - multi-stage: a + adds another operator+value row for the same
+    column, rows joined with AND into the one managed conjunct
+  All of it is panel-local UI: the grid already hands its owner a
+  single opaque conjunct per column, so composing rows into
+  `(a) AND (b)` needs no SQL or owner changes
 - external table engines (PostgreSQL, MySQL, ...) render with blank
   sizes and unguarded probes: NULL total_bytes should read as
   "external" in the inspector, and the sampling probes (cardinality,
