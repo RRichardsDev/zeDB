@@ -98,24 +98,36 @@ impl Workspace {
             None => "this node".to_string(),
         };
         Some(
-            Button::new("working-scope-selector")
-                .label(scope_label)
-                .dropdown_caret(true)
-                .compact()
-                .outline()
-                .dropdown_menu(move |menu: PopupMenu, _, _| {
-                    let menu = menu
-                        .min_w(px(200.))
-                        .menu("This node", Box::new(SetApplyCluster { cluster: None }));
-                    clusters.iter().fold(menu, |menu, cluster| {
-                        menu.menu(
-                            format!("Cluster: {cluster}"),
-                            Box::new(SetApplyCluster {
-                                cluster: Some(cluster.clone()),
-                            }),
-                        )
-                    })
-                }),
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::text_dim())
+                        .child("Executing on:"),
+                )
+                .child(
+                    Button::new("working-scope-selector")
+                        .label(scope_label)
+                        .dropdown_caret(true)
+                        .compact()
+                        .outline()
+                        .dropdown_menu(move |menu: PopupMenu, _, _| {
+                            let menu = menu
+                                .min_w(px(200.))
+                                .menu("This node", Box::new(SetApplyCluster { cluster: None }));
+                            clusters.iter().fold(menu, |menu, cluster| {
+                                menu.menu(
+                                    format!("Cluster: {cluster}"),
+                                    Box::new(SetApplyCluster {
+                                        cluster: Some(cluster.clone()),
+                                    }),
+                                )
+                            })
+                        }),
+                ),
         )
     }
 }
