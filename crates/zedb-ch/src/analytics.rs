@@ -131,9 +131,9 @@ fn fingerprints_sql(window: AnalyticsWindow, cluster: Option<&str>) -> String {
 /// Display columns of the grid-shaped fingerprint query, in order,
 /// with the ORDER BY expression each maps to. The alias is what the
 /// grid shows and what filter conjuncts reference (they run in
-/// HAVING, where aliases of aggregates are legal); the expression is
-/// what sorting really uses, so formatted columns still sort by their
-/// raw number.
+/// HAVING, where aliases of aggregates are legal). Every column comes
+/// back raw (numbers, DateTime); display formatting is the grid's
+/// job, so sorting and filtering always see the real values.
 const GRID_COLUMNS: [(&str, &str); 11] = [
     ("shape", "shape"),
     ("runs", "runs"),
@@ -142,8 +142,8 @@ const GRID_COLUMNS: [(&str, &str); 11] = [
     ("p95_ms", "p95_ms"),
     ("p99_ms", "p99_ms"),
     ("total_ms", "total_ms"),
-    ("peak_mem", "max(memory_usage)"),
-    ("read", "sum(read_bytes)"),
+    ("peak_mem", "peak_mem"),
+    ("read", "read"),
     ("users", "users"),
     ("last_seen", "last_seen"),
 ];
@@ -181,14 +181,17 @@ pub fn fingerprint_grid_sql(
         "SELECT any(normalizeQuery(query)) AS shape, \
             toUInt64(countIf(type = 'QueryFinish')) AS runs, \
             toUInt64(countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing'))) AS err, \
-            toFloat64(round(quantileIf(0.5)(query_duration_ms, type = 'QueryFinish'), 1)) AS p50_ms, \
-            toFloat64(round(quantileIf(0.95)(query_duration_ms, type = 'QueryFinish'), 1)) AS p95_ms, \
-            toFloat64(round(quantileIf(0.99)(query_duration_ms, type = 'QueryFinish'), 1)) AS p99_ms, \
+            if(countIf(type = 'QueryFinish') = 0, NULL, \
+               toFloat64(round(quantileIf(0.5)(query_duration_ms, type = 'QueryFinish'), 1))) AS p50_ms, \
+            if(countIf(type = 'QueryFinish') = 0, NULL, \
+               toFloat64(round(quantileIf(0.95)(query_duration_ms, type = 'QueryFinish'), 1))) AS p95_ms, \
+            if(countIf(type = 'QueryFinish') = 0, NULL, \
+               toFloat64(round(quantileIf(0.99)(query_duration_ms, type = 'QueryFinish'), 1))) AS p99_ms, \
             toUInt64(sum(query_duration_ms)) AS total_ms, \
-            formatReadableSize(max(memory_usage)) AS peak_mem, \
-            formatReadableSize(sum(read_bytes)) AS read, \
+            toUInt64(max(memory_usage)) AS peak_mem, \
+            toUInt64(sum(read_bytes)) AS read, \
             toUInt64(uniqExact(user)) AS users, \
-            toString(max(event_time)) AS last_seen, \
+            max(event_time) AS last_seen, \
             toString(normalized_query_hash) AS hash \
          FROM {} \
          WHERE event_time > now() - INTERVAL {} HOUR \
@@ -418,10 +421,14 @@ mod tests {
             &["shape ILIKE '%tenant%'".into(), "err > 0".into()],
         );
         assert!(
-            sql.contains("ORDER BY max(memory_usage) ASC, runs DESC"),
-            "formatted columns sort by their raw expression; unknown columns are dropped: {sql}"
+            sql.contains("ORDER BY peak_mem ASC, runs DESC"),
+            "unknown columns are dropped from the sort: {sql}"
         );
         assert!(sql.contains("HAVING (shape ILIKE '%tenant%') AND (err > 0)"));
+        assert!(
+            sql.contains("if(countIf(type = 'QueryFinish') = 0, NULL"),
+            "error-only shapes get NULL percentiles, not NaN: {sql}"
+        );
     }
 
     #[test]

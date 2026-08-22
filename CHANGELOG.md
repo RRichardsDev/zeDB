@@ -32,7 +32,11 @@ GitHub release notes.
   runs, then into a run for its ProfileEvents testimony: what was
   actually read, why, and where the time went, the measured
   counterpart to EXPLAIN. One click opens the shape in the editor.
-  Reading the log never writes the log.
+  Reading the log never writes the log. Durations and byte counts
+  render humanized (4.05 s, 765.80 MiB) while sorting, filtering, and
+  copy see the raw numbers; timestamps get the grid's usual date
+  tinting; shapes that never finished show blank percentiles instead
+  of NaN.
 - The ops view refreshes every second while zeDB is frontmost and eases
   to every five seconds while it is in the background; the header
   states the live cadence. Poll queries no longer land in query_log

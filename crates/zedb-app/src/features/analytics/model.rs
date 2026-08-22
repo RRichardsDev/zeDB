@@ -41,6 +41,19 @@ pub(crate) struct AnalyticsState {
 impl AnalyticsState {
     pub(crate) fn new(cx: &mut Context<Workspace>) -> Self {
         let grid = cx.new(GridSpike::new);
+        // The query returns raw numbers; the grid humanizes them so
+        // sort, filter, and copy keep seeing the real values.
+        grid.update(cx, |grid, _| {
+            use crate::grid_spike::ColumnDisplay::{Bytes, Millis};
+            grid.set_column_displays(&[
+                ("p50_ms", Millis),
+                ("p95_ms", Millis),
+                ("p99_ms", Millis),
+                ("total_ms", Millis),
+                ("peak_mem", Bytes),
+                ("read", Bytes),
+            ]);
+        });
         cx.subscribe(&grid, |this: &mut Workspace, _, event, cx| {
             this.analytics_grid_event(event, cx);
         })

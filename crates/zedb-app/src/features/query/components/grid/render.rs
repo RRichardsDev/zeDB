@@ -438,7 +438,9 @@ impl Render for GridSpike {
                                 let expandable = this.cell_expandable(row, col);
                                 let temporal = this.cell_temporal_parts(row, col);
                                 let face = if temporal.is_none() {
-                                    this.cell_composite_parts(row, col)
+                                    this.cell_display_parts(row, col)
+                                        .map(|(main, dim)| (main, dim, None))
+                                        .or_else(|| this.cell_composite_parts(row, col))
                                 } else {
                                     None
                                 };

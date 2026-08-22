@@ -196,66 +196,6 @@ pub(crate) fn on_cluster_insertion(statement: &str) -> Option<usize> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_clusterable_ddl_without_on_cluster_is_flagged() {
-        let sql = "SELECT 1;\n\
-                   CREATE TABLE t (x UInt64) ENGINE = MergeTree ORDER BY x;\n\
-                   ALTER TABLE db.t ON CLUSTER prod DROP COLUMN x;\n\
-                   -- DROP TABLE commented_out;\n\
-                   DROP TABLE IF EXISTS t;";
-        let hints = cluster_scope_hints(sql, "prod");
-        assert_eq!(hints.len(), 2, "{hints:?}");
-        assert!(sql[hints[0].0.clone()].eq_ignore_ascii_case("CREATE"));
-        assert!(sql[hints[1].0.clone()].eq_ignore_ascii_case("DROP"));
-        assert!(hints[0].1.contains("cluster prod"));
-    }
-
-    #[test]
-    fn string_literals_do_not_hide_or_fake_on_cluster() {
-        let hints = cluster_scope_hints("CREATE TABLE t (s String) COMMENT 'ON CLUSTER'", "c");
-        assert_eq!(hints.len(), 1, "a quoted ON CLUSTER does not count");
-    }
-
-    #[test]
-    fn insertion_lands_after_the_object_name() {
-        for (statement, after) in [
-            ("CREATE TABLE t (x UInt64)", "CREATE TABLE t"),
-            (
-                "CREATE TABLE IF NOT EXISTS db.t (x UInt64)",
-                "CREATE TABLE IF NOT EXISTS db.t",
-            ),
-            (
-                "CREATE MATERIALIZED VIEW mv TO t AS SELECT 1",
-                "CREATE MATERIALIZED VIEW mv",
-            ),
-            ("ALTER TABLE `we ird` DROP COLUMN x", "ALTER TABLE `we ird`"),
-            ("DROP TABLE IF EXISTS t", "DROP TABLE IF EXISTS t"),
-            ("TRUNCATE TABLE t", "TRUNCATE TABLE t"),
-            ("TRUNCATE t", "TRUNCATE t"),
-            ("OPTIMIZE TABLE t FINAL", "OPTIMIZE TABLE t"),
-        ] {
-            let offset = on_cluster_insertion(statement)
-                .unwrap_or_else(|| panic!("no insertion for {statement:?}"));
-            assert_eq!(&statement[..offset], after, "for {statement:?}");
-        }
-    }
-
-    #[test]
-    fn unconfident_forms_get_no_insertion() {
-        for statement in [
-            "RENAME TABLE a TO b",
-            "EXCHANGE TABLES a AND b",
-            "ALTER ROLE r RENAME TO q",
-        ] {
-            assert_eq!(on_cluster_insertion(statement), None, "{statement:?}");
-        }
-    }
-}
-
 use gpui::{Context, Window};
 
 use crate::{Diagnostic, DiagnosticSeverity, Workspace};
@@ -319,5 +259,65 @@ impl Workspace {
             editor.set_value(updated, window, cx);
         });
         self.refresh_schema_diagnostics(cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_clusterable_ddl_without_on_cluster_is_flagged() {
+        let sql = "SELECT 1;\n\
+                   CREATE TABLE t (x UInt64) ENGINE = MergeTree ORDER BY x;\n\
+                   ALTER TABLE db.t ON CLUSTER prod DROP COLUMN x;\n\
+                   -- DROP TABLE commented_out;\n\
+                   DROP TABLE IF EXISTS t;";
+        let hints = cluster_scope_hints(sql, "prod");
+        assert_eq!(hints.len(), 2, "{hints:?}");
+        assert!(sql[hints[0].0.clone()].eq_ignore_ascii_case("CREATE"));
+        assert!(sql[hints[1].0.clone()].eq_ignore_ascii_case("DROP"));
+        assert!(hints[0].1.contains("cluster prod"));
+    }
+
+    #[test]
+    fn string_literals_do_not_hide_or_fake_on_cluster() {
+        let hints = cluster_scope_hints("CREATE TABLE t (s String) COMMENT 'ON CLUSTER'", "c");
+        assert_eq!(hints.len(), 1, "a quoted ON CLUSTER does not count");
+    }
+
+    #[test]
+    fn insertion_lands_after_the_object_name() {
+        for (statement, after) in [
+            ("CREATE TABLE t (x UInt64)", "CREATE TABLE t"),
+            (
+                "CREATE TABLE IF NOT EXISTS db.t (x UInt64)",
+                "CREATE TABLE IF NOT EXISTS db.t",
+            ),
+            (
+                "CREATE MATERIALIZED VIEW mv TO t AS SELECT 1",
+                "CREATE MATERIALIZED VIEW mv",
+            ),
+            ("ALTER TABLE `we ird` DROP COLUMN x", "ALTER TABLE `we ird`"),
+            ("DROP TABLE IF EXISTS t", "DROP TABLE IF EXISTS t"),
+            ("TRUNCATE TABLE t", "TRUNCATE TABLE t"),
+            ("TRUNCATE t", "TRUNCATE t"),
+            ("OPTIMIZE TABLE t FINAL", "OPTIMIZE TABLE t"),
+        ] {
+            let offset = on_cluster_insertion(statement)
+                .unwrap_or_else(|| panic!("no insertion for {statement:?}"));
+            assert_eq!(&statement[..offset], after, "for {statement:?}");
+        }
+    }
+
+    #[test]
+    fn unconfident_forms_get_no_insertion() {
+        for statement in [
+            "RENAME TABLE a TO b",
+            "EXCHANGE TABLES a AND b",
+            "ALTER ROLE r RENAME TO q",
+        ] {
+            assert_eq!(on_cluster_insertion(statement), None, "{statement:?}");
+        }
     }
 }

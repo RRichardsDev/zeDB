@@ -161,6 +161,55 @@ pub struct GridSpike {
     /// Column widths haven't been fitted to content yet (no remembered
     /// layout); the first rows to arrive trigger a one-time auto-fit.
     needs_autofit: bool,
+    /// Owner-declared display hints by column name: the value stays
+    /// raw (so sort/filter/copy see the real number) and only the
+    /// rendering humanizes it.
+    column_display: HashMap<String, ColumnDisplay>,
+}
+
+/// How an owner wants a raw numeric column rendered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColumnDisplay {
+    /// A byte count: `765.78` + dim ` MiB`.
+    Bytes,
+    /// A duration in milliseconds: `4.05` + dim ` s`.
+    Millis,
+}
+
+/// Split a byte count into (number, dim unit suffix).
+fn humanize_bytes(bytes: f64) -> (String, String) {
+    const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+    let mut value = bytes;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    let number = if unit == 0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.2}")
+    };
+    (number, format!(" {}", UNITS[unit]))
+}
+
+/// Split a millisecond duration into (number, dim unit suffix).
+fn humanize_millis(ms: f64) -> (String, String) {
+    if ms < 1.0 && ms > 0.0 {
+        ("<1".into(), " ms".into())
+    } else if ms < 1000.0 {
+        let text = format!("{ms:.1}");
+        (
+            text.strip_suffix(".0").unwrap_or(&text).to_string(),
+            " ms".into(),
+        )
+    } else if ms < 60_000.0 {
+        (format!("{:.2}", ms / 1000.0), " s".into())
+    } else if ms < 3_600_000.0 {
+        (format!("{:.1}", ms / 60_000.0), " min".into())
+    } else {
+        (format!("{:.1}", ms / 3_600_000.0), " h".into())
+    }
 }
 
 impl GridSpike {
@@ -194,7 +243,18 @@ impl GridSpike {
             hl_json: None,
             inspector_cache: None,
             needs_autofit: false,
+            column_display: HashMap::new(),
         }
+    }
+
+    /// Declare display hints for named columns. Owner-managed: hints
+    /// persist across results, so a refetch of the same shape keeps
+    /// its formatting; plain query grids never set any.
+    pub fn set_column_displays(&mut self, displays: &[(&str, ColumnDisplay)]) {
+        self.column_display = displays
+            .iter()
+            .map(|(name, display)| (name.to_string(), *display))
+            .collect();
     }
 
     /// Fit each column to the wider of its header and its content (sampled
@@ -718,6 +778,25 @@ impl GridSpike {
         }
     }
 
+    /// How a hinted numeric cell splits for rendering: (number, dim
+    /// unit). None for unhinted columns and non-numeric values.
+    fn cell_display_parts(&self, row: usize, column: usize) -> Option<(String, String)> {
+        let display = self
+            .columns
+            .get(column)
+            .and_then(|meta| self.column_display.get(&meta.name))?;
+        let raw = match self.rows.get(row)?.get(column)? {
+            Value::UInt(value) => *value as f64,
+            Value::Int(value) => *value as f64,
+            Value::Float(value) => *value,
+            _ => return None,
+        };
+        Some(match display {
+            ColumnDisplay::Bytes => humanize_bytes(raw),
+            ColumnDisplay::Millis => humanize_millis(raw),
+        })
+    }
+
     fn cell_is_null(&self, row: usize, column: usize) -> bool {
         matches!(
             self.rows.get(row).and_then(|row| row.get(column)),
@@ -911,3 +990,33 @@ impl GridSpike {
 
 mod render;
 use render::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bytes_humanize_with_a_dim_unit() {
+        assert_eq!(humanize_bytes(0.0), ("0".into(), " B".into()));
+        assert_eq!(humanize_bytes(512.0), ("512".into(), " B".into()));
+        assert_eq!(humanize_bytes(1536.0), ("1.50".into(), " KiB".into()));
+        assert_eq!(
+            humanize_bytes(803_000_000.0),
+            ("765.80".into(), " MiB".into())
+        );
+        assert_eq!(
+            humanize_bytes(5.5 * 1024.0 * 1024.0 * 1024.0),
+            ("5.50".into(), " GiB".into())
+        );
+    }
+
+    #[test]
+    fn millis_humanize_across_scales() {
+        assert_eq!(humanize_millis(0.4), ("<1".into(), " ms".into()));
+        assert_eq!(humanize_millis(42.0), ("42".into(), " ms".into()));
+        assert_eq!(humanize_millis(42.5), ("42.5".into(), " ms".into()));
+        assert_eq!(humanize_millis(4050.0), ("4.05".into(), " s".into()));
+        assert_eq!(humanize_millis(90_000.0), ("1.5".into(), " min".into()));
+        assert_eq!(humanize_millis(7_200_000.0), ("2.0".into(), " h".into()));
+    }
+}
