@@ -163,6 +163,39 @@ fn header_actions_route_to_the_visible_grid(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn scope_selection_dispatches_from_the_menu_overlay(cx: &mut TestAppContext) {
+    use gpui::Focusable as _;
+
+    let (workspace, cx) = test_harness::workspace(cx);
+    let grid = workspace.update(cx, |workspace, cx| {
+        workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
+        workspace.show_analytics = true;
+        cx.notify();
+        workspace.analytics.grid.clone()
+    });
+    // Menus dispatch actions from an overlay via the focused path;
+    // focus the grid, as a user interacting with the view would have.
+    cx.run_until_parked();
+    workspace.update_in(cx, |_, window, cx| {
+        window.focus(&grid.focus_handle(cx));
+    });
+    cx.dispatch_action(crate::analytics::SetAnalyticsScope {
+        cluster: Some("zedb_cluster".into()),
+    });
+    workspace.update(cx, |workspace, _| {
+        assert_eq!(
+            workspace.analytics.scope.cluster(),
+            Some("zedb_cluster"),
+            "the scope selection reached the workspace"
+        );
+        assert!(
+            workspace.analytics.loading || workspace.analytics.error.is_some(),
+            "and a refetch started (dead endpoint may already have failed it)"
+        );
+    });
+}
+
+#[gpui::test]
 fn window_change_clears_the_drill_in(cx: &mut TestAppContext) {
     let (workspace, cx) = test_harness::workspace(cx);
     workspace.update(cx, |workspace, cx| {

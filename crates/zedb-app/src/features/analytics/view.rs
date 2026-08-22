@@ -173,9 +173,6 @@ impl Workspace {
             .size_full()
             .flex()
             .flex_col()
-            .on_action(cx.listener(|this, action: &SetAnalyticsScope, _, cx| {
-                this.analytics_set_scope(action.cluster.clone(), cx);
-            }))
             .child(header)
             .child(body)
     }

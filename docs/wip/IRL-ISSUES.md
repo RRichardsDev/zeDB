@@ -20,6 +20,13 @@ they leave the list when shipped.
   -> fixed (unreleased): toolbar controls bring the fleet view with
   them (narrated); detail-panel controls refuse honestly with the
   navigation hint when no database is selected
+- two node/cluster pickers share the screen and vocabulary: the
+  toolbar's connection node selector (which node zeDB talks to) and
+  the ops/analytics scope dropdown (how far queries fan out), and
+  nothing on screen says which governs what. Needs a design pass:
+  distinct labels at minimum ("connected to" vs "showing"), possibly
+  the scope control absorbing the node identity (raised 2026-08-22,
+  and possibly earlier without being filed)
 - the grid's text-field column filter treats whatever is typed as a
   literal value and wraps it in `col LIKE '...'`, so typing an
   expression (`not like 'SELECT%'`) becomes a nonsense quoted literal

@@ -5,4 +5,4 @@ mod view;
 #[cfg(test)]
 mod gpui_tests;
 
-pub(crate) use model::AnalyticsState;
+pub(crate) use model::{AnalyticsState, SetAnalyticsScope};
