@@ -9,6 +9,12 @@ GitHub release notes.
 
 ## Unreleased
 
+- Fixed: large query results honor the Max rows dropdown again. The
+  decoder's defensive value budget counted every cell across the whole
+  stream, so wide tables died mid-result ("decoded value count exceeds
+  limit of 2000000", around 81k rows on a 24-column table with 100k
+  asked). The budget now guards a single row; the dropdown governs the
+  stream.
 - Fixed: agents start again when zeDB is launched from the Dock or
   Spotlight. A GUI launch carries no shell PATH, so the npx-run ACP
   adapters died at spawn ("env: node: No such file or directory") and

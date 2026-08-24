@@ -57,7 +57,6 @@ pub(crate) struct StreamingDecoder {
     buffer: Vec<u8>,
     columns: Option<Vec<ColumnMeta>>,
     types: Vec<ChType>,
-    budget: DecodeBudget,
 }
 
 impl StreamingDecoder {
@@ -66,7 +65,6 @@ impl StreamingDecoder {
             buffer: Vec::new(),
             columns: None,
             types: Vec::new(),
-            budget: DecodeBudget::new(),
         }
     }
 
@@ -99,7 +97,13 @@ impl StreamingDecoder {
             };
             let row_start = reader.pos;
             let mut row = Vec::with_capacity(self.types.len());
-            let mut row_budget = self.budget;
+            // The budget guards amplification inside one row (nested
+            // collections decoding to far more values than wire bytes).
+            // It is per-row on purpose: rows leave the decoder as they
+            // stream and the caller enforces its own row cap, so a
+            // whole-stream budget would silently override the user's
+            // max-rows choice on wide tables.
+            let mut row_budget = DecodeBudget::new();
             for ty in &self.types {
                 match read_value(&mut reader, ty, &mut row_budget, 0) {
                     Ok(value) => row.push(value),
@@ -114,7 +118,6 @@ impl StreamingDecoder {
                 break;
             }
             consumed = reader.pos;
-            self.budget = row_budget;
             rows.push(row);
             if consumed == self.buffer.len() {
                 break;
@@ -608,6 +611,43 @@ mod tests {
                 "failed at chunk boundary {split}"
             );
         }
+    }
+
+    #[test]
+    fn streaming_value_budget_is_per_row_not_per_stream() {
+        // A long stream of wide rows blows well past MAX_DECODED_VALUES
+        // in total; the user's row cap governs stream length, so this
+        // must decode (the "decoded value count exceeds limit" that
+        // capped Max rows: 100k at ~81k rows on a 24-column table).
+        let columns: Vec<(&str, &str)> = (0..8).map(|_| ("c", "UInt8")).collect();
+        let mut decoder = StreamingDecoder::new();
+        let mut decoded = 0usize;
+        decoder.push(&header(&columns)).unwrap();
+        let batch = vec![0u8; 8 * 10_000];
+        while decoded < MAX_DECODED_VALUES / 8 + 10_000 {
+            decoded += decoder.push(&batch).unwrap().len();
+        }
+        assert!(decoded * 8 > MAX_DECODED_VALUES);
+
+        // One hostile row still trips the budget: nested arrays that
+        // decode to more values than the per-row allowance.
+        let mut decoder = StreamingDecoder::new();
+        let mut buf = header(&[("value", "Array(Array(UInt8))")]);
+        let inner = MAX_COLLECTION_ITEMS as u64;
+        let outer = (MAX_DECODED_VALUES / MAX_COLLECTION_ITEMS + 2) as u64;
+        buf.extend(varuint(outer));
+        for _ in 0..outer {
+            buf.extend(varuint(inner));
+            buf.extend(std::iter::repeat_n(0u8, inner as usize));
+        }
+        let mut outcome = Ok(Vec::new());
+        for chunk in buf.chunks(1 << 20) {
+            outcome = decoder.push(chunk);
+            if outcome.is_err() {
+                break;
+            }
+        }
+        assert!(matches!(outcome, Err(ChError::Decode(_))));
     }
 
     #[test]
