@@ -67,15 +67,11 @@ impl ChClient {
                 message: String::from_utf8_lossy(&bytes).trim().to_string(),
             });
         }
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_MATERIALIZED_RESPONSE_BYTES)
-        {
-            return Err(ChError::ResponseTooLarge {
-                limit: MAX_MATERIALIZED_RESPONSE_BYTES,
-            });
-        }
-
+        // No whole-response byte cap here, deliberately: rows leave the
+        // stream incrementally and `row_limit` (the user's Max rows
+        // choice, including Unlimited) is the governor; a run can also
+        // be cancelled. The materialized request paths keep their cap
+        // because those buffer the entire body.
         let mut decoder = rowbinary::StreamingDecoder::new();
         let mut sent_columns = false;
         let mut sent_rows = 0;
@@ -89,16 +85,7 @@ impl ChClient {
                         break;
                     };
                     let chunk = chunk?;
-                    received_bytes = received_bytes
-                        .checked_add(chunk.len() as u64)
-                        .ok_or(ChError::ResponseTooLarge {
-                            limit: MAX_MATERIALIZED_RESPONSE_BYTES,
-                        })?;
-                    if received_bytes > MAX_MATERIALIZED_RESPONSE_BYTES {
-                        return Err(ChError::ResponseTooLarge {
-                            limit: MAX_MATERIALIZED_RESPONSE_BYTES,
-                        });
-                    }
+                    received_bytes = received_bytes.saturating_add(chunk.len() as u64);
                     let mut rows = decoder.push(&chunk)?;
                     if !sent_columns {
                         if let Some(columns) = decoder.columns() {

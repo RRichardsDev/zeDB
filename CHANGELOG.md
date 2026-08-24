@@ -14,7 +14,9 @@ GitHub release notes.
   stream, so wide tables died mid-result ("decoded value count exceeds
   limit of 2000000", around 81k rows on a 24-column table with 100k
   asked). The budget now guards a single row; the dropdown governs the
-  stream.
+  stream. Likewise the 1 GiB response byte cap no longer applies to
+  streamed editor results, so Unlimited means unlimited; internal and
+  agent queries keep both caps.
 - Fixed: agents start again when zeDB is launched from the Dock or
   Spotlight. A GUI launch carries no shell PATH, so the npx-run ACP
   adapters died at spawn ("env: node: No such file or directory") and
