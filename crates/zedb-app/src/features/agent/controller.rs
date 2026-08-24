@@ -133,8 +133,12 @@ impl Workspace {
             Some(connection) => (connection.clone(), None),
             None => {
                 let _runtime = rt::tokio().enter();
+                // A Dock-launched app has a skinny PATH; the agent child
+                // (and everything it spawns: node via npx's env shebang,
+                // the agent's own CLI) needs the real search path.
+                let env = [("PATH".to_string(), zedb_acp::discovery::child_path_env())];
                 let mut connection =
-                    match AgentConnection::spawn(&program, &args, &[], cwd.as_deref()) {
+                    match AgentConnection::spawn(&program, &args, &env, cwd.as_deref()) {
                         Ok(connection) => connection,
                         Err(error) => {
                             self.notice = Some(format!("Could not start {name}: {error}"));

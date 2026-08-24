@@ -77,6 +77,27 @@ fn is_executable(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
+/// PATH for spawned agents: the app's own PATH extended with the
+/// standard install locations. A GUI launch (Dock, Spotlight) carries
+/// no shell profile, so while discovery finds `npx` at an absolute
+/// path, its `#!/usr/bin/env node` shebang still resolves node
+/// against the child's PATH; without this the adapter dies at spawn
+/// with "env: node: No such file or directory".
+pub fn child_path_env() -> String {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    for dir in fallback_dirs() {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    match std::env::join_paths(&dirs) {
+        Ok(joined) => joined.to_string_lossy().into_owned(),
+        Err(_) => std::env::var("PATH").unwrap_or_default(),
+    }
+}
+
 /// PATH plus the standard install locations.
 pub fn find_executable(name: &str) -> Option<PathBuf> {
     // An explicit path is taken at face value.
@@ -207,6 +228,21 @@ mod tests {
         assert_eq!(find_executable("/bin/sh"), Some(PathBuf::from("/bin/sh")));
         assert!(find_executable("/no/such/binary").is_none());
         assert!(find_executable("definitely-not-a-real-tool-xyz").is_none());
+    }
+
+    #[test]
+    fn child_path_covers_current_path_and_install_locations() {
+        let path = child_path_env();
+        let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        // Everything on the app's own PATH survives...
+        for dir in std::env::split_paths(&std::env::var("PATH").unwrap_or_default()) {
+            assert!(dirs.contains(&dir), "missing {dir:?}");
+        }
+        // ...and the standard install locations ride along for the
+        // skinny GUI-launch environment.
+        for dir in fallback_dirs() {
+            assert!(dirs.contains(&dir), "missing fallback {dir:?}");
+        }
     }
 
     #[test]

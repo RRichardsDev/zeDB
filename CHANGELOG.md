@@ -9,6 +9,11 @@ GitHub release notes.
 
 ## Unreleased
 
+- Fixed: agents start again when zeDB is launched from the Dock or
+  Spotlight. A GUI launch carries no shell PATH, so the npx-run ACP
+  adapters died at spawn ("env: node: No such file or directory") and
+  every session failed with "agent connection closed"; the agent child
+  now gets the same search path agent discovery uses.
 - Hand-written DDL is honest about the executing scope: with a cluster
   selected, a DDL statement without ON CLUSTER gets a hint in the
   editor (it will run on the connected node only), and the right-click
