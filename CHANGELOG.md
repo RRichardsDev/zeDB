@@ -7,6 +7,14 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Fixed: writing a join as a bare condition ("join af.campaign_id =
+  ...") no longer makes schema intelligence read the alias as an
+  unknown database; the alias bound in FROM keeps working for
+  completions, hover, and column checks, and a misspelled column
+  still gets its own flag.
+
 ## v0.1.35 - 2026-08-25
 
 ### Query analytics

@@ -310,6 +310,21 @@ mod tests {
     }
 
     #[test]
+    fn alias_survives_a_condition_style_join_clause() {
+        let snapshot = snapshot(Some(columns()));
+        // The join names a condition, not a table (common while
+        // editing); "e." in the WHERE must still complete the aliased
+        // table's columns, and "e" must not read as a database.
+        let sql = "select * from events e join e.event_id = other.event_id where e. > 5";
+        let cursor = sql.find("where e.").unwrap() + "where e.".len();
+        let items = completions(&snapshot, Some("analytics"), sql, cursor);
+        assert_eq!(
+            items.first().map(|item| item.label.as_str()),
+            Some("event_id")
+        );
+    }
+
+    #[test]
     fn repro_alias_dot_mid_line() {
         let snapshot = snapshot(Some(columns()));
         let sql = "select e. from analytics.events e;";

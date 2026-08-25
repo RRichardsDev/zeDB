@@ -173,6 +173,30 @@ mod tests {
     }
 
     #[test]
+    fn a_condition_style_join_never_reads_the_alias_as_a_database() {
+        // "join af.col = x.col" is a condition written where a table
+        // belongs (mid-edit or shorthand). The alias bound in FROM must
+        // not squiggle as "Unknown database `af`"; the typo in the
+        // aliased column still gets its own honest flag.
+        let snapshot = snapshot(Some(columns()));
+        let issues = analyze_sql(
+            &snapshot,
+            Some("analytics"),
+            "select * from events e join e.event_id = events.event_id where e.evnt_id > 150",
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.message.contains("Unknown database")),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|issue| issue.message.contains("evnt_id")),
+            "the misspelled column is still flagged: {issues:?}"
+        );
+    }
+
+    #[test]
     fn stays_quiet_for_uncached_columns_ctes_and_ambiguous_names() {
         let snapshot = snapshot(None);
         let issues = analyze_sql(

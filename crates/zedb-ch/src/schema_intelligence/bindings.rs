@@ -52,6 +52,18 @@ pub(super) fn resolve_bindings(
             index += 2;
             continue;
         }
+        // `JOIN alias.column = ...`: a condition written where a table
+        // belongs (a common mid-edit shape). The alias is a bound
+        // table, not an unknown database; leave the reference to the
+        // column checks.
+        if tokens.get(index + 2).is_some_and(|token| token.text == ".")
+            && bindings
+                .aliases
+                .contains_key(&first.text.to_ascii_lowercase())
+        {
+            index += 1;
+            continue;
+        }
         let qualified = tokens.get(index + 2).is_some_and(|token| token.text == ".")
             && tokens.get(index + 3).is_some_and(|token| token.identifier);
         let (database, object, end, object_range, database_token, object_token) = if qualified {
