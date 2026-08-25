@@ -187,7 +187,7 @@ async fn oversized_outgoing_prompt_is_rejected_before_send() {
         .await
         .expect("new session");
 
-    let oversized = "x".repeat(2 * 1024 * 1024);
+    let oversized = "x".repeat(16 * 1024 * 1024);
     let error = agent
         .prompt(&session.session_id, &oversized)
         .await
