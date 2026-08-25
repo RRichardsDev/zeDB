@@ -7,92 +7,103 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.35 - 2026-08-25
 
-- Fixed: large query results honor the Max rows dropdown again. The
-  decoder's defensive value budget counted every cell across the whole
-  stream, so wide tables died mid-result ("decoded value count exceeds
-  limit of 2000000", around 81k rows on a 24-column table with 100k
-  asked). The budget now guards a single row; the dropdown governs the
-  stream. Likewise the 1 GiB response byte cap no longer applies to
-  streamed editor results, so Unlimited means unlimited; internal and
-  agent queries keep both caps.
-- The review's silent policy changes now speak or soften: status and
-  verify take --cluster/--no-cluster/--param/--param-file again (a
-  templated repo needs them to render; passwords stay file-only);
-  agent queries over the row cap get the first 200 rows with a capped
-  note instead of a server error; drift/format/regen computed on a
-  fallback ClickHouse version say so in the CLI and the app; a stored
-  Always-allow grant that no longer auto-approves is explained once in
-  the thread; reopening the last agent thread keeps as much as the
-  live pane showed; the fleet confirm survives a symlinked repo path;
-  the advisor's apply-in-place works on writable connections whose
-  tier isn't saved; repo import accepts a pre-created empty (or
-  git-init) destination and suffixed ClickHouse pins like
-  24.8.1.1-lts; hyphenated tracking databases and legacy tracking
-  tables are backtick-quoted rather than refused; the fleet cluster
-  value and custom agents sync across machines; and Linux replay
-  commands stop re-hashing the whole cached archive on every run.
-- Fixed: a sweep of the August security review's guardrails moved
-  every limit that sat in a hands-on path off the user's explicit
-  choices while keeping protection on agent and untrusted paths.
-  Queries and migrations no longer hit a hidden 5-minute wall (your
-  max_execution_time is the law again); results with >100k-element
-  arrays decode; live tail survives quiet tables; big exports get 10
-  minutes between chunks and failed ones clean up their partial file;
-  scheme-less saved endpoints work again; chain verification gets 10
-  minutes and a fresh ClickHouse binary 5 for Gatekeeper; a >16 MiB
-  migration file no longer makes the repo unopenable (cap now 256
-  MiB) and symlinks under migrations/ fail loudly instead of silently
-  shortening the chain; saved tabs and history that fail to load are
-  parked as .load-failed instead of being wiped by the next save; git
-  keeps your gpgSign, credential.helper, and sshCommand settings,
-  clones get 15 minutes, and IPv6 remotes are accepted; settings sync
-  propagates connection user/database edits again; agents tolerate a
-  cold npx download at first launch, big tool results no longer kill
-  the thread, and Cancel can't be dropped; pre-existing fleet and
-  sync checkouts migrate to the new directory names instead of being
+### Query analytics
+
+- New fourth main view (toolbar chart icon or "Query analytics" in
+  the palette): every query shape from system.query_log over the last
+  hour, day, or week, normalized so different literals collapse into
+  one fingerprint, with runs, errors, p50/p95/p99, total time, peak
+  memory, and bytes read, heaviest first.
+- Drill into a shape for its recent runs, then into a run for its
+  ProfileEvents testimony: what was actually read and where the time
+  went, the measured counterpart to EXPLAIN. One click opens the
+  shape in the editor. Reading the log never writes the log.
+- The list is a real results grid: sort and filter re-run the
+  aggregation, shapes are syntax-colored like the editor (visible
+  rows only, cached), durations and byte counts render humanized
+  (4.05 s, 765.80 MiB) while sorting and copy see raw numbers, and
+  error-only shapes show blank percentiles instead of NaN.
+
+### One working scope
+
+- The top bar now shows "connected to" (the node picker) and
+  "Executing on:" (this node or a cluster). That single choice drives
+  what ops and analytics aggregate over AND what schema and fleet
+  mutations target with ON CLUSTER; the per-view scope dropdowns are
+  gone, and each view states its scope in its header.
+- Hand-written DDL is honest about that scope: with a cluster
+  selected, a DDL statement without ON CLUSTER gets an editor hint
+  (it will run on the connected node only) and a right-click "Add ON
+  CLUSTER" that puts the clause visibly into your SQL. zeDB never
+  rewrites what you typed behind your back.
+
+### Limits that got in your way
+
+The August security hardening left several of its guardrails sitting
+in hands-on paths, silently overriding explicit choices. This release
+moves every one of them to the untrusted or agent scope where it
+belongs; protections there are unchanged.
+
+- Max rows means Max rows: wide results no longer die mid-stream on a
+  hidden value budget, Unlimited is unlimited, and there is no secret
+  5-minute wall on queries or migration statements (your
+  max_execution_time is the law again).
+- Results with 100k+-element arrays decode; live tail survives quiet
+  tables; big exports get a 10-minute chunk budget and failed ones
+  remove their partial file; scheme-less saved endpoints
+  (localhost:8123) connect again.
+- Migration repos: a large migration file no longer makes the whole
+  repo unopenable (cap now 256 MiB), symlinks under migrations/ fail
+  loudly instead of silently shortening the chain, chain verification
+  gets 10 minutes, and a fresh ClickHouse binary gets 5 for macOS
+  Gatekeeper's first-run assessment.
+- Git keeps your gpgSign, credential.helper, and sshCommand settings;
+  clones get 15 minutes; IPv6 remotes are accepted.
+- Saved tabs and history that fail to load are parked as .load-failed
+  instead of being wiped by the next save; settings sync propagates
+  connection user/database edits again; existing fleet and sync
+  checkouts migrate to the new directory names instead of being
   re-cloned; a Cloud password rotation that finishes after the form
-  moved on is stored in the Keychain instead of discarded.
-- Fixed: agents start again when zeDB is launched from the Dock or
+  moved on lands in the Keychain instead of being discarded.
+
+### Agents
+
+- Fixed: agents start when zeDB is launched from the Dock or
   Spotlight. A GUI launch carries no shell PATH, so the npx-run ACP
-  adapters died at spawn ("env: node: No such file or directory") and
-  every session failed with "agent connection closed"; the agent child
-  now gets the same search path agent discovery uses.
-- Hand-written DDL is honest about the executing scope: with a cluster
-  selected, a DDL statement without ON CLUSTER gets a hint in the
-  editor (it will run on the connected node only), and the right-click
-  menu offers "Add ON CLUSTER", which puts the clause visibly into
-  your SQL at the right spot; zeDB never rewrites what you typed
-  behind your back. Statements whose shape has no unambiguous spot get
-  the hint without the shortcut.
-- One working scope instead of three cluster pickers: the top bar now
-  shows "connected to" (the node picker, which no longer hides behind
-  a cluster label) and "working on" (this node or a cluster). That
-  single choice drives what ops and analytics aggregate over AND what
-  schema and fleet mutations target with ON CLUSTER; the per-view
-  scope dropdowns are gone, and each view states its scope in its
-  header.
-- New: Query analytics, the fourth main view (toolbar chart icon or
-  "Query analytics" in the palette). Every query shape from
-  system.query_log over the last hour, day, or week, normalized so
-  different literals collapse into one fingerprint: runs, errors,
-  p50/p95/p99, total time, peak memory, and bytes read, heaviest
-  first, node or cluster scoped. Drill into a shape for its recent
-  runs, then into a run for its ProfileEvents testimony: what was
-  actually read, why, and where the time went, the measured
-  counterpart to EXPLAIN. One click opens the shape in the editor.
-  Reading the log never writes the log. Durations and byte counts
-  render humanized (4.05 s, 765.80 MiB) while sorting, filtering, and
-  copy see the raw numbers; timestamps get the grid's usual date
-  tinting; shapes that never finished show blank percentiles instead
-  of NaN; shapes themselves are syntax-colored like the editor
-  (visible rows only, cached, so a 42k-run log costs nothing extra).
-- The ops view refreshes every second while zeDB is frontmost and eases
-  to every five seconds while it is in the background; the header
-  states the live cadence. Poll queries no longer land in query_log
-  (kills and your own queries still do), so watching the ops view does
-  not fill it with the watching.
+  adapters died at spawn and every session failed with "agent
+  connection closed"; the agent child now gets the same search path
+  agent discovery uses.
+- First launch tolerates a cold npx package download; one oversized
+  frame no longer kills the whole thread; Cancel can never be
+  dropped; reopening the last thread keeps as much as the live pane
+  showed; queries over the agent row cap return the first 200 rows
+  with a capped note instead of a server error.
+- A stored Always-allow grant no longer auto-approves (a tool's name
+  is not a verified identity); the first matching request in a thread
+  explains that instead of silently ignoring your stored decision.
+
+### CLI and fleet
+
+- status and verify take --cluster/--no-cluster/--param/--param-file
+  again, so a templated repo renders for read commands. Passwords
+  stay file-only, and read commands still refuse write authority.
+- Hyphenated tracking databases and legacy tracking table names are
+  backtick-quoted rather than refused; repo import accepts an empty
+  (or git-init) destination and suffixed pins like 24.8.1.1-lts.
+- Drift, formatting, and regen computed on a fallback ClickHouse
+  version now say so, in the CLI and in the app.
+- The fleet cluster value and custom agents sync across machines;
+  Linux replay commands stop re-hashing the whole cached archive on
+  every run; the fleet confirm survives a symlinked repo path.
+
+### Ops
+
+- The ops view refreshes every second while zeDB is frontmost and
+  eases to five seconds in the background; the header states the live
+  cadence. Poll queries no longer land in query_log, so watching the
+  ops view does not fill it with the watching.
 
 ## v0.1.34 - 2026-08-21
 
