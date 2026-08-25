@@ -14,7 +14,6 @@ const MAX_STREAM_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 const MAX_COLUMNS: usize = 16_384;
 const MAX_HEADER_STRING_BYTES: usize = 64 * 1024;
 const MAX_VALUE_BYTES: usize = 64 * 1024 * 1024;
-const MAX_COLLECTION_ITEMS: usize = 100_000;
 const MAX_DECODED_VALUES: usize = 2_000_000;
 const MAX_VALUE_DEPTH: usize = 64;
 
@@ -210,10 +209,13 @@ pub fn decode(buf: &[u8]) -> Result<QueryResult> {
     }
 
     let mut rows = Vec::new();
-    let mut budget = DecodeBudget::new();
     while !r.at_end() {
         let row_start = r.pos;
         let mut row = Vec::with_capacity(n_cols);
+        // Per-row, matching the streaming decoder: the budget guards
+        // amplification inside one row; the response byte cap above
+        // bounds the total.
+        let mut budget = DecodeBudget::new();
         for ty in &types {
             row.push(read_value(&mut r, ty, &mut budget, 0)?);
         }
@@ -421,7 +423,10 @@ fn read_value(
         // RowBinary serializes LowCardinality columns as their inner type.
         ChType::LowCardinality(inner) => read_value(r, inner, budget, depth + 1)?,
         ChType::Array(inner) => {
-            let len = r.bounded_len("array length", MAX_COLLECTION_ITEMS)?;
+            // Collections are bounded by the value budget, not a
+            // separate cap: a 500k-element groupArray result is
+            // ordinary ClickHouse output, not an attack.
+            let len = r.bounded_len("array length", MAX_DECODED_VALUES)?;
             budget.ensure(len)?;
             let mut items = Vec::with_capacity(len.min(1024));
             for _ in 0..len {
@@ -438,7 +443,7 @@ fn read_value(
             Value::Tuple(out)
         }
         ChType::Map(key, value) => {
-            let len = r.bounded_len("map length", MAX_COLLECTION_ITEMS)?;
+            let len = r.bounded_len("map length", MAX_DECODED_VALUES)?;
             let child_values = len
                 .checked_mul(2)
                 .ok_or_else(|| ChError::Decode("map value count overflow".into()))?;
@@ -560,7 +565,7 @@ mod tests {
         assert!(decode(&oversized_string).is_err());
 
         let mut oversized_array = header(&[("value", "Array(UInt8)")]);
-        oversized_array.extend(varuint((MAX_COLLECTION_ITEMS + 1) as u64));
+        oversized_array.extend(varuint((MAX_DECODED_VALUES + 1) as u64));
         assert!(decode(&oversized_array).is_err());
     }
 
@@ -633,8 +638,8 @@ mod tests {
         // decode to more values than the per-row allowance.
         let mut decoder = StreamingDecoder::new();
         let mut buf = header(&[("value", "Array(Array(UInt8))")]);
-        let inner = MAX_COLLECTION_ITEMS as u64;
-        let outer = (MAX_DECODED_VALUES / MAX_COLLECTION_ITEMS + 2) as u64;
+        let inner = 1_000_000u64;
+        let outer = (MAX_DECODED_VALUES as u64 / inner) + 2;
         buf.extend(varuint(outer));
         for _ in 0..outer {
             buf.extend(varuint(inner));

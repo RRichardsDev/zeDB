@@ -17,7 +17,11 @@ use zedb_core::repo::{render, RepoConfig};
 
 use crate::process::output_with_timeout;
 
-const REPLAY_PROCESS_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+// The chain replay covers the user's whole migration history, which
+// only grows; scale the budget to the work rather than assuming a
+// young repo. Formatting one statement stays on a tight deadline.
+const REPLAY_CHAIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const REPLAY_FORMAT_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayError {
@@ -193,7 +197,7 @@ impl LocalReplay {
         let output = output_with_timeout(
             command,
             Some(script.as_bytes().to_vec()),
-            REPLAY_PROCESS_TIMEOUT,
+            REPLAY_CHAIN_TIMEOUT,
         )?;
         if !output.status.success() {
             return Err(ReplayError::Apply(
@@ -322,7 +326,7 @@ impl LocalReplay {
     pub fn format_sql(&self, sql: &str) -> Result<String, ReplayError> {
         let mut command = Command::new(&self.binary);
         command.args(["format", "--query", sql]);
-        let output = output_with_timeout(command, None, REPLAY_PROCESS_TIMEOUT)?;
+        let output = output_with_timeout(command, None, REPLAY_FORMAT_TIMEOUT)?;
         if !output.status.success() {
             return Err(ReplayError::Format {
                 stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),

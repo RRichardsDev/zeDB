@@ -21,7 +21,10 @@ const MAX_RELEASE_METADATA_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_ASSET_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_EXPANDED_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
-const BINARY_PROCESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+// First exec of a fresh binary includes macOS Gatekeeper assessment,
+// which this module itself documents as unpredictably slow; give it
+// minutes, not seconds.
+const BINARY_PROCESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 #[cfg(not(test))]
 const DOWNLOAD_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 #[cfg(test)]

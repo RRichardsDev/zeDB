@@ -1,11 +1,12 @@
 use super::*;
 
-// Exports legitimately run far longer than ordinary queries, so the
-// shared client's whole-request deadline is overridden with a generous
-// ceiling; a stalled peer is caught by the idle deadline instead.
+// Exports legitimately run far longer than ordinary queries; a truly
+// dead peer is caught by the idle deadline, which is generous because
+// the gap before the first chunk includes the server computing a heavy
+// GROUP BY/ORDER BY stage, and compressed transfer emits whole blocks.
 const EXPORT_TOTAL_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 #[cfg(not(test))]
-const EXPORT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const EXPORT_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 #[cfg(test)]
 const EXPORT_IDLE_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -64,27 +65,37 @@ impl ChClient {
             .map_err(|error| ChError::Decode(format!("could not create {path:?}: {error}")))?;
         let mut written: u64 = 0;
         let mut stream = resp.bytes_stream();
-        loop {
-            let chunk = tokio::time::timeout(EXPORT_IDLE_TIMEOUT, stream.next())
-                .await
-                .map_err(|_| {
-                    ChError::Decode("export stalled while waiting for response data".into())
+        let streamed: Result<()> = async {
+            loop {
+                let chunk = tokio::time::timeout(EXPORT_IDLE_TIMEOUT, stream.next())
+                    .await
+                    .map_err(|_| {
+                        ChError::Decode("export stalled while waiting for response data".into())
+                    })?;
+                let Some(chunk) = chunk else {
+                    break;
+                };
+                let chunk = chunk?;
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|error| ChError::Decode(format!("write failed: {error}")))?;
+                written = written.checked_add(chunk.len() as u64).ok_or_else(|| {
+                    ChError::Decode("export byte count exceeded the supported range".into())
                 })?;
-            let Some(chunk) = chunk else {
-                break;
-            };
-            let chunk = chunk?;
-            file.write_all(&chunk)
+                on_progress(written);
+            }
+            file.flush()
                 .await
-                .map_err(|error| ChError::Decode(format!("write failed: {error}")))?;
-            written = written.checked_add(chunk.len() as u64).ok_or_else(|| {
-                ChError::Decode("export byte count exceeded the supported range".into())
-            })?;
-            on_progress(written);
+                .map_err(|error| ChError::Decode(format!("flush failed: {error}")))
         }
-        file.flush()
-            .await
-            .map_err(|error| ChError::Decode(format!("flush failed: {error}")))?;
+        .await;
+        if let Err(error) = streamed {
+            // A failed export must not leave a half-written file that
+            // looks like a result.
+            drop(file);
+            let _ = tokio::fs::remove_file(path).await;
+            return Err(error);
+        }
         Ok(written)
     }
 }
@@ -129,6 +140,10 @@ mod security_tests {
             "{result:?}"
         );
         assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(
+            !target.exists(),
+            "a failed export must not leave a partial file behind"
+        );
         server.abort();
     }
 }

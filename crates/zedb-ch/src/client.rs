@@ -17,11 +17,13 @@ mod streaming;
 mod topology;
 
 const MAX_MATERIALIZED_RESPONSE_BYTES: u64 = 1024 * 1024 * 1024;
-#[cfg(not(test))]
-const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-#[cfg(test)]
-const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_ERROR_RESPONSE_BYTES: u64 = 1024 * 1024;
+// A liveness probe answers fast or not at all; queries carry no such
+// deadline (their duration belongs to the user and the server).
+#[cfg(not(test))]
+const PING_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const PING_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Default)]
 pub struct ChConfig {
@@ -88,7 +90,13 @@ pub struct QueryStreamSummary {
 }
 
 impl ChClient {
-    pub fn new(cfg: ChConfig) -> Self {
+    pub fn new(mut cfg: ChConfig) -> Self {
+        // Saved endpoints predating strict URL parsing may be
+        // scheme-less ("localhost:8123"); read them as plain HTTP
+        // rather than refusing a previously-working connection.
+        if !cfg.url.trim().is_empty() && !cfg.url.contains("://") {
+            cfg.url = format!("http://{}", cfg.url.trim());
+        }
         let connect_timeout = cfg
             .driver
             .settings
@@ -97,9 +105,12 @@ impl ChClient {
             .and_then(|setting| setting.value.trim().parse::<u64>().ok())
             .filter(|&secs| secs > 0)
             .unwrap_or(10);
+        // No whole-request timeout: it would wall-clock streamed editor
+        // runs, live tails, and long migration statements, overriding
+        // the user's own max_execution_time. Connect stays bounded;
+        // query duration belongs to the server settings and the user.
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(connect_timeout))
-            .timeout(HTTP_REQUEST_TIMEOUT)
             // ClickHouse credentials use custom headers that Reqwest does not
             // classify as sensitive. Following redirects could forward them
             // to another authority, so database requests never redirect.
@@ -267,7 +278,7 @@ impl ChClient {
         let url = format!("{}/ping", self.cfg.url.trim_end_matches('/'));
         // ClickHouse does not authenticate /ping. Sending credentials here
         // creates exposure without adding a useful connection check.
-        match self.http.get(url).send().await {
+        match self.http.get(url).timeout(PING_TIMEOUT).send().await {
             Ok(resp) => resp.status().is_success(),
             Err(_) => false,
         }
@@ -535,8 +546,19 @@ mod security_tests {
         server.await.unwrap();
     }
 
+    #[test]
+    fn scheme_less_saved_endpoints_normalize_to_http() {
+        let client = ChClient::new(config("localhost:8123".into()));
+        assert_eq!(client.cfg.url, "http://localhost:8123");
+        assert!(client.ensure_acceptable_endpoint().is_ok());
+        // Credential-embedding URLs stay refused; normalization must
+        // not become a bypass.
+        let client = ChClient::new(config("user:secret@host:8123".into()));
+        assert!(client.ensure_acceptable_endpoint().is_err());
+    }
+
     #[tokio::test]
-    async fn stalled_http_peer_hits_the_whole_request_deadline() {
+    async fn stalled_http_peer_hits_the_ping_deadline() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {

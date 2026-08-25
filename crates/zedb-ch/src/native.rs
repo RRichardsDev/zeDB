@@ -22,7 +22,6 @@ use crate::ChConfig;
 
 const NATIVE_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const NATIVE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
-const NATIVE_STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 mod codec;
 mod pool;
@@ -293,12 +292,10 @@ impl NativeClient {
     ) -> Result<()> {
         let mut stream = self.inner.query_raw(sql).await.map_err(map_err)?;
         loop {
-            let block = tokio::time::timeout(NATIVE_STREAM_IDLE_TIMEOUT, stream.next())
-                .await
-                .map_err(|_| {
-                    self.close();
-                    ChError::NativeTransport("native stream idle deadline exceeded".into())
-                })?;
+            // No idle deadline: a live tail on a quiet table is
+            // legitimately silent for hours. A dead peer surfaces as a
+            // stream error/end, and the caller drops us to cancel.
+            let block = stream.next().await;
             let Some(block) = block else {
                 break;
             };

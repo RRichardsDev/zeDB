@@ -53,11 +53,17 @@ fn output_with_limits(
 
     let deadline = Instant::now() + timeout;
     let status = loop {
+        // Kill surviving group members (backgrounded descendants that
+        // inherited the output pipes) BEFORE reaping: the exited child
+        // is still a zombie we own, so its process-group id cannot
+        // have been recycled to an unrelated process yet. Kill after
+        // reap raced exactly that recycling.
+        #[cfg(unix)]
+        if child_exited_unreaped(child.id()) {
+            terminate_process_group(child.id());
+        }
         match child.try_wait() {
-            Ok(Some(status)) => {
-                terminate_process_group(child.id());
-                break status;
-            }
+            Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(error) => {
                 terminate_and_reap(&mut child);
@@ -131,6 +137,24 @@ fn read_bounded(
         }
         bytes.extend_from_slice(&buffer[..read]);
     }
+}
+
+/// Whether the child has exited but not been reaped (still a zombie):
+/// `WNOWAIT` peeks at the exit without freeing the PID.
+#[cfg(unix)]
+fn child_exited_unreaped(child_id: u32) -> bool {
+    let pid = libc::id_t::from(child_id);
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid,
+            &mut info,
+            libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+        )
+    };
+    // With WNOHANG, "not exited yet" reports success with si_pid 0.
+    rc == 0 && unsafe { info.si_pid() } != 0
 }
 
 fn terminate_and_reap(child: &mut std::process::Child) {
