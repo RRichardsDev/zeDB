@@ -135,7 +135,7 @@ async fn cancel_stops_a_streaming_turn() {
         if matches!(event, AgentEvent::MessageChunk { .. }) {
             chunks += 1;
             if chunks == 2 {
-                agent.cancel(&session_id).expect("cancel");
+                agent.cancel(&session_id).await.expect("cancel");
                 break;
             }
         }

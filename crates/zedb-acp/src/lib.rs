@@ -20,11 +20,19 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
-const MAX_ACP_FRAME_BYTES: usize = 2 * 1024 * 1024;
+// Above zeDB's own 4 MiB MCP output ceiling with JSON-escaping
+// headroom: the app must never emit a tool result it then refuses to
+// read back when the agent echoes it in an update.
+const MAX_ACP_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_STDERR_LINE_BYTES: usize = 64 * 1024;
 const MAX_PENDING_REQUESTS: usize = 64;
 const OUTGOING_CAPACITY: usize = 64;
 const EVENT_CAPACITY: usize = 256;
+// Initialize is the first frame after spawn, and for the npx-run
+// adapters the spawn includes downloading the package on a cold
+// cache; minutes, not seconds. The session handshake that follows is
+// a plain RPC.
+const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const PROMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
@@ -142,7 +150,19 @@ impl AgentConnection {
                 let line = match read_bounded_line(&mut reader, MAX_ACP_FRAME_BYTES).await {
                     Ok(BoundedLine::Line(line)) => line,
                     Ok(BoundedLine::TooLarge) => {
-                        break "agent frame exceeded the 2 MiB safety limit";
+                        // One oversized frame is that frame's problem,
+                        // not the thread's: drop it, surface it, keep
+                        // the conversation alive. (A dropped response
+                        // to a pending request fails via its timeout.)
+                        let _ = event_tx
+                            .send(AgentEvent::Stderr {
+                                line: format!(
+                                    "zeDB dropped an agent frame over the {} MiB limit",
+                                    MAX_ACP_FRAME_BYTES / (1024 * 1024)
+                                ),
+                            })
+                            .await;
+                        continue;
                     }
                     Ok(BoundedLine::Eof) => break "agent process ended",
                     Err(_) => break "could not read agent output",
@@ -203,7 +223,7 @@ impl AgentConnection {
         let message = message.to_string();
         if message.len() > MAX_ACP_FRAME_BYTES {
             self.pending.lock().expect("pending lock").remove(&id);
-            return Err(AcpError::Limit("outgoing frame exceeds 2 MiB"));
+            return Err(AcpError::Limit("outgoing frame exceeds the frame limit"));
         }
         match tokio::time::timeout(deadline, self.outgoing.send(message)).await {
             Ok(Ok(())) => {}
@@ -226,18 +246,18 @@ impl AgentConnection {
         }
     }
 
-    fn notify(&self, method: &str, params: Value) -> Result<(), AcpError> {
+    /// Awaited like every agent-bound send: a momentarily full writer
+    /// queue delays a user's Cancel, it must never drop it.
+    async fn notify(&self, method: &str, params: Value) -> Result<(), AcpError> {
         let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
         let message = message.to_string();
         if message.len() > MAX_ACP_FRAME_BYTES {
-            return Err(AcpError::Limit("outgoing frame exceeds 2 MiB"));
+            return Err(AcpError::Limit("outgoing frame exceeds the frame limit"));
         }
         self.outgoing
-            .try_send(message)
-            .map_err(|error| match error {
-                mpsc::error::TrySendError::Full(_) => AcpError::Limit("outgoing queue is full"),
-                mpsc::error::TrySendError::Closed(_) => AcpError::Closed,
-            })
+            .send(message)
+            .await
+            .map_err(|_| AcpError::Closed)
     }
 
     pub async fn initialize(&self) -> Result<InitializeResult, AcpError> {
@@ -249,7 +269,7 @@ impl AgentConnection {
             .request(
                 "initialize",
                 serde_json::to_value(params).expect("serialize"),
-                HANDSHAKE_TIMEOUT,
+                INITIALIZE_TIMEOUT,
             )
             .await?;
         serde_json::from_value(result).map_err(|error| AcpError::Protocol(error.to_string()))
@@ -295,8 +315,9 @@ impl AgentConnection {
 
     /// Ask the agent to stop the current turn; the in-flight prompt
     /// resolves with a cancelled stop reason.
-    pub fn cancel(&self, session_id: &str) -> Result<(), AcpError> {
+    pub async fn cancel(&self, session_id: &str) -> Result<(), AcpError> {
         self.notify("session/cancel", json!({ "sessionId": session_id }))
+            .await
     }
 
     /// Kill the agent process. Dropping the connection does this too.

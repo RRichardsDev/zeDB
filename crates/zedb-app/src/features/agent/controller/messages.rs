@@ -275,7 +275,13 @@ impl Workspace {
             return;
         };
         if let Some(session_id) = &thread.session_id {
-            let _ = thread.connection.cancel(session_id);
+            // Awaited send on the runtime: a full writer queue delays
+            // the cancel rather than dropping it.
+            let connection = thread.connection.clone();
+            let session_id = session_id.clone();
+            rt::tokio().spawn(async move {
+                let _ = connection.cancel(&session_id).await;
+            });
         }
         // Cancelled responders leave their cards behind; mark them so no
         // card keeps live buttons for a request that no longer exists.
