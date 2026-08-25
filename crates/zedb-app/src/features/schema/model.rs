@@ -37,12 +37,13 @@ pub(crate) struct PendingApply {
     pub(crate) object: String,
 }
 
+/// Whether the advisor may apply a suggestion directly. Production is
+/// blocked; an UNKNOWN tier (the connected cluster isn't in saved
+/// settings) is treated like dev, matching the rule this replaced:
+/// failing closed on a writable ad-hoc connection just denies the user
+/// with a reason they cannot act on.
 pub(crate) fn apply_in_place_allowed(read_only: bool, tier: Option<zedb_core::EnvTier>) -> bool {
-    !read_only
-        && matches!(
-            tier,
-            Some(zedb_core::EnvTier::Dev | zedb_core::EnvTier::Staging)
-        )
+    !read_only && tier != Some(zedb_core::EnvTier::Production)
 }
 
 impl PendingApply {

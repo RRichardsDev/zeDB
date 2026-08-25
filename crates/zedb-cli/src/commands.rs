@@ -29,7 +29,15 @@ pub fn pinned_binary(repo: &MigrationRepo) -> Result<PathBuf, String> {
     let version = &repo.config.engine.version;
     // Honor the fallback `zedb pin` may have resolved and recorded for
     // a version with no reviewed artifact; otherwise pin says "pinned"
-    // and the next command demands pinning again, forever.
+    // and the next command demands pinning again, forever. The
+    // substitution is never silent: replay-backed answers are computed
+    // under the fallback engine, and the user must know that.
+    if let Some(fallback) = zedb_ch::fallback_in_use(version) {
+        eprintln!(
+            "note: replaying on ClickHouse {fallback}; the repo pins {version}, which has no \
+             reviewed artifact"
+        );
+    }
     zedb_ch::cached_binary_or_fallback(version)
         .ok_or_else(|| format!("pinned ClickHouse {version} is not cached; run `zedb pin` first"))
 }

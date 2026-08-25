@@ -38,7 +38,7 @@ pub use client::{
 pub use error::{ChError, Result};
 pub use pin::{
     binary_cache_dir, cached_binary, cached_binary_or_fallback, discover_server_version,
-    ensure_binary, smoke_replay, PinError,
+    ensure_binary, fallback_in_use, smoke_replay, PinError,
 };
 pub use schema::{
     distributed_sharding_key, ColumnInfo, DatabaseMeta, MergeInfo, MvDependency,

@@ -22,7 +22,7 @@ pub fn status(
     json: bool,
 ) -> Result<(), String> {
     let (repo, targets, runtime) = prepare(root, &target_args)?;
-    let runner = Runner::new(&repo, connection.options());
+    let runner = Runner::new(&repo, connection.options()?);
     let statuses = runtime
         .block_on(runner.status(&targets))
         .map_err(|error| error.to_string())?;

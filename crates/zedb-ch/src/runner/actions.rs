@@ -246,7 +246,9 @@ impl Runner<'_> {
     /// refuses when zedb_migrations already has rows.
     pub async fn import_tracking(&self, source_table: &str) -> Result<u64, RunnerError> {
         self.require_write("import-tracking")?;
-        validate_qualified_table(source_table)?;
+        // Legacy tracking tables carry legacy names (hyphens included);
+        // quote rather than reject.
+        let source_table = backtick_qualified_table(source_table)?;
         if self.options.dry_run {
             // Dry runs deliberately make no network request (tested), so
             // the already-has-rows refusal below is NOT evaluated here;

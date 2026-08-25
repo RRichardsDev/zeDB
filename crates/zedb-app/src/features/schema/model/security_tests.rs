@@ -11,7 +11,7 @@ fn pending() -> PendingApply {
 }
 
 #[test]
-fn apply_in_place_requires_a_known_non_production_writable_tier() {
+fn apply_in_place_requires_a_writable_non_production_connection() {
     assert!(apply_in_place_allowed(false, Some(zedb_core::EnvTier::Dev)));
     assert!(apply_in_place_allowed(
         false,
@@ -25,7 +25,11 @@ fn apply_in_place_requires_a_known_non_production_writable_tier() {
         true,
         Some(zedb_core::EnvTier::Staging)
     ));
-    assert!(!apply_in_place_allowed(false, None));
+    // An unknown tier (an ad-hoc connection not in saved settings) is
+    // treated like dev: denying a writable connection with a reason
+    // the user cannot act on just overrides their intent.
+    assert!(apply_in_place_allowed(false, None));
+    assert!(!apply_in_place_allowed(true, None));
 }
 
 #[test]

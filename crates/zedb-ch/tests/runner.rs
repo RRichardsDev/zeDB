@@ -104,7 +104,7 @@ async fn import_tracking_rejects_query_structure_before_connecting() {
         .await
         .expect_err("query clauses are not table names")
         .to_string();
-    assert!(error.contains("plain identifiers"), "{error}");
+    assert!(error.contains("TABLE or DB.TABLE"), "{error}");
 }
 
 #[tokio::test]

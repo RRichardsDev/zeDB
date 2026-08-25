@@ -189,6 +189,7 @@ impl Workspace {
             cache_key: cache_key.clone(),
             break_assistant: false,
             primed: false,
+            always_allow_noted: false,
             scroll: gpui::ScrollHandle::new(),
             stick_to_bottom: true,
             connection: connection.clone(),

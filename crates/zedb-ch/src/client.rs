@@ -201,7 +201,10 @@ impl ChClient {
                     ("max_execution_time", &time),
                     ("max_result_rows", &rows),
                     ("max_result_bytes", &result_bytes),
-                    ("result_overflow_mode", "throw"),
+                    // break, not throw: the agent gets the first N rows
+                    // and a visible "capped" note instead of a hard
+                    // server error for asking a big question.
+                    ("result_overflow_mode", "break"),
                     ("max_bytes_to_read", &read_bytes),
                 ],
                 max_result_bytes,

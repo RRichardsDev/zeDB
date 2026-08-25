@@ -78,6 +78,7 @@ impl Workspace {
                 );
             }
         }
+        let stored_grants = self.preferences.agent_always_allow.clone();
         let Some(thread) = self.agent.thread.as_mut() else {
             return true;
         };
@@ -172,6 +173,21 @@ impl Workspace {
                     .iter()
                     .map(|option| option.option_id.clone())
                     .collect();
+                // A grant stored by the old Always-allow is deliberately
+                // not honored (tool titles are not verified identities),
+                // but silently ignoring the user's stored decision is
+                // its own bug: say so, once per thread.
+                if !thread.always_allow_noted
+                    && stored_grants.contains(&format!("{}|{title}", thread.agent_name))
+                {
+                    thread.always_allow_noted = true;
+                    thread.entries.push(ThreadEntry::Info(
+                        "You marked this tool Always allow in an earlier version; stored \
+                         grants no longer auto-approve (a tool's name is not a verified \
+                         identity), so each request asks again."
+                            .into(),
+                    ));
+                }
                 // Cards and queued responders pair by id: answers land on
                 // the exact card clicked, never "the oldest one".
                 let request_id = thread.next_permission_id;

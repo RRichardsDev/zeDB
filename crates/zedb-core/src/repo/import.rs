@@ -147,15 +147,23 @@ fn pinned_version(ancestor: &Path) -> Result<String, RepoError> {
             path: pin,
             message: "no CH_VERSION assignment found".into(),
         })?;
-    let parts: Vec<&str> = version.split('.').collect();
-    if parts.len() != 4
-        || parts
+    // Real pins carry suffixes ("24.8.1.1-lts") and sometimes fewer
+    // than four parts. The value only lands in zedb.toml, so a
+    // character allowlist suffices; the shape check just wants a
+    // leading dotted-numeric core.
+    let core = version.split('-').next().unwrap_or_default();
+    let parts: Vec<&str> = core.split('.').collect();
+    let core_ok = (2..=4).contains(&parts.len())
+        && parts
             .iter()
-            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
-    {
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    let suffix_ok = version
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-');
+    if !core_ok || !suffix_ok {
         return Err(RepoError::Config {
             path: ancestor.join("clickhouse_ddl/pin.py"),
-            message: format!("unsafe ClickHouse version {version:?}; expected N.N.N.N"),
+            message: format!("unsafe ClickHouse version {version:?}; expected N.N[.N.N][-suffix]"),
         });
     }
     Ok(version)
@@ -168,11 +176,22 @@ fn pinned_version(ancestor: &Path) -> Result<String, RepoError> {
 /// `zedb check equivalence` proving the result matches the chain.
 pub fn import_repo(ancestor: &Path, destination: &Path) -> Result<ImportReport, RepoError> {
     match std::fs::symlink_metadata(destination) {
-        Ok(_) => {
-            return Err(RepoError::Layout(format!(
-                "import destination must not already exist: {}",
-                destination.display()
-            )))
+        Ok(metadata) => {
+            // A pre-created EMPTY directory (a mounted volume, or a
+            // fresh `git init` whose only entry is .git) is a fine
+            // destination; anything with content, or a non-directory,
+            // is not.
+            let empty_dir = metadata.is_dir()
+                && !metadata.file_type().is_symlink()
+                && std::fs::read_dir(destination)?
+                    .filter_map(|entry| entry.ok())
+                    .all(|entry| entry.file_name() == ".git");
+            if !empty_dir {
+                return Err(RepoError::Layout(format!(
+                    "import destination must not already exist (or must be an empty directory): {}",
+                    destination.display()
+                )));
+            }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),

@@ -22,8 +22,10 @@ use crate::rt;
 use crate::theme;
 use crate::Workspace;
 
-const MAX_PERSISTED_TRANSCRIPT_ENTRIES: usize = 200;
-const MAX_PERSISTED_ENTRY_BYTES: usize = 32 * 1024;
+// Matches the live pane: reopening the last thread must not show less
+// than the user was just reading.
+const MAX_PERSISTED_TRANSCRIPT_ENTRIES: usize = 600;
+const MAX_PERSISTED_ENTRY_BYTES: usize = 256 * 1024;
 const MAX_AGENT_LOG_BYTES: u64 = 1024 * 1024;
 const MAX_PENDING_PERMISSIONS: usize = 64;
 const MAX_LIVE_TRANSCRIPT_ENTRIES: usize = 600;
@@ -207,6 +209,9 @@ pub struct ThreadState {
     pub break_assistant: bool,
     /// The session primer has been sent (first send of the thread).
     pub primed: bool,
+    /// The one-per-thread note that stored Always-allow grants are no
+    /// longer auto-applied has been shown.
+    pub always_allow_noted: bool,
     /// Transcript scroll position, for stick-to-bottom streaming.
     pub scroll: gpui::ScrollHandle,
     /// Follow new content while the user has not scrolled away.

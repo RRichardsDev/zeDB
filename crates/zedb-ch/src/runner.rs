@@ -90,32 +90,42 @@ pub(crate) fn backtick_identifier(name: &str) -> String {
     format!("`{}`", name.replace('\\', "\\\\").replace('`', "\\`"))
 }
 
-fn is_plain_identifier(value: &str) -> bool {
-    let mut characters = value.chars();
-    matches!(characters.next(), Some(character) if character.is_ascii_alphabetic() || character == '_')
-        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
-}
-
-fn validate_identifier(value: &str, label: &str) -> Result<(), RunnerError> {
-    if is_plain_identifier(value) {
+/// A name destined for a backtick-quoted identifier position: anything
+/// legal there (hyphens, dots) passes; only names quoting cannot make
+/// safe (empty, control characters) are refused.
+fn validate_quotable_identifier(value: &str, label: &str) -> Result<(), RunnerError> {
+    if !value.is_empty() && !value.chars().any(char::is_control) {
         Ok(())
     } else {
         Err(RunnerError::Refused(format!(
-            "{label} must be a plain ClickHouse identifier, got {value:?}"
+            "{label} must be a non-empty name without control characters, got {value:?}"
         )))
     }
 }
 
-fn validate_qualified_table(value: &str) -> Result<(), RunnerError> {
+/// Quote a possibly-qualified `db.table` (or bare `table`) reference
+/// for identifier position. Legacy names (hyphens included) pass via
+/// quoting; whitespace still refuses, so query clauses posing as table
+/// names fail here rather than at the server.
+fn backtick_qualified_table(value: &str) -> Result<String, RunnerError> {
     let parts: Vec<&str> = value.split('.').collect();
-    if (parts.len() == 1 || parts.len() == 2) && parts.iter().all(|part| is_plain_identifier(part))
+    if !(1..=2).contains(&parts.len())
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || part
+                    .chars()
+                    .any(|character| character.is_control() || character.is_whitespace())
+        })
     {
-        Ok(())
-    } else {
-        Err(RunnerError::Refused(format!(
-            "source table must be TABLE or DATABASE.TABLE using plain identifiers, got {value:?}"
-        )))
+        return Err(RunnerError::Refused(format!(
+            "expected TABLE or DB.TABLE identifiers, got {value:?}"
+        )));
     }
+    Ok(parts
+        .iter()
+        .map(|part| backtick_identifier(part))
+        .collect::<Vec<_>>()
+        .join("."))
 }
 
 fn terminal_field(text: &str) -> String {
@@ -173,26 +183,45 @@ mod security_tests {
     use super::*;
 
     #[test]
-    fn accepts_only_plain_sql_identifiers_and_qualified_tables() {
-        for identifier in ["default", "cluster_01", "_internal"] {
-            assert!(validate_identifier(identifier, "test").is_ok());
+    fn quotable_identifiers_accept_legal_names_and_refuse_the_unquotable() {
+        for identifier in [
+            "default",
+            "cluster_01",
+            "_internal",
+            "zedb-migrations",
+            "a.b",
+        ] {
+            assert!(validate_quotable_identifier(identifier, "test").is_ok());
         }
-        for identifier in ["", "db-name", "db name", "db/*x*/", "db.settings"] {
-            assert!(validate_identifier(identifier, "test").is_err());
+        for identifier in ["", "db\nname"] {
+            assert!(validate_quotable_identifier(identifier, "test").is_err());
         }
+    }
 
-        for table in ["schema_migrations", "default.schema_migrations"] {
-            assert!(validate_qualified_table(table).is_ok());
-        }
+    #[test]
+    fn qualified_tables_quote_legacy_names_and_refuse_query_shapes() {
+        assert_eq!(
+            backtick_qualified_table("schema-migrations").unwrap(),
+            "`schema-migrations`"
+        );
+        assert_eq!(
+            backtick_qualified_table("default.schema_migrations").unwrap(),
+            "`default`.`schema_migrations`"
+        );
         for table in [
             "",
             "default.schema.migrations",
-            "url('https://example.test')",
             "default.schema_migrations WHERE 1",
-            "default.schema_migrations/*comment*/",
         ] {
-            assert!(validate_qualified_table(table).is_err());
+            assert!(backtick_qualified_table(table).is_err(), "{table:?}");
         }
+        // Function-call and comment shapes are neutralized rather than
+        // rejected: fully backticked, they are inert identifiers that
+        // simply fail to exist server-side.
+        assert_eq!(
+            backtick_qualified_table("t/*comment*/").unwrap(),
+            "`t/*comment*/`"
+        );
     }
 
     #[test]

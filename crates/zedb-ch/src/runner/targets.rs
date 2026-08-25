@@ -19,7 +19,10 @@ impl<'a> Runner<'a> {
     }
 
     pub(super) fn tracking_table(&self) -> String {
-        format!("{}.zedb_migrations", self.repo.config.tracking.database)
+        format!(
+            "{}.zedb_migrations",
+            backtick_identifier(&self.repo.config.tracking.database)
+        )
     }
 
     /// This repo's identity in the tracking rows; several repos can
@@ -45,13 +48,12 @@ impl<'a> Runner<'a> {
         Ok(())
     }
 
-    /// The tracking database is interpolated into SQL as a bare
-    /// identifier, so it must be a plain identifier chunk. The cluster
-    /// name is NOT validated here: where the runner itself interpolates
-    /// it (tracking DDL) it is backtick-quoted, and hyphenated cluster
-    /// names are legal and common, so read paths must not reject them.
+    /// Every interpolation of the tracking database is backtick-quoted
+    /// (identifier position) or string-quoted (literal position), so a
+    /// hyphenated or dotted name from the user's own zedb.toml is legal;
+    /// only names quoting cannot make safe are refused.
     pub(super) fn validate_sql_identifiers(&self) -> Result<(), RunnerError> {
-        validate_identifier(&self.repo.config.tracking.database, "tracking database")
+        validate_quotable_identifier(&self.repo.config.tracking.database, "tracking database")
     }
 
     /// The fleet chain: every non-targeted migration in order.
@@ -102,9 +104,9 @@ impl<'a> Runner<'a> {
                         default_query = format!(
                             "SELECT name FROM system.databases WHERE name NOT IN \
                              ('system', 'information_schema', 'INFORMATION_SCHEMA', \
-                             'default', '{}') \
+                             'default', {}) \
                              ORDER BY name",
-                            self.repo.config.tracking.database
+                            quote(&self.repo.config.tracking.database)
                         );
                         &default_query
                     }

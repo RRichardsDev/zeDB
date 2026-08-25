@@ -17,6 +17,22 @@ GitHub release notes.
   stream. Likewise the 1 GiB response byte cap no longer applies to
   streamed editor results, so Unlimited means unlimited; internal and
   agent queries keep both caps.
+- The review's silent policy changes now speak or soften: status and
+  verify take --cluster/--no-cluster/--param/--param-file again (a
+  templated repo needs them to render; passwords stay file-only);
+  agent queries over the row cap get the first 200 rows with a capped
+  note instead of a server error; drift/format/regen computed on a
+  fallback ClickHouse version say so in the CLI and the app; a stored
+  Always-allow grant that no longer auto-approves is explained once in
+  the thread; reopening the last agent thread keeps as much as the
+  live pane showed; the fleet confirm survives a symlinked repo path;
+  the advisor's apply-in-place works on writable connections whose
+  tier isn't saved; repo import accepts a pre-created empty (or
+  git-init) destination and suffixed ClickHouse pins like
+  24.8.1.1-lts; hyphenated tracking databases and legacy tracking
+  tables are backtick-quoted rather than refused; the fleet cluster
+  value and custom agents sync across machines; and Linux replay
+  commands stop re-hashing the whole cached archive on every run.
 - Fixed: a sweep of the August security review's guardrails moved
   every limit that sat in a hands-on path off the user's explicit
   choices while keeping protection on agent and untrusted paths.

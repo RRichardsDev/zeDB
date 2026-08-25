@@ -33,6 +33,16 @@ impl Workspace {
         }
         self.fleet.verify_total = databases.len();
         self.fleet.drift_error = None;
+        // Replay under a substituted engine version must never be
+        // silent: drift verdicts are computed on the fallback binary.
+        if let Some(fallback) = zedb_ch::fallback_in_use(&repo.config.engine.version) {
+            self.notice = Some(format!(
+                "Drift replays on ClickHouse {fallback}; the repo pins {} (no reviewed artifact)",
+                repo.config.engine.version
+            ));
+            self.notice_warning = true;
+            self.notice_flash_id += 1;
+        }
         let config = connected.client_config.clone();
         // Verify covers live drift; the chain checks cover the repo
         // itself. One gesture runs both, the checks silently: their

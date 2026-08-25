@@ -16,7 +16,7 @@ pub fn verify(
 ) -> Result<(), String> {
     let repo = open_repo(root)?;
     let binary = pinned_binary(&repo)?;
-    let runner = Runner::new(&repo, connection.options());
+    let runner = Runner::new(&repo, connection.options()?);
     let verifier = zedb_ch::verify::Verifier::new(&repo, &runner, binary);
     let targets = target_args.targets()?;
     let runtime = runtime()?;

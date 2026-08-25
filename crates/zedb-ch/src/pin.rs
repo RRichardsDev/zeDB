@@ -132,16 +132,32 @@ fn verify_cached_binary(path: &Path, version: &str) -> bool {
         return false;
     };
     let integrity_matches = if asset_name.ends_with(".tgz") {
-        let Some(expected) = parse_sha256(&trusted.sha256) else {
-            return false;
-        };
-        let archive = artifact_path(path);
-        let expected_entry =
-            PathBuf::from(format!("clickhouse-common-static-{version}")).join("usr/bin/clickhouse");
-        sha256_file(&archive).is_ok_and(|actual| actual == expected)
-            && binary_digest_from_archive(&archive, &expected_entry)
-                .and_then(|archived| sha256_file(path).map(|cached| archived == cached))
-                .unwrap_or(false)
+        // A recorded continuity digest (written after one successful
+        // full verification below) reduces every later probe to one
+        // binary hash, like macOS: re-hashing the whole retained
+        // archive plus a gunzip on every invocation was hundreds of
+        // MB of work per command.
+        if let Some(recorded) = recorded_digest(path) {
+            sha256_file(path).is_ok_and(|actual| actual == recorded)
+        } else {
+            let Some(expected) = parse_sha256(&trusted.sha256) else {
+                return false;
+            };
+            let archive = artifact_path(path);
+            let expected_entry = PathBuf::from(format!("clickhouse-common-static-{version}"))
+                .join("usr/bin/clickhouse");
+            let verified = sha256_file(&archive).is_ok_and(|actual| actual == expected)
+                && binary_digest_from_archive(&archive, &expected_entry)
+                    .and_then(|archived| sha256_file(path).map(|cached| archived == cached))
+                    .unwrap_or(false);
+            if verified {
+                if let Ok(cached) = sha256_file(path) {
+                    let _ =
+                        std::fs::write(digest_path(path), format!("{}\n", format_sha256(&cached)));
+                }
+            }
+            verified
+        }
     } else {
         // macOS rewrites adhoc linker-signed binaries in place on
         // first execution (signature replacement plus provenance
@@ -329,6 +345,18 @@ fn remembered_fallback(version: &str) -> Option<String> {
 /// printed stays true for the replay-backed commands that follow it.
 pub fn cached_binary_or_fallback(version: &str) -> Option<PathBuf> {
     cached_binary(version).or_else(|| cached_binary(&remembered_fallback(version)?))
+}
+
+/// The fallback version actually serving `version`, when the exact
+/// version has no reviewed artifact. Replay-backed answers (drift,
+/// formatting, regen) are computed under this engine, not the pin;
+/// callers must say so rather than let the substitution stay silent.
+pub fn fallback_in_use(version: &str) -> Option<String> {
+    if cached_binary(version).is_some() {
+        return None;
+    }
+    let fallback = remembered_fallback(version)?;
+    cached_binary(&fallback).is_some().then_some(fallback)
 }
 
 /// `ensure_binary` with download progress reported to `progress`;

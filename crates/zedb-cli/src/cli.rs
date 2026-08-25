@@ -193,6 +193,20 @@ pub struct ReadConnectionArgs {
     /// Read the server password from this file.
     #[arg(long = "password-file", value_name = "FILE", value_parser = read_secret_file)]
     pub password: Option<String>,
+    /// Value for ${cluster}; a repo whose templates use it needs one
+    /// even for read-only rendering (status, verify).
+    #[arg(long)]
+    pub cluster: Option<String>,
+    /// Render for a single node: ON CLUSTER dropped, Replicated engines
+    /// declustered.
+    #[arg(long, conflicts_with = "cluster")]
+    pub no_cluster: bool,
+    /// Template parameter override, name=value (repeatable).
+    #[arg(long = "param", value_parser = parse_param)]
+    pub params: Vec<(String, String)>,
+    /// Read a template parameter from a file, name=FILE (repeatable).
+    #[arg(long = "param-file", value_parser = parse_param_file)]
+    pub param_files: Vec<(String, String)>,
 }
 
 #[derive(clap::Args)]
@@ -239,8 +253,16 @@ pub struct ConnectionArgs {
 }
 
 impl ReadConnectionArgs {
-    pub fn options(&self) -> zedb_ch::runner::RunnerOptions {
-        zedb_ch::runner::RunnerOptions {
+    pub fn options(&self) -> Result<zedb_ch::runner::RunnerOptions, String> {
+        let mut overrides = BTreeMap::new();
+        for (name, value) in self.params.iter().chain(&self.param_files) {
+            if overrides.insert(name.clone(), value.clone()).is_some() {
+                return Err(format!(
+                    "template parameter {name:?} was supplied more than once"
+                ));
+            }
+        }
+        Ok(zedb_ch::runner::RunnerOptions {
             server: zedb_ch::ChConfig {
                 url: self.server.clone(),
                 user: self.user.clone(),
@@ -250,13 +272,14 @@ impl ReadConnectionArgs {
                 driver: Default::default(),
                 native_port: None,
             },
+            // No admin executor on read commands: unused authority.
             admin: None,
-            cluster: None,
-            no_cluster: false,
+            cluster: self.cluster.clone(),
+            no_cluster: self.no_cluster,
             write: false,
             dry_run: false,
-            overrides: BTreeMap::new(),
-        }
+            overrides,
+        })
     }
 }
 
@@ -443,11 +466,39 @@ mod tests {
         let Command::Status { connection, .. } = cli.command else {
             panic!("expected status");
         };
-        let options = connection.options();
+        let options = connection.options().unwrap();
         assert_eq!(options.server.password, None);
         assert!(options.server.read_only);
         assert!(options.admin.is_none());
         assert!(!options.write);
+    }
+
+    #[test]
+    fn read_commands_accept_cluster_and_params() {
+        // status/verify need ${cluster} and ${param} values to render a
+        // templated repo, even though they never write.
+        let cli = parse(&[
+            "zedb",
+            "status",
+            "--server",
+            "http://h:8123",
+            "--cluster",
+            "prod",
+            "--param",
+            "ttl_days=30",
+            "--all",
+        ]);
+        let Command::Status { connection, .. } = cli.command else {
+            panic!("expected status");
+        };
+        let options = connection.options().unwrap();
+        assert_eq!(options.cluster.as_deref(), Some("prod"));
+        assert_eq!(
+            options.overrides.get("ttl_days").map(String::as_str),
+            Some("30")
+        );
+        assert!(options.server.read_only, "read commands stay read-only");
+        assert!(!options.write, "params never smuggle in write consent");
     }
 
     #[test]

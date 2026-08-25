@@ -21,7 +21,9 @@ STATUS: all 18 items below fixed on feature/query-analytics
 (commits 718dbc5 zedb-ch, 2b231b6 zedb-core, 3126cd5 zedb-acp, and
 the zedb-app checkout/rotation commit), plus the process-group
 PID-recycle race and the droppable Cancel from the notes at the end.
-Tier 2 remains open for product decisions.
+Tier 2 was resolved 2026-08-25: every item was softened or surfaced
+(one commit after the tier-1 sweep); the CLI regained --cluster and
+--param on read commands, while --password-in-argv stays removed.
 
 1. [verified] `HTTP_REQUEST_TIMEOUT` 5 min on the shared reqwest client
    (`zedb-ch/src/client.rs:21`, installed at `:102`). Reqwest's builder
@@ -107,7 +109,7 @@ Tier 2 remains open for product decisions.
     no normalization on load. Normalize; keep the credential-in-URL
     refusal.
 
-## Tier 2: deliberate policy, but silent; surface or soften (decide)
+## Tier 2: deliberate policy, but silent; surface or soften (RESOLVED)
 
 - Always-allow permission grants now ignored with no notice
   (`agent/preferences` + events/messages deletions). Rationale sound

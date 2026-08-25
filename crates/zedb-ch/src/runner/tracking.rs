@@ -20,7 +20,7 @@ impl Runner<'_> {
         } else {
             (String::new(), "MergeTree".into(), "MergeTree".into())
         };
-        let database = &tracking.database;
+        let database = backtick_identifier(&tracking.database);
         let statements = [
             format!("CREATE DATABASE IF NOT EXISTS {database}{on_cluster}"),
             format!(

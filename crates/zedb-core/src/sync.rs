@@ -33,14 +33,13 @@ pub struct Payload {
 pub fn sanitized_preferences(preferences: &Preferences) -> Preferences {
     let mut preferences = preferences.clone();
     preferences.fleet_repo = None;
-    // Per-connection checkout paths and the rendered cluster value are
-    // machine-local like fleet_repo: they name paths and DDL substitutions
-    // that only make sense on the machine that set them.
+    // Per-connection checkout paths are machine-local like fleet_repo:
+    // they name paths that only make sense on the machine that set
+    // them. The cluster value and custom agent definitions travel: the
+    // user configured them once and a sync is expected to carry them.
     preferences.fleet_repos.clear();
-    preferences.fleet_cluster = None;
     preferences.settings_sync_url = None;
     preferences.settings_sync_repo = None;
-    preferences.custom_agents.clear();
     preferences.agent_always_allow.clear();
     preferences.last_agent = None;
     preferences
@@ -354,12 +353,19 @@ pub fn apply_preferences(local: &Preferences, pulled: &Preferences) -> Preferenc
     let mut merged = pulled.clone();
     merged.fleet_repo = local.fleet_repo.clone();
     merged.fleet_repos = local.fleet_repos.clone();
-    merged.fleet_cluster = local.fleet_cluster.clone();
     merged.settings_sync_url = local.settings_sync_url.clone();
     merged.settings_sync_repo = local.settings_sync_repo.clone();
-    merged.custom_agents = local.custom_agents.clone();
     merged.agent_always_allow = local.agent_always_allow.clone();
     merged.last_agent = local.last_agent.clone();
+    // fleet_cluster and custom_agents follow the payload: synced by
+    // choice, matching sanitized_preferences. An empty pulled agent
+    // list must not wipe a local one (older payloads omit the field).
+    if merged.custom_agents.is_empty() {
+        merged.custom_agents = local.custom_agents.clone();
+    }
+    if merged.fleet_cluster.is_none() {
+        merged.fleet_cluster = local.fleet_cluster.clone();
+    }
     merged
 }
 
@@ -424,7 +430,7 @@ mod tests {
             !raw.contains("settings.git"),
             "sync config itself never syncs"
         );
-        assert!(!raw.contains("local-agent"), "agent commands stay local");
+        assert!(raw.contains("local-agent"), "custom agents sync by choice");
         assert!(!raw.contains("Read file"), "permission grants stay local");
 
         let read = read_payload(directory.path()).unwrap().unwrap();
@@ -485,22 +491,27 @@ mod tests {
             .fleet_repos
             .insert("prod".into(), "/local/prod-checkout".into());
 
-        // Machine-local repo paths and the rendered cluster never leave.
+        // Machine-local repo paths never leave; the cluster value is a
+        // synced setting like any other.
         let sanitized = sanitized_preferences(&local);
         assert!(sanitized.fleet_repos.is_empty());
-        assert_eq!(sanitized.fleet_cluster, None);
+        assert_eq!(sanitized.fleet_cluster.as_deref(), Some("local-cluster"));
 
-        // A pulled payload cannot set them either.
+        // A pulled payload cannot set repo paths; the cluster follows
+        // the payload, and its absence keeps the local value.
         let mut pulled = Preferences::default();
         pulled
             .fleet_repos
             .insert("prod".into(), "/attacker/path".into());
-        pulled.fleet_cluster = Some("attacker-cluster".into());
+        pulled.fleet_cluster = Some("their-cluster".into());
         let merged = apply_preferences(&local, &pulled);
         assert_eq!(
             merged.fleet_repos.get("prod").map(String::as_str),
             Some("/local/prod-checkout")
         );
+        assert_eq!(merged.fleet_cluster.as_deref(), Some("their-cluster"));
+        pulled.fleet_cluster = None;
+        let merged = apply_preferences(&local, &pulled);
         assert_eq!(merged.fleet_cluster.as_deref(), Some("local-cluster"));
     }
 
@@ -667,8 +678,17 @@ mod tests {
         assert_eq!(merged.fleet_repo.as_deref(), Some("/mine"));
         assert_eq!(merged.settings_sync_url.as_deref(), Some("url"));
         assert_eq!(merged.settings_sync_repo.as_deref(), Some("/sync"));
-        assert_eq!(merged.custom_agents, local.custom_agents);
+        // Custom agents sync by choice; an empty pulled list would not
+        // have wiped the local one (tested via the merge fallback).
+        assert_eq!(merged.custom_agents, pulled.custom_agents);
         assert_eq!(merged.agent_always_allow, local.agent_always_allow);
         assert_eq!(merged.last_agent, local.last_agent);
+
+        let empty_pull = Preferences::default();
+        let merged = apply_preferences(&local, &empty_pull);
+        assert_eq!(
+            merged.custom_agents, local.custom_agents,
+            "an older payload without agents must not wipe local ones"
+        );
     }
 }

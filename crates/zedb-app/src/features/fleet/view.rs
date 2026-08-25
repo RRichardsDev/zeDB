@@ -125,9 +125,23 @@ pub(super) struct FleetConfirmation<'a> {
 }
 
 pub(super) fn fleet_context_matches(check: &FleetConfirmation<'_>) -> bool {
+    // The repo comparison is canonicalized: a symlinked or otherwise
+    // differently-spelled path to the same checkout is the same repo,
+    // and a literal PathBuf mismatch would silently discard the
+    // reviewed dry run.
+    let same_repo = check.current_repo.is_some_and(|current| {
+        current == check.pending.repo_root.as_path()
+            || match (
+                std::fs::canonicalize(current),
+                std::fs::canonicalize(&check.pending.repo_root),
+            ) {
+                (Ok(current), Ok(pending)) => current == pending,
+                _ => false,
+            }
+    });
     check.write_unlocked
         && check.current_connection == Some(check.pending.connection.as_str())
-        && check.current_repo == Some(check.pending.repo_root.as_path())
+        && same_repo
 }
 
 pub(super) fn fleet_confirmation_valid(check: &FleetConfirmation<'_>) -> bool {
