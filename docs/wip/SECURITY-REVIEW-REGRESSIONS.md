@@ -17,6 +17,12 @@ findings with file:line evidence that still need a look before fixing.
 
 ## Tier 1: overrides explicit user intent in hands-on paths (fix)
 
+STATUS: all 18 items below fixed on feature/query-analytics
+(commits 718dbc5 zedb-ch, 2b231b6 zedb-core, 3126cd5 zedb-acp, and
+the zedb-app checkout/rotation commit), plus the process-group
+PID-recycle race and the droppable Cancel from the notes at the end.
+Tier 2 remains open for product decisions.
+
 1. [verified] `HTTP_REQUEST_TIMEOUT` 5 min on the shared reqwest client
    (`zedb-ch/src/client.rs:21`, installed at `:102`). Reqwest's builder
    timeout covers connect through end-of-body, so it wall-clocks every

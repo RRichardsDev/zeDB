@@ -1005,6 +1005,46 @@ impl Workspace {
                     )
                 });
                 if !same_form {
+                    // The control plane has ALREADY rotated: discarding
+                    // the new password here would leave the saved
+                    // connection holding a dead one. Persist it to the
+                    // Keychain of the connection this service belongs
+                    // to; only when no saved connection matches is
+                    // re-rotating the answer.
+                    if let Ok(password) = &outcome {
+                        let owner = this.connection.connections.iter().find(|connection| {
+                            connection.cloud.as_ref().is_some_and(|cloud| {
+                                cloud.org_id == expected_cloud.org_id
+                                    && cloud.service_id == expected_cloud.service_id
+                            })
+                        });
+                        if let Some(owner) = owner {
+                            let stored = zedb_core::secrets::set_password(&owner.name, password);
+                            match stored {
+                                Ok(()) => {
+                                    this.flash_notice(
+                                        format!(
+                                            "The rotated password was stored in the Keychain for \
+                                             {}; the form had moved on",
+                                            owner.name
+                                        ),
+                                        cx,
+                                    );
+                                    return;
+                                }
+                                Err(error) => {
+                                    this.flash_warning(
+                                        format!(
+                                            "The Cloud password was rotated but could not be \
+                                             stored: {error}; rotate it again"
+                                        ),
+                                        cx,
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    }
                     this.flash_warning(
                         "The Cloud password was rotated after its form changed; rotate it again to capture the new value",
                         cx,

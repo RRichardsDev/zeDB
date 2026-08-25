@@ -241,9 +241,7 @@ impl Workspace {
         }
 
         let Some(dest) = dirs::data_local_dir().map(|dir| {
-            dir.join("zedb")
-                .join("settings-sync")
-                .join(crate::managed_checkout::directory_name(&url))
+            crate::managed_checkout::checkout_path(&dir.join("zedb").join("settings-sync"), &url)
         }) else {
             self.flash_warning("Could not determine a local data directory", cx);
             return;

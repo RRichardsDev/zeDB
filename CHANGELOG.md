@@ -17,6 +17,27 @@ GitHub release notes.
   stream. Likewise the 1 GiB response byte cap no longer applies to
   streamed editor results, so Unlimited means unlimited; internal and
   agent queries keep both caps.
+- Fixed: a sweep of the August security review's guardrails moved
+  every limit that sat in a hands-on path off the user's explicit
+  choices while keeping protection on agent and untrusted paths.
+  Queries and migrations no longer hit a hidden 5-minute wall (your
+  max_execution_time is the law again); results with >100k-element
+  arrays decode; live tail survives quiet tables; big exports get 10
+  minutes between chunks and failed ones clean up their partial file;
+  scheme-less saved endpoints work again; chain verification gets 10
+  minutes and a fresh ClickHouse binary 5 for Gatekeeper; a >16 MiB
+  migration file no longer makes the repo unopenable (cap now 256
+  MiB) and symlinks under migrations/ fail loudly instead of silently
+  shortening the chain; saved tabs and history that fail to load are
+  parked as .load-failed instead of being wiped by the next save; git
+  keeps your gpgSign, credential.helper, and sshCommand settings,
+  clones get 15 minutes, and IPv6 remotes are accepted; settings sync
+  propagates connection user/database edits again; agents tolerate a
+  cold npx download at first launch, big tool results no longer kill
+  the thread, and Cancel can't be dropped; pre-existing fleet and
+  sync checkouts migrate to the new directory names instead of being
+  re-cloned; a Cloud password rotation that finishes after the form
+  moved on is stored in the Keychain instead of discarded.
 - Fixed: agents start again when zeDB is launched from the Dock or
   Spotlight. A GUI launch carries no shell PATH, so the npx-run ACP
   adapters died at spawn ("env: node: No such file or directory") and
