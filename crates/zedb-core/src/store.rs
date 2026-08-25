@@ -97,6 +97,32 @@ pub(crate) fn read_bounded_string(path: &Path, limit: u64) -> std::io::Result<St
     })
 }
 
+/// Read a local state file that loads best-effort (tabs, history,
+/// connections). Missing file: None, the normal first run. Any other
+/// failure (oversized, symlinked, unreadable): the file is moved aside
+/// to `<name>.load-failed` and None is returned. The rename is the
+/// point: callers fall back to empty state and their next save would
+/// otherwise overwrite the unreadable file, turning one bad load into
+/// permanent data loss.
+pub(crate) fn read_state_or_quarantine(path: &Path, limit: u64) -> Option<String> {
+    match read_bounded_string(path, limit) {
+        Ok(raw) => Some(raw),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => {
+            quarantine_state_file(path);
+            None
+        }
+    }
+}
+
+/// Move an unreadable/unparseable state file aside so the next save
+/// cannot destroy it. Best-effort; a failed rename changes nothing.
+pub(crate) fn quarantine_state_file(path: &Path) {
+    let mut quarantined = path.as_os_str().to_owned();
+    quarantined.push(".load-failed");
+    let _ = std::fs::rename(path, PathBuf::from(quarantined));
+}
+
 /// Write `data` to `path` atomically and private to the owner: the parent
 /// directory is created 0700, the payload is written to a sibling temp file
 /// created 0600 (mode applied at open time, no chmod race), then renamed

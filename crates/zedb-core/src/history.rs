@@ -45,11 +45,20 @@ pub fn load_history() -> Vec<HistoryEntry> {
     let Ok(path) = history_path() else {
         return Vec::new();
     };
-    let mut entries: Vec<HistoryEntry> =
-        crate::store::read_bounded_string(&path, crate::store::MAX_LOCAL_STATE_BYTES)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default();
+    let Some(raw) =
+        crate::store::read_state_or_quarantine(&path, crate::store::MAX_LOCAL_STATE_BYTES)
+    else {
+        return Vec::new();
+    };
+    let mut entries: Vec<HistoryEntry> = match serde_json::from_str(&raw) {
+        Ok(entries) => entries,
+        Err(_) => {
+            // Unparseable history is moved aside, not overwritten by
+            // the next save.
+            crate::store::quarantine_state_file(&path);
+            return Vec::new();
+        }
+    };
     entries.truncate(HISTORY_CAP);
     entries
 }

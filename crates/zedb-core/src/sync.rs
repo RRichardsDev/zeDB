@@ -78,14 +78,29 @@ pub fn merge_synced_connections(
 ) -> Vec<ConnectionConfig> {
     use std::collections::HashSet;
     // Keep every local record and its ordering. A remote payload may add a
-    // connection, but it cannot delete, reorder, or mutate local authority.
+    // connection, but it cannot delete, reorder, or mutate local AUTHORITY:
+    // endpoints (where credentials go), read-only, tier, driver, and Cloud
+    // linkage stay local. Identity fields the user edits and expects to
+    // follow the sync (login user, default database) do propagate; neither
+    // routes credentials anywhere new.
     let mut merged = local.to_vec();
     let mut seen: HashSet<&str> = local
         .iter()
         .map(|connection| connection.name.as_str())
         .collect();
     for incoming in pulled {
-        if incoming.name.is_empty() || !seen.insert(incoming.name.as_str()) {
+        if incoming.name.is_empty() {
+            continue;
+        }
+        if let Some(existing) = merged
+            .iter_mut()
+            .find(|connection| connection.name == incoming.name)
+        {
+            existing.user = incoming.user.clone();
+            existing.database = incoming.database.clone();
+            continue;
+        }
+        if !seen.insert(incoming.name.as_str()) {
             continue;
         }
         if incoming
@@ -534,9 +549,46 @@ mod tests {
         );
         assert!(merged[0].read_only, "read-only must not be weakened");
         assert_eq!(merged[0].tier, EnvTier::Production, "tier must not weaken");
-        assert_eq!(merged[0].user, "default");
-        assert_eq!(merged[0].database, None);
+        // Login identity follows the sync: a wrong user against the
+        // still-local endpoint can only fail auth, never route the
+        // credential anywhere new. Driver settings stay local.
+        assert_eq!(merged[0].user, "attacker");
+        assert_eq!(merged[0].database, Some("attacker_db".into()));
         assert!(merged[0].driver.settings.is_empty());
+    }
+
+    #[test]
+    fn merge_propagates_edits_to_identity_fields() {
+        let mut local = vec![ConnectionConfig {
+            name: "dev".into(),
+            nodes: vec![ConnectionNode {
+                name: "Node 1".into(),
+                endpoint: "https://dev.example:8443".into(),
+                native_port: None,
+            }],
+            user: "old_user".into(),
+            database: None,
+            tier: EnvTier::Dev,
+            read_only: false,
+            driver: Default::default(),
+            cloud: None,
+        }];
+        let mut pulled = local.clone();
+        pulled[0].user = "new_user".into();
+        pulled[0].database = Some("analytics".into());
+        let merged = merge_synced_connections(&local, &pulled);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].user, "new_user", "edits must propagate");
+        assert_eq!(merged[0].database, Some("analytics".into()));
+        assert!(!merged[0].read_only, "local trust posture is untouched");
+        assert_eq!(merged[0].tier, EnvTier::Dev);
+        // And the local record keeps its own authority fields even
+        // when the payload disagrees.
+        pulled[0].read_only = true;
+        local[0].database = Some("local_db".into());
+        let merged = merge_synced_connections(&local, &pulled);
+        assert!(!merged[0].read_only);
+        assert_eq!(merged[0].database, Some("analytics".into()));
     }
 
     #[test]

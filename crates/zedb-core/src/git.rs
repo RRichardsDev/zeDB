@@ -16,8 +16,10 @@ use std::time::{Duration, Instant};
 /// Local git operations (status, config, commit): fast, but bounded so a
 /// wedged or malicious child cannot pin a blocking-pool thread forever.
 const GIT_LOCAL_TIMEOUT: Duration = Duration::from_secs(30);
-/// Network operations (clone, ls-remote, push, pull) get a longer budget.
-const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
+/// Network operations (clone, ls-remote, push, pull) get a longer budget:
+/// a real clone of a large repo over a slow link takes minutes, and a
+/// killed clone reads as a failure the user cannot act on.
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// Cap captured git output; a repo with millions of entries cannot balloon
 /// memory, and the child is killed by the timeout once its pipe backs up.
 const MAX_GIT_OUTPUT: u64 = 16 * 1024 * 1024;
@@ -25,6 +27,14 @@ const MAX_GIT_OUTPUT: u64 = 16 * 1024 * 1024;
 /// A git `Command` with the repo-local execution vectors neutralized:
 /// fsmonitor and hooks (both nameable in a shared `.git/config`) are off,
 /// and optional index locks are skipped so a read cannot fight a writer.
+///
+/// Deliberately NOT overridden: `commit.gpgSign`/`tag.gpgSign` (a user
+/// who configured signing gets signed commits; silently unsigned ones
+/// could pass or fail branch protection behind their back),
+/// `credential.helper` (the user's own auth setup must keep working on
+/// every platform), and `core.sshCommand` (corporate SSH wrappers are a
+/// deliberate choice). Those are the user's explicit git identity, not
+/// repo-local code execution.
 fn git_command(root: Option<&Path>) -> Command {
     let mut command = Command::new("git");
     if let Some(root) = root {
@@ -35,12 +45,6 @@ fn git_command(root: Option<&Path>) -> Command {
         "core.fsmonitor=false",
         "-c",
         "core.hooksPath=/dev/null",
-        "-c",
-        "commit.gpgSign=false",
-        "-c",
-        "tag.gpgSign=false",
-        "-c",
-        "credential.helper=",
         "-c",
         "core.gitProxy=none",
         "-c",
@@ -57,11 +61,7 @@ fn git_command(root: Option<&Path>) -> Command {
         "protocol.file.allow=always",
         "-c",
         "protocol.ext.allow=never",
-        "-c",
-        "core.sshCommand=ssh",
     ]);
-    #[cfg(target_os = "macos")]
-    command.args(["-c", "credential.helper=osxkeychain"]);
     command.env("GIT_OPTIONAL_LOCKS", "0");
     #[cfg(unix)]
     {
@@ -133,17 +133,43 @@ fn run_capture(mut command: Command, timeout: Duration) -> std::io::Result<Outpu
                     stderr = err_rx.recv_timeout(Duration::from_secs(1)).ok();
                 }
             }
+            let stdout = stdout.unwrap_or_default();
+            let stderr = stderr.unwrap_or_default();
+            // A capture that filled the cap exactly is (almost surely)
+            // truncated. Callers parse this output to decide what to
+            // stage or report; acting on a silently shortened list is
+            // worse than failing loudly.
+            if stdout.len() as u64 >= MAX_GIT_OUTPUT || stderr.len() as u64 >= MAX_GIT_OUTPUT {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("git output exceeded the {MAX_GIT_OUTPUT} byte capture limit"),
+                ));
+            }
             return Ok(Output {
                 status,
-                stdout: stdout.unwrap_or_default(),
-                stderr: stderr.unwrap_or_default(),
+                stdout,
+                stderr,
             });
         }
         if Instant::now() >= deadline {
             kill_process_group(&mut child);
             let _ = child.wait();
-            let _ = out_rx.recv_timeout(Duration::from_secs(1));
-            let _ = err_rx.recv_timeout(Duration::from_secs(1));
+            let out_len = out_rx
+                .recv_timeout(Duration::from_secs(1))
+                .map(|buffer| buffer.len() as u64)
+                .unwrap_or(0);
+            let err_len = err_rx
+                .recv_timeout(Duration::from_secs(1))
+                .map(|buffer| buffer.len() as u64)
+                .unwrap_or(0);
+            // A child wedged behind a full capture pipe is an output
+            // problem, not a slow network; say so.
+            if out_len >= MAX_GIT_OUTPUT || err_len >= MAX_GIT_OUTPUT {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("git output exceeded the {MAX_GIT_OUTPUT} byte capture limit"),
+                ));
+            }
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "git timed out",
@@ -168,14 +194,33 @@ fn is_option_like(url: &str) -> bool {
 
 /// Git transports zeDB permits for automatic pull and push. In particular,
 /// helper syntax such as `ext::command` and unknown `scheme::` transports is
-/// rejected even if hostile repo config enables it.
+/// rejected even if hostile repo config enables it. The helper form is a
+/// `transport::` PREFIX; a `::` later in the URL is legitimate (an IPv6
+/// literal like `ssh://[fe80::1]/repo`), so the check is anchored.
 fn is_allowed_remote(url: &str) -> bool {
     let url = url.trim();
-    if url.is_empty() || is_option_like(url) || url.contains("::") {
+    if url.is_empty() || is_option_like(url) {
         return false;
     }
     if let Some((scheme, _)) = url.split_once("://") {
-        return matches!(scheme, "http" | "https" | "ssh" | "git" | "file");
+        // "ext://" and friends fail the scheme allowlist below anyway;
+        // this arm only sees real scheme URLs.
+        return matches!(scheme, "http" | "https" | "ssh" | "git" | "file")
+            && !scheme.contains(':');
+    }
+    // No "://": helper syntax is `transport::address`, where the
+    // transport name precedes the first `::`.
+    if let Some((transport, _)) = url.split_once("::") {
+        // An SCP-style `host:path` or `user@host:path` contains `@`,
+        // `/`, or a bracketed IPv6 host before any `::`; a bare
+        // transport name does not.
+        if !transport.contains('@')
+            && !transport.contains('/')
+            && !transport.contains(':')
+            && !transport.contains('[')
+        {
+            return false;
+        }
     }
     // SCP-style SSH and ordinary local paths are both supported.
     true

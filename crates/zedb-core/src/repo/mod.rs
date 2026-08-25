@@ -38,8 +38,10 @@ pub enum RepoError {
 
 /// Largest single file zeDB reads from a migration repo. A shared checkout
 /// is semi-trusted input, so an outsized SQL or marker file must fail loudly
-/// at open time rather than exhaust memory.
-pub(crate) const MAX_REPO_FILE_BYTES: u64 = 16 * 1024 * 1024;
+/// at open time rather than exhaust memory. Generous on purpose: a bulk
+/// data-backfill migration legitimately carries tens of MB of INSERTs, and
+/// one oversized file failing here makes the whole repo unopenable.
+pub(crate) const MAX_REPO_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Read a repo file as UTF-8, refusing symlinks, special files, and content
 /// over [`MAX_REPO_FILE_BYTES`]. The shared bounded reader checks and reads

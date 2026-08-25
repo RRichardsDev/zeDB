@@ -71,20 +71,23 @@ fn copy_fixture(destination: &Path) {
 
 #[cfg(unix)]
 #[test]
-fn symlinked_migration_directories_are_not_followed() {
-    // A shared checkout adds a symlink under migrations/. The walk must not
-    // follow it: a loop would overflow the stack, and an outward link would
-    // pull files from outside the repo into the chain. Opening must succeed
-    // and see only the real migrations.
+fn symlinked_migration_directories_fail_loudly() {
+    // A symlink under migrations/ is never followed (a loop would
+    // overflow the stack; an outward link would pull outside files
+    // into the chain) and never silently skipped either: a quietly
+    // shortened chain is exactly what upgrade must not act on.
     let dir = tempfile::tempdir().unwrap();
     copy_fixture(dir.path());
     let loop_link = dir.path().join("migrations/2026/08/loop");
     std::os::unix::fs::symlink(dir.path().join("migrations"), &loop_link).unwrap();
 
-    let repo = MigrationRepo::open_root(dir.path()).expect("symlink is skipped, not followed");
+    let error = MigrationRepo::open_root(dir.path())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("symlink"), "{error}");
     assert!(
-        !repo.migrations.is_empty(),
-        "the real migrations still load"
+        error.contains("loop"),
+        "the offending path is named: {error}"
     );
 }
 
@@ -94,8 +97,11 @@ fn oversized_migration_sql_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     copy_fixture(dir.path());
     let upgrade = dir.path().join("migrations/2026/08/00100/upgrade.sql");
-    // Well over the 16 MiB repo file cap.
-    std::fs::write(&upgrade, vec![b'-'; 17 * 1024 * 1024]).unwrap();
+    // Just over the 256 MiB repo file cap; sparse, so the size check
+    // trips before any real IO.
+    let file = std::fs::File::create(&upgrade).unwrap();
+    file.set_len(256 * 1024 * 1024 + 1).unwrap();
+    drop(file);
     let error = MigrationRepo::open_root(dir.path())
         .unwrap_err()
         .to_string();

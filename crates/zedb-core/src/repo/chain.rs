@@ -161,9 +161,18 @@ fn collect(
         let entry = entry?;
         // file_type() comes from readdir without following the link, so a
         // symlinked directory is never descended: no loop can overflow the
-        // stack, and no link can walk the chain outside the repo.
+        // stack, and no link can walk the chain outside the repo. Refusing
+        // must be LOUD: silently skipping would shorten the chain and let
+        // upgrade act on a repo missing migrations the user can see on disk.
         let file_type = entry.file_type()?;
-        if file_type.is_symlink() || !file_type.is_dir() {
+        if file_type.is_symlink() {
+            return Err(RepoError::Layout(format!(
+                "{}: symlinked entries are not supported inside migrations/; \
+                 replace the link with a real directory",
+                entry.path().display()
+            )));
+        }
+        if !file_type.is_dir() {
             continue;
         }
         let path = entry.path();

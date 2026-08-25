@@ -73,16 +73,22 @@ pub fn load_saved_tabs() -> Vec<SavedTab> {
 }
 
 fn load_at(path: &Path) -> Vec<SavedTab> {
-    let Ok(raw) = crate::store::read_bounded_string(path, crate::store::MAX_LOCAL_STATE_BYTES)
+    let Some(raw) =
+        crate::store::read_state_or_quarantine(path, crate::store::MAX_LOCAL_STATE_BYTES)
     else {
         return Vec::new();
     };
-    if let Ok(mut tabs) = serde_json::from_str::<Vec<SavedTab>>(&raw) {
-        tabs.truncate(SAVED_TAB_CAP);
+    // No load-side truncation: these are the user's saved queries, and
+    // trimming here would be persisted by the next save. The byte
+    // bound above already limits memory.
+    if let Ok(tabs) = serde_json::from_str::<Vec<SavedTab>>(&raw) {
         return tabs;
     }
 
     let Ok(sets) = serde_json::from_str::<Vec<LegacySavedTabSet>>(&raw) else {
+        // Neither format parsed: park the file where a save cannot
+        // destroy it.
+        crate::store::quarantine_state_file(path);
         return Vec::new();
     };
     let mut ids = HashSet::new();
