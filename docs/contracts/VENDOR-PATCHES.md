@@ -103,9 +103,13 @@ through the affected UI.
 ## 8. Hover card padding
 
 - `src/input/popovers/hover_popover.rs` (content div, same block as
-  patch 7)
+  patch 7), plus `src/text/node.rs` (`Node::Divider`)
 - The stock `.p_1()` made schema hover cards (db.table.column + type)
-  read as cramped; widened to `.px_2p5().py_1p5()`.
+  read as cramped; widened to `.px_3().py_2p5()` after the setting
+  cards' long server descriptions squished the bottom edge. Markdown
+  dividers also gain a symmetric `.pt(mb)` so a `---` rule (the
+  setting card's metadata/prose separator) doesn't sit tight on the
+  text above it.
 
 ## 9. Manual completion trigger
 
