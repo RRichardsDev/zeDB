@@ -80,6 +80,48 @@ impl ChClient {
         Ok(settings)
     }
 
+    /// The server's function catalog. Doc columns (description, syntax,
+    /// arguments, returned_value) are newer than some servers; those
+    /// fall back to the flags-only form.
+    pub async fn list_functions(&self) -> Result<Vec<crate::schema_cache::CachedFunction>> {
+        let with_docs = self
+            .query(
+                "SELECT name, is_aggregate, case_insensitive, alias_to, \
+                    description, syntax, arguments, returned_value \
+                 FROM system.functions ORDER BY name",
+            )
+            .await;
+        let result = match with_docs {
+            Ok(result) => result,
+            Err(_) => {
+                self.query(
+                    "SELECT name, is_aggregate, case_insensitive, alias_to, \
+                        '' AS description, '' AS syntax, '' AS arguments, \
+                        '' AS returned_value \
+                     FROM system.functions ORDER BY name",
+                )
+                .await?
+            }
+        };
+        let text = |value: Option<&Value>| value.map(ToString::to_string).unwrap_or_default();
+        let flag = |value: Option<&Value>| matches!(value, Some(Value::UInt(1) | Value::Int(1)));
+        Ok(result
+            .rows
+            .iter()
+            .map(|row| crate::schema_cache::CachedFunction {
+                name: text(row.first()),
+                is_aggregate: flag(row.get(1)),
+                case_insensitive: flag(row.get(2)),
+                alias_to: text(row.get(3)),
+                description: text(row.get(4)),
+                syntax: text(row.get(5)),
+                arguments: text(row.get(6)),
+                returned_value: text(row.get(7)),
+            })
+            .filter(|function| !function.name.is_empty())
+            .collect())
+    }
+
     /// Summed size and rows of a sharded table: one replica per shard
     /// via the cluster() table function. Distributed tables report no
     /// storage of their own; this is the honest fleet-wide number.

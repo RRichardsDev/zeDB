@@ -286,14 +286,47 @@ pub fn completions_with_placeholders(
         // Vocabulary rides along with bare words only once something is
         // typed: an empty prefix would wall every keystroke with keywords.
         if !prefix.is_empty() {
-            for (name, signature) in FUNCTIONS {
-                if starts_with_case_insensitive(name, prefix) {
+            if snapshot.functions.is_empty() {
+                // No connection yet: the static shortlist.
+                for (name, signature) in FUNCTIONS {
+                    if starts_with_case_insensitive(name, prefix) {
+                        suggestions.push(SchemaSuggestion {
+                            label: (*name).to_string(),
+                            detail: (*signature).to_string(),
+                            kind: SuggestionKind::Function,
+                            replace: replace.clone(),
+                        });
+                    }
+                }
+            } else {
+                // The server's own catalog, version-true. A short
+                // prefix matches hundreds; cap so the menu stays a
+                // menu.
+                let mut offered = 0;
+                for function in &snapshot.functions {
+                    if !starts_with_case_insensitive(&function.name, prefix) {
+                        continue;
+                    }
+                    let detail = if !function.syntax.is_empty() {
+                        let first = function.syntax.lines().next().unwrap_or_default().trim();
+                        first.chars().take(60).collect()
+                    } else if !function.alias_to.is_empty() {
+                        format!("alias of {}", function.alias_to)
+                    } else if function.is_aggregate {
+                        "aggregate function".to_string()
+                    } else {
+                        String::new()
+                    };
                     suggestions.push(SchemaSuggestion {
-                        label: (*name).to_string(),
-                        detail: (*signature).to_string(),
+                        label: function.name.clone(),
+                        detail,
                         kind: SuggestionKind::Function,
                         replace: replace.clone(),
                     });
+                    offered += 1;
+                    if offered >= 60 {
+                        break;
+                    }
                 }
             }
             for keyword in KEYWORDS {

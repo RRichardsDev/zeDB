@@ -78,6 +78,28 @@ pub struct CachedSetting {
     pub type_name: String,
 }
 
+/// One function from system.functions. The doc fields (description,
+/// syntax, arguments, returned_value) are empty on servers that
+/// predate them; the flags exist everywhere.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedFunction {
+    pub name: String,
+    #[serde(default)]
+    pub is_aggregate: bool,
+    #[serde(default)]
+    pub case_insensitive: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub alias_to: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub syntax: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arguments: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub returned_value: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SchemaSnapshot {
     pub(super) format: u32,
@@ -87,6 +109,9 @@ pub struct SchemaSnapshot {
     /// empty until a connection has answered once.
     #[serde(default)]
     pub settings: Vec<CachedSetting>,
+    /// The server's function catalog, same lifecycle as `settings`.
+    #[serde(default)]
+    pub functions: Vec<CachedFunction>,
 }
 
 impl Default for SchemaSnapshot {
@@ -96,6 +121,7 @@ impl Default for SchemaSnapshot {
             refreshed_at_ms: 0,
             databases: HashMap::new(),
             settings: Vec::new(),
+            functions: Vec::new(),
         }
     }
 }
@@ -117,6 +143,20 @@ impl SchemaSnapshot {
         self.settings
             .iter()
             .find(|setting| setting.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Exact-name match first (ClickHouse function names are mostly
+    /// case-sensitive); a case-insensitive fallback only for entries
+    /// the server itself flags as case-insensitive.
+    pub fn function(&self, name: &str) -> Option<&CachedFunction> {
+        self.functions
+            .iter()
+            .find(|function| function.name == name)
+            .or_else(|| {
+                self.functions.iter().find(|function| {
+                    function.case_insensitive && function.name.eq_ignore_ascii_case(name)
+                })
+            })
     }
 
     pub fn warmed_databases(&self) -> usize {

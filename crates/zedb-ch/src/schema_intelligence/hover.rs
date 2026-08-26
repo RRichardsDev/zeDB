@@ -38,6 +38,18 @@ pub fn hover(
             return Some(HoverInfo { range, markdown });
         }
     }
+    // A function call (the word sits directly on a parenthesis): the
+    // server's own card, combinator-aware. Gated on the parenthesis so
+    // a column that happens to share a function's name still hovers as
+    // the column.
+    if !snapshot.functions.is_empty() && sql[range.end..].trim_start().starts_with('(') {
+        if let Some(resolved) = super::functions::resolve_function(snapshot, word) {
+            return Some(HoverInfo {
+                markdown: super::functions::function_markdown(word, &resolved),
+                range,
+            });
+        }
+    }
     // Bindings from the statement under the offset only, so an
     // editor full of statements does not resolve names against
     // tables from other queries (see completions).

@@ -21,8 +21,8 @@ use crate::{ChClient, ChError, Result};
 mod model;
 
 pub use model::{
-    CachedColumn, CachedDatabase, CachedObject, CachedObjectKind, CachedSetting, ColumnRecord,
-    SchemaSnapshot, TableRecord,
+    CachedColumn, CachedDatabase, CachedFunction, CachedObject, CachedObjectKind, CachedSetting,
+    ColumnRecord, SchemaSnapshot, TableRecord,
 };
 
 const SNAPSHOT_FORMAT: u32 = 1;
@@ -155,6 +155,7 @@ impl SchemaCache {
             refreshed_at_ms: now_ms(),
             databases,
             settings: previous.settings.clone(),
+            functions: previous.functions.clone(),
         })
     }
 
@@ -163,6 +164,14 @@ impl SchemaCache {
     pub fn publish_settings(&self, settings: Vec<model::CachedSetting>) -> io::Result<()> {
         let mut next = (*self.snapshot()).clone();
         next.settings = settings;
+        next.refreshed_at_ms = now_ms();
+        self.publish(next)
+    }
+
+    /// Publish a fresh function catalog, keeping the rest as it stands.
+    pub fn publish_functions(&self, functions: Vec<model::CachedFunction>) -> io::Result<()> {
+        let mut next = (*self.snapshot()).clone();
+        next.functions = functions;
         next.refreshed_at_ms = now_ms();
         self.publish(next)
     }
@@ -271,6 +280,11 @@ impl SchemaCache {
         // restricted user without system.settings loses nothing else.
         if let Ok(settings) = client.list_settings().await {
             self.publish_settings(settings).map_err(|error| {
+                ChError::Decode(format!("could not persist schema cache: {error}"))
+            })?;
+        }
+        if let Ok(functions) = client.list_functions().await {
+            self.publish_functions(functions).map_err(|error| {
                 ChError::Decode(format!("could not persist schema cache: {error}"))
             })?;
         }

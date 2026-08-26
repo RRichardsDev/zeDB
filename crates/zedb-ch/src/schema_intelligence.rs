@@ -15,6 +15,7 @@ mod analysis;
 mod bindings;
 mod completions;
 mod filters;
+mod functions;
 mod hover;
 mod limit;
 mod occurrences;
@@ -85,7 +86,8 @@ mod fixtures {
     use std::collections::HashMap;
 
     use crate::schema_cache::{
-        CachedColumn, CachedDatabase, CachedObject, CachedObjectKind, CachedSetting, SchemaSnapshot,
+        CachedColumn, CachedDatabase, CachedFunction, CachedObject, CachedObjectKind,
+        CachedSetting, SchemaSnapshot,
     };
 
     pub(super) fn snapshot(columns: Option<HashMap<String, CachedColumn>>) -> SchemaSnapshot {
@@ -107,6 +109,35 @@ mod fixtures {
                 connection_value: Some("1".into()),
                 description: "Use NULLs for non-joined rows".into(),
                 type_name: "Bool".into(),
+            },
+        ];
+        snapshot.functions = vec![
+            CachedFunction {
+                name: "quantile".into(),
+                is_aggregate: true,
+                syntax: "quantile(level)(expr)".into(),
+                description: "Computes an approximate quantile of a numeric data sequence.".into(),
+                ..Default::default()
+            },
+            CachedFunction {
+                name: "count".into(),
+                is_aggregate: true,
+                ..Default::default()
+            },
+            CachedFunction {
+                name: "lower".into(),
+                case_insensitive: true,
+                ..Default::default()
+            },
+            CachedFunction {
+                name: "toStartOfDay".into(),
+                syntax: "toStartOfDay(datetime)".into(),
+                ..Default::default()
+            },
+            CachedFunction {
+                name: "groupArray".into(),
+                is_aggregate: true,
+                ..Default::default()
             },
         ];
         snapshot.databases.insert(
