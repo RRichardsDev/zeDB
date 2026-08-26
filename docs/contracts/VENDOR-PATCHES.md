@@ -105,11 +105,11 @@ through the affected UI.
 - `src/input/popovers/hover_popover.rs` (content div, same block as
   patch 7), plus `src/text/node.rs` (`Node::Divider`)
 - The stock `.p_1()` made schema hover cards (db.table.column + type)
-  read as cramped; widened to `.px_3().py_2p5()` after the setting
-  cards' long server descriptions squished the bottom edge. Markdown
-  dividers also gain a symmetric `.pt(mb)` so a `---` rule (the
-  setting card's metadata/prose separator) doesn't sit tight on the
-  text above it.
+  read as cramped; widened to `.px_2p5().py_1p5()`, plus a tail pad
+  inside the scroll area so a long card's last line ends with air.
+  Markdown dividers get fixed `.pt/.pb(rems(0.5))` (the block-margin
+  variable collapses in some positions) so a `---` rule (the setting
+  card's metadata/prose separator) has room on both sides.
 
 ## 9. Manual completion trigger
 

@@ -1235,12 +1235,13 @@ impl Node {
                 .into_any_element(),
             Node::CodeBlock(code_block) => code_block.render(&options, node_cx, window, cx),
             Node::Table { .. } => Self::render_table(self, node_cx, window, cx).into_any_element(),
-            // zeDB patch: symmetric breathing room around a rule; with
-            // only the paragraph gap above and pb below, a divider sat
-            // tight against the text before it (setting hover cards).
+            // zeDB patch: fixed breathing room around a rule; `mb`
+            // collapses to zero in some positions, which left the
+            // divider tight against the text before it (setting hover
+            // cards).
             Node::Divider => div()
-                .pt(mb)
-                .pb(mb)
+                .pt(rems(0.5))
+                .pb(rems(0.5))
                 .child(div().id("divider").bg(cx.theme().border).h(px(2.)))
                 .into_any_element(),
             Node::Break { .. } => div().id("break").into_any_element(),
