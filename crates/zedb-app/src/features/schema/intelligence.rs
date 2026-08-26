@@ -86,6 +86,7 @@ impl CompletionProvider for SchemaProvider {
                 SuggestionKind::Function => CompletionItemKind::FUNCTION,
                 SuggestionKind::Keyword => CompletionItemKind::KEYWORD,
                 SuggestionKind::Type => CompletionItemKind::TYPE_PARAMETER,
+                SuggestionKind::Setting => CompletionItemKind::PROPERTY,
             }),
             text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                 range: byte_range_to_lsp(&sql, suggestion.replace),

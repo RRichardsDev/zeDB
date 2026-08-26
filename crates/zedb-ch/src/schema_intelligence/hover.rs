@@ -16,6 +16,25 @@ pub fn hover(
         return None;
     }
     let word = &sql[range.clone()];
+    // A setting name inside a SETTINGS clause: the server's own card,
+    // with the layer a query-level value would override.
+    if !snapshot.settings.is_empty()
+        && super::settings::settings_names(sql)
+            .iter()
+            .any(|(name_range, _)| name_range.contains(&offset) || name_range.end == offset)
+    {
+        if let Some(setting) = snapshot.setting(word) {
+            let mut markdown = format!("**{}**", setting.name);
+            if !setting.type_name.is_empty() {
+                markdown.push_str(&format!("\n\nType: `{}`", setting.type_name));
+            }
+            markdown.push_str(&format!("\n\n{}", super::settings::override_line(setting)));
+            if !setting.description.is_empty() {
+                markdown.push_str(&format!("\n\n{}", setting.description));
+            }
+            return Some(HoverInfo { range, markdown });
+        }
+    }
     // Bindings from the statement under the offset only, so an
     // editor full of statements does not resolve names against
     // tables from other queries (see completions).

@@ -29,6 +29,57 @@ impl ChClient {
         parse_schema_objects(result)
     }
 
+    /// The server's settings catalog, folded with this connection's
+    /// own driver settings so the editor can say which layer a query
+    /// SETTINGS would override. The `default` column is newer than
+    /// some servers; those fall back to the value-only form.
+    pub async fn list_settings(&self) -> Result<Vec<crate::schema_cache::CachedSetting>> {
+        let with_default = self
+            .query(
+                "SELECT name, value, changed, description, type, `default` \
+                 FROM system.settings ORDER BY name",
+            )
+            .await;
+        let result = match with_default {
+            Ok(result) => result,
+            Err(_) => {
+                self.query(
+                    "SELECT name, value, changed, description, type, value AS `default` \
+                     FROM system.settings ORDER BY name",
+                )
+                .await?
+            }
+        };
+        let text = |value: Option<&Value>| value.map(ToString::to_string).unwrap_or_default();
+        let mut settings: Vec<crate::schema_cache::CachedSetting> = result
+            .rows
+            .iter()
+            .map(|row| crate::schema_cache::CachedSetting {
+                name: text(row.first()),
+                value: text(row.get(1)),
+                changed: matches!(row.get(2), Some(Value::UInt(1) | Value::Int(1))),
+                description: text(row.get(3)),
+                type_name: text(row.get(4)),
+                default_value: text(row.get(5)),
+                connection_value: None,
+            })
+            .filter(|setting| !setting.name.is_empty())
+            .collect();
+        for driver_setting in &self.cfg.driver.settings {
+            let name = driver_setting.name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            if let Some(setting) = settings
+                .iter_mut()
+                .find(|setting| setting.name.eq_ignore_ascii_case(name))
+            {
+                setting.connection_value = Some(driver_setting.value.trim().to_string());
+            }
+        }
+        Ok(settings)
+    }
+
     /// Summed size and rows of a sharded table: one replica per shard
     /// via the cluster() table function. Distributed tables report no
     /// storage of their own; this is the honest fleet-wide number.

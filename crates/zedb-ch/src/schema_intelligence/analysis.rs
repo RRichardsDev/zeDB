@@ -76,6 +76,19 @@ pub fn analyze_sql(
             });
         }
     }
+    // SETTINGS names are checked against the server's own catalog, so
+    // the squiggle is version-true; without a catalog (no connection
+    // yet) nothing is claimed.
+    if !snapshot.settings.is_empty() {
+        for (range, name) in super::settings::settings_names(sql) {
+            if snapshot.setting(&name).is_none() {
+                issues.push(IdentifierIssue {
+                    range,
+                    message: format!("Unknown setting `{name}` on this server"),
+                });
+            }
+        }
+    }
     issues.sort_by_key(|issue| issue.range.start);
     issues.dedup_by(|left, right| left.range == right.range);
     issues

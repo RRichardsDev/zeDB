@@ -9,6 +9,15 @@ GitHub release notes.
 
 ## Unreleased
 
+- The SETTINGS clause knows your server. Completion after SETTINGS
+  offers the connected server's own settings catalog (version-true,
+  refreshed with the schema sweep), each with its type and what a
+  query-level value would override: the ClickHouse default, a changed
+  server value, or your connection's driver setting. After `=`, bool
+  settings offer on/off and every setting offers its known layer
+  values. Hovering a setting shows its description and layers; a name
+  the server doesn't know gets a squiggle; and the SETTINGS keyword
+  itself now colors like a keyword.
 - The editor highlights every use of the identifier under the caret
   within the statement: park the cursor on an alias and its uses in
   ON and WHERE light up dimly. Strings, comments, keywords, and other

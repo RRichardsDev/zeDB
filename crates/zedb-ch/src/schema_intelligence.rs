@@ -20,6 +20,7 @@ mod limit;
 mod occurrences;
 mod order_by;
 mod search;
+mod settings;
 mod tokens;
 mod vocabulary;
 
@@ -46,6 +47,7 @@ pub enum SuggestionKind {
     Function,
     Keyword,
     Type,
+    Setting,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,11 +85,30 @@ mod fixtures {
     use std::collections::HashMap;
 
     use crate::schema_cache::{
-        CachedColumn, CachedDatabase, CachedObject, CachedObjectKind, SchemaSnapshot,
+        CachedColumn, CachedDatabase, CachedObject, CachedObjectKind, CachedSetting, SchemaSnapshot,
     };
 
     pub(super) fn snapshot(columns: Option<HashMap<String, CachedColumn>>) -> SchemaSnapshot {
         let mut snapshot = SchemaSnapshot::default();
+        snapshot.settings = vec![
+            CachedSetting {
+                name: "max_threads".into(),
+                value: "8".into(),
+                default_value: "8".into(),
+                description: "Maximum query processing threads".into(),
+                type_name: "MaxThreads".into(),
+                ..Default::default()
+            },
+            CachedSetting {
+                name: "join_use_nulls".into(),
+                value: "1".into(),
+                default_value: "0".into(),
+                changed: true,
+                connection_value: Some("1".into()),
+                description: "Use NULLs for non-joined rows".into(),
+                type_name: "Bool".into(),
+            },
+        ];
         snapshot.databases.insert(
             "analytics".into(),
             CachedDatabase {

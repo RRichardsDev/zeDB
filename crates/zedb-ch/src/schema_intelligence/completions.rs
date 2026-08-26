@@ -74,6 +74,65 @@ pub fn completions_with_placeholders(
         return suggestions;
     }
 
+    // Inside a SETTINGS clause the server's own catalog is the whole
+    // vocabulary: names in name position, layered values after `=`.
+    if !snapshot.settings.is_empty() {
+        match super::settings::settings_cursor(sql, cursor) {
+            Some(super::settings::SettingsCursor::Name) => {
+                for setting in &snapshot.settings {
+                    if starts_with_case_insensitive(&setting.name, prefix) {
+                        suggestions.push(SchemaSuggestion {
+                            label: setting.name.clone(),
+                            detail: format!(
+                                "{} \u{b7} {}",
+                                setting.type_name,
+                                super::settings::override_line(setting)
+                            ),
+                            kind: SuggestionKind::Setting,
+                            replace: replace.clone(),
+                        });
+                    }
+                    // The catalog runs to ~1500 names; an empty prefix
+                    // shows the head rather than a wall.
+                    if suggestions.len() >= 50 {
+                        break;
+                    }
+                }
+                return suggestions;
+            }
+            Some(super::settings::SettingsCursor::Value { setting }) => {
+                if let Some(setting) = snapshot.setting(&setting) {
+                    let mut push = |value: &str, detail: &str| {
+                        if !value.is_empty()
+                            && starts_with_case_insensitive(value, prefix)
+                            && !suggestions
+                                .iter()
+                                .any(|existing: &SchemaSuggestion| existing.label == value)
+                        {
+                            suggestions.push(SchemaSuggestion {
+                                label: value.to_string(),
+                                detail: detail.to_string(),
+                                kind: SuggestionKind::Setting,
+                                replace: replace.clone(),
+                            });
+                        }
+                    };
+                    if setting.type_name == "Bool" {
+                        push("1", "on");
+                        push("0", "off");
+                    }
+                    if let Some(connection) = setting.connection_value.clone() {
+                        push(&connection, "connection setting");
+                    }
+                    push(&setting.value, "server value");
+                    push(&setting.default_value, "ClickHouse default");
+                }
+                return suggestions;
+            }
+            None => {}
+        }
+    }
+
     let dot_adjacent = tokens
         .last()
         .is_some_and(|token| token.text == "." && token.range.end == context_end);
@@ -265,7 +324,7 @@ pub fn completions_with_placeholders(
 
 fn kind_rank(kind: &SuggestionKind) -> u8 {
     match kind {
-        SuggestionKind::Column | SuggestionKind::Type => 0,
+        SuggestionKind::Column | SuggestionKind::Type | SuggestionKind::Setting => 0,
         SuggestionKind::Object => 1,
         SuggestionKind::Database => 2,
         SuggestionKind::Function => 3,

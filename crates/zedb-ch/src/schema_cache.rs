@@ -21,8 +21,8 @@ use crate::{ChClient, ChError, Result};
 mod model;
 
 pub use model::{
-    CachedColumn, CachedDatabase, CachedObject, CachedObjectKind, ColumnRecord, SchemaSnapshot,
-    TableRecord,
+    CachedColumn, CachedDatabase, CachedObject, CachedObjectKind, CachedSetting, ColumnRecord,
+    SchemaSnapshot, TableRecord,
 };
 
 const SNAPSHOT_FORMAT: u32 = 1;
@@ -154,7 +154,17 @@ impl SchemaCache {
             format: SNAPSHOT_FORMAT,
             refreshed_at_ms: now_ms(),
             databases,
+            settings: previous.settings.clone(),
         })
+    }
+
+    /// Publish a fresh settings catalog, keeping the rest of the
+    /// snapshot as it stands.
+    pub fn publish_settings(&self, settings: Vec<model::CachedSetting>) -> io::Result<()> {
+        let mut next = (*self.snapshot()).clone();
+        next.settings = settings;
+        next.refreshed_at_ms = now_ms();
+        self.publish(next)
     }
 
     pub fn publish_columns(&self, database: &str, records: Vec<ColumnRecord>) -> io::Result<()> {
@@ -256,6 +266,14 @@ impl SchemaCache {
         }
         self.publish_catalog(records, database_names)
             .map_err(|error| ChError::Decode(format!("could not persist schema cache: {error}")))?;
+        // The settings catalog rides the same sweep: version-true
+        // completion needs the server's own list. Best effort; a
+        // restricted user without system.settings loses nothing else.
+        if let Ok(settings) = client.list_settings().await {
+            self.publish_settings(settings).map_err(|error| {
+                ChError::Decode(format!("could not persist schema cache: {error}"))
+            })?;
+        }
         Ok(())
     }
 

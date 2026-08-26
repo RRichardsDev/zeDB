@@ -677,6 +677,7 @@ impl SyntaxHighlighter {
                     "SYNC",
                     "ON",
                     "CLUSTER",
+                    "SETTINGS",
                 ];
                 let mut stack = vec![tree.root_node()];
                 while let Some(node) = stack.pop() {

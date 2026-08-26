@@ -47,7 +47,7 @@ pub struct ChConfig {
 }
 
 pub struct ChClient {
-    cfg: ChConfig,
+    pub(crate) cfg: ChConfig,
     http: reqwest::Client,
 }
 

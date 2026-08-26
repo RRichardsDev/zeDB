@@ -58,11 +58,35 @@ pub struct CachedDatabase {
     pub touched: u64,
 }
 
+/// One server setting from system.settings, with the layers that can
+/// override it: the ClickHouse default, the server/profile value
+/// (`changed` when it differs from the default), and the connection's
+/// own driver setting when the user configured one in zeDB.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedSetting {
+    pub name: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_value: String,
+    #[serde(default)]
+    pub changed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_value: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub type_name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SchemaSnapshot {
     pub(super) format: u32,
     pub refreshed_at_ms: u64,
     pub databases: HashMap<String, CachedDatabase>,
+    /// The server's settings catalog, refreshed with the table sweep;
+    /// empty until a connection has answered once.
+    #[serde(default)]
+    pub settings: Vec<CachedSetting>,
 }
 
 impl Default for SchemaSnapshot {
@@ -71,6 +95,7 @@ impl Default for SchemaSnapshot {
             format: SNAPSHOT_FORMAT,
             refreshed_at_ms: 0,
             databases: HashMap::new(),
+            settings: Vec::new(),
         }
     }
 }
@@ -86,6 +111,12 @@ impl SchemaSnapshot {
 
     pub fn column(&self, database: &str, object: &str, column: &str) -> Option<&CachedColumn> {
         self.object(database, object)?.columns.as_ref()?.get(column)
+    }
+
+    pub fn setting(&self, name: &str) -> Option<&CachedSetting> {
+        self.settings
+            .iter()
+            .find(|setting| setting.name.eq_ignore_ascii_case(name))
     }
 
     pub fn warmed_databases(&self) -> usize {
