@@ -109,27 +109,7 @@ Phase 12 shipped its increments in v0.1.30 (doc harvested into
 
 ## First-in-class ClickHouse editor (the SETTINGS card opened this)
 
-The schema-intelligence direction that keeps paying: the editor knows
-the server, version-true, and says so in place. Candidates, roughly
-ordered by how much they'd make a die-hard nod:
-
-- Function signature help: system.functions + system.table_functions
-  swept like settings; hover and completion for the 1500+ functions,
-  with is_aggregate/case-insensitive flags. quantileIf hover telling
-  you the -If combinator rules would be genuinely first-in-class.
-- Value-aware SETTINGS diagnostics: type-check the value against the
-  setting's type (Bool given "banana"), warn on readonly-violating
-  settings before the server does.
-- Engine clause intelligence: inside ENGINE = MergeTree(...) ORDER
-  BY/PARTITION BY, complete columns and warn on high-cardinality
-  partition keys (the advisor knows; the editor could say it at type
-  time).
-- CTE/subquery scope awareness: the bindings growing into a real
-  scope tree (inner alias shadows outer), which also upgrades
-  occurrence highlighting to semantic rather than same-text.
-- FORMAT clause completion from system.formats with output/input
-  capability flags.
-- Codec/type position intelligence: CODEC(...) and type positions
-  completing from what the server supports, deprecation-aware.
-- system.* table literacy: hovering system.query_log columns explains
-  them (they have rich comments server-side already).
+Graduated: function intelligence, value-aware SETTINGS diagnostics,
+engine clause intelligence, and scope-aware occurrences shipped in
+v0.1.36; everything else moved into docs/wip/PHASE-17.md (the
+server-aware editor), which is the next phase.

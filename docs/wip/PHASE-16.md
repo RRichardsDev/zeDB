@@ -1,6 +1,8 @@
 # Phase 16: what the die-hard is still missing
 
-Status: TRACK A IN PROGRESS (2026-08-22, feature/query-analytics); the rest stay candidates. Not a commitment; a ranked map of
+Status: TRACK A COMPLETE (shipped v0.1.35, 2026-08-25); the rest stay
+candidates and queue BEHIND Phase 17 (the server-aware editor,
+2026-08-26). Not a commitment; a ranked map of
 the gaps between zeDB-as-built (shaped by its author's own use) and
 the daily life of a die-hard ClickHouse practitioner. Written after
 the v0.1.34 security release, when the question "who else is this

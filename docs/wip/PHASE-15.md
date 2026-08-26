@@ -1,6 +1,6 @@
 # Phase 15: the remaining test seams
 
-Status: PLANNED (2026-08-21). The gpui window-test framework covers
+Status: PLANNED (2026-08-21); queued behind Phase 17 (2026-08-26). The gpui window-test framework covers
 state, keyboard, action dispatch, mouse (via `debug_selector` bounds),
 render invariants, and an end-to-end tier on a real ephemeral
 ClickHouse (`zedb-ch/test-support`). Four seams remain untestable;
