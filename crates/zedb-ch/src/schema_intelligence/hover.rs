@@ -5,11 +5,77 @@ use super::tokens::{current_statement, tokenize, word_range};
 use super::HoverInfo;
 use crate::schema_cache::{CachedObject, SchemaSnapshot};
 
-/// Server descriptions carry doc-site-relative link targets
-/// (`[Date](/docs/en/...)`), which the OS cannot open. Absolutize them
-/// against clickhouse.com; the display text is untouched.
-pub(super) fn absolutize_doc_links(text: &str) -> String {
-    text.replace("](/", "](https://clickhouse.com/")
+/// Server descriptions carry link targets written for the docs repo,
+/// not for a browser: root-relative (`/operations/...`), markdown
+/// paths (`../../sql-reference/data-types/date.md#x`), and bare
+/// anchors (`#concat`). Resolve them against clickhouse.com/docs
+/// (shapes verified against the live site); display text is never
+/// touched. `anchor_page` names the docs page bare anchors belong to
+/// (setting descriptions anchor into the settings page); without one
+/// an anchor is unresolvable, and a link that errors is worse than
+/// text, so it unlinks.
+pub(super) fn absolutize_doc_links(text: &str, anchor_page: Option<&str>) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find("](") {
+        let target_start = open + 2;
+        let Some(close) = rest[target_start..].find(')') else {
+            break;
+        };
+        let target = &rest[target_start..target_start + close];
+        output.push_str(&rest[..open]);
+        match resolve_doc_target(target, anchor_page) {
+            Some(resolved) => {
+                output.push_str("](");
+                output.push_str(&resolved);
+                output.push(')');
+            }
+            None => {
+                // Unresolvable: drop the link markup, keep the text.
+                // The `[` this `](` pairs with is the last unmatched
+                // one already written; remove it.
+                if let Some(bracket) = output.rfind('[') {
+                    output.remove(bracket);
+                }
+            }
+        }
+        rest = &rest[target_start + close + 1..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn resolve_doc_target(target: &str, anchor_page: Option<&str>) -> Option<String> {
+    if target.starts_with("http://") || target.starts_with("https://") {
+        return Some(target.to_string());
+    }
+    let docs_url = |path: &str| {
+        // The docs site serves pages without the repo's .md suffix.
+        let path = path
+            .replace(".md/#", "#")
+            .replace(".md#", "#")
+            .trim_end_matches(".md")
+            .to_string();
+        format!(
+            "https://clickhouse.com/docs/{}",
+            path.trim_start_matches('/')
+        )
+    };
+    if let Some(anchor) = target.strip_prefix('#') {
+        let page = anchor_page?;
+        return Some(format!("{}#{anchor}", docs_url(page)));
+    }
+    if let Some(path) = target.strip_prefix("/docs/") {
+        return Some(docs_url(path));
+    }
+    if target.starts_with('/') {
+        return Some(docs_url(target));
+    }
+    if target.starts_with("../") {
+        let path = target.trim_start_matches("../");
+        return Some(docs_url(path));
+    }
+    None
 }
 
 pub fn hover(
@@ -43,7 +109,10 @@ pub fn hover(
                 // absolutized so they open).
                 markdown.push_str(&format!(
                     "\n\n---\n\n{}",
-                    absolutize_doc_links(&setting.description)
+                    absolutize_doc_links(
+                        &setting.description,
+                        Some("operations/settings/settings"),
+                    )
                 ));
             }
             return Some(HoverInfo { range, markdown });

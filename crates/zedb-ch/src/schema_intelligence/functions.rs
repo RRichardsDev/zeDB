@@ -159,7 +159,7 @@ pub(super) fn function_markdown(name: &str, resolved: &ResolvedFunction<'_>) -> 
         // so they open).
         markdown.push_str(&format!(
             "\n\n---\n\n{}",
-            super::hover::absolutize_doc_links(&prose)
+            super::hover::absolutize_doc_links(&prose, None)
         ));
     }
     markdown
@@ -192,28 +192,51 @@ mod tests {
     }
 
     #[test]
-    fn doc_relative_links_absolutize_against_clickhouse_com() {
+    fn doc_links_resolve_in_every_shape_the_server_writes() {
         use crate::schema_cache::{CachedFunction, SchemaSnapshot};
         let mut snapshot = SchemaSnapshot::default();
         snapshot.functions = vec![CachedFunction {
             name: "toDate".into(),
-            description: "See [Date](/docs/en/sql-reference/data-types/date) \
-                          and [external](https://example.test)."
+            description: "Root [a](/operations/settings/settings#x), \
+                          md [b](../../sql-reference/data-types/date.md), \
+                          md anchor [c](../../engines/mergetree.md/#projections), \
+                          docs [d](/docs/en/interfaces/cli), \
+                          external [e](https://example.test), \
+                          anchor [concat](#concat)."
                 .into(),
             ..Default::default()
         }];
         let sql = "select toDate(x)";
         let info = hover(&snapshot, None, sql, sql.find("toDate").unwrap()).unwrap();
+        for expected in [
+            "](https://clickhouse.com/docs/operations/settings/settings#x)",
+            "](https://clickhouse.com/docs/sql-reference/data-types/date)",
+            "](https://clickhouse.com/docs/engines/mergetree#projections)",
+            "](https://clickhouse.com/docs/en/interfaces/cli)",
+            "](https://example.test)",
+        ] {
+            assert!(info.markdown.contains(expected), "{expected}\n{info:?}");
+        }
+        // A bare anchor in a FUNCTION card has no resolvable page: the
+        // link markup drops, the text stays (a dead link throws OS
+        // errors; text does not).
+        assert!(info.markdown.contains("anchor concat."), "{info:?}");
+        assert!(!info.markdown.contains("[concat]"), "{info:?}");
+    }
+
+    #[test]
+    fn setting_card_anchors_resolve_into_the_settings_page() {
+        use crate::schema_intelligence::fixtures;
+        let mut snapshot = fixtures::snapshot(None);
+        snapshot.settings[0].description = "See also [max_memory_usage](#max_memory_usage).".into();
+        let sql = "select 1 settings max_threads = 4";
+        let info = hover(&snapshot, None, sql, sql.find("max_threads").unwrap()).unwrap();
         assert!(
-            info.markdown
-                .contains("](https://clickhouse.com/docs/en/sql-reference/data-types/date)"),
+            info.markdown.contains(
+                "](https://clickhouse.com/docs/operations/settings/settings#max_memory_usage)"
+            ),
             "{info:?}"
         );
-        assert!(
-            info.markdown.contains("](https://example.test)"),
-            "absolute links stay as they are: {info:?}"
-        );
-        assert!(info.markdown.contains("[Date]"), "display text untouched");
     }
 
     #[test]

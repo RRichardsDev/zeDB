@@ -252,3 +252,13 @@ task respect it), so the links in server-provided setting/function
 descriptions are reachable and clickable. Link-free cards keep the
 stock vanish-on-move behavior, and clicks still pass through to the
 editor (patch 7). Drop if upstream makes hover popovers interactive.
+
+## 16. Quiet links in hover cards
+
+`src/text/style.rs` (`TextViewStyle::link_color`) + `src/text/node.rs`
+(link highlight) + `src/input/popovers/mod.rs` (`render_markdown`):
+an optional link-color override on TextViewStyle, set to the body
+foreground for editor popovers, so links in hover cards read
+Zed-style (underline only) instead of theme-link blue. Everywhere
+else (agent transcript, docs views) keeps the theme link color.
+Drop if upstream adds per-view link styling.

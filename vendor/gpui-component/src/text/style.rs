@@ -21,6 +21,10 @@ pub struct TextViewStyle {
     /// The style refinement for code blocks.
     pub code_block: StyleRefinement,
     pub is_dark: bool,
+    /// zeDB patch (quiet links): overrides the theme's link color.
+    /// Hover cards use the body foreground so links read Zed-style,
+    /// underline only, instead of shouting blue in a tooltip.
+    pub link_color: Option<gpui::Hsla>,
 }
 
 impl PartialEq for TextViewStyle {
@@ -40,6 +44,7 @@ impl Default for TextViewStyle {
             highlight_theme: HighlightTheme::default_light().clone(),
             code_block: StyleRefinement::default(),
             is_dark: false,
+            link_color: None,
         }
     }
 }
@@ -60,6 +65,13 @@ impl TextViewStyle {
     }
 
     /// Set style for code blocks.
+    /// zeDB patch (quiet links): render links in this color instead
+    /// of the theme's link blue.
+    pub fn link_color(mut self, color: gpui::Hsla) -> Self {
+        self.link_color = Some(color);
+        self
+    }
+
     pub fn code_block(mut self, style: StyleRefinement) -> Self {
         self.code_block = style;
         self

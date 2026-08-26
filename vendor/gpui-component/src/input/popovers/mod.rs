@@ -54,6 +54,9 @@ pub(super) fn render_markdown(
         .style(
             TextViewStyle::default()
                 .paragraph_gap(rems(0.5))
+                // zeDB patch (quiet links): Zed-style links in hover
+                // cards, body color + underline, not blue.
+                .link_color(cx.theme().foreground)
                 .heading_font_size(|level, rem_size| match level {
                     1..=3 => rem_size * 1,
                     4 => rem_size * 0.9,
