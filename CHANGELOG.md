@@ -7,49 +7,64 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.36 - 2026-08-26
 
-- The editor knows the server's functions. Completion offers the
-  connected server's own catalog (system.functions, refreshed with
-  the schema sweep) with syntax and aggregate/alias flags; hovering a
-  call shows its card behind the same metadata/prose separator as the
-  setting cards. Aggregate combinators resolve: hover quantileIf and
-  the card names the base function and explains -If (stacks like
-  sumArrayIf too).
-- SETTINGS values type-check against the setting's own type: Bool
-  given banana or a negative thread count squiggles on the value.
-  Conservative: quoted forms count as their contents, placeholders
-  and half-typed values claim nothing.
+The schema-intelligence release: the editor knows the server you are
+connected to, version-true, and says so in place.
+
+### The editor knows your server
+
+- Functions: completion offers the connected server's own catalog
+  (system.functions, refreshed with the schema sweep) with syntax and
+  aggregate/alias flags. Hovering a call shows its card, and
+  aggregate combinators resolve: hover quantileIf and the card names
+  the base function and explains -If; stacks like sumArrayIf too.
+- Settings: completion after SETTINGS offers the server's own
+  settings catalog, each with its type and what a query-level value
+  would override (the ClickHouse default, a changed server value, or
+  your connection's driver setting). After `=`, bool settings offer
+  on/off and every setting offers its known layer values. Hovering a
+  setting shows its description and layers.
+- Settings diagnostics: a name the server doesn't know gets a
+  squiggle, and values type-check against the setting's own type
+  (Bool given banana, a negative thread count). Conservative: quoted
+  forms count as their contents, placeholders and half-typed values
+  claim nothing. The SETTINGS keyword itself now colors like one.
+
+### Writing DDL
+
 - CREATE TABLE's ORDER BY / PARTITION BY / PRIMARY KEY / SAMPLE BY
   complete the statement's own declared columns, before the table
-  exists and before any connection. PARTITION BY on a raw DateTime,
-  String, or UUID column warns at type time (one partition per
-  distinct value); wrapped keys like toYYYYMM(at) never flag.
-- Occurrence highlighting is scope-aware: an alias declared in a
-  subquery shadows the outer one, and only uses governed by the same
-  declaration light together.
-- The SETTINGS clause knows your server. Completion after SETTINGS
-  offers the connected server's own settings catalog (version-true,
-  refreshed with the schema sweep), each with its type and what a
-  query-level value would override: the ClickHouse default, a changed
-  server value, or your connection's driver setting. After `=`, bool
-  settings offer on/off and every setting offers its known layer
-  values. Hovering a setting shows its description and layers; a name
-  the server doesn't know gets a squiggle; and the SETTINGS keyword
-  itself now colors like a keyword.
-- The editor highlights every use of the identifier under the caret
-  within the statement: park the cursor on an alias and its uses in
-  ON and WHERE light up dimly. Strings, comments, keywords, and other
+  exists and before any connection.
+- PARTITION BY on a raw DateTime, String, or UUID column warns at
+  type time (one partition per distinct value); wrapped keys like
+  toYYYYMM(at) never flag.
+
+### Reading SQL
+
+- Park the caret on an identifier and every use in the statement
+  lights up dimly. Scope-aware: an alias declared in a subquery
+  shadows the outer one, and only uses governed by the same
+  declaration light together. Strings, comments, keywords, and other
   statements stay dark; selections, multi-cursor, and search take
   precedence.
 - Hovering a table alias shows the table it references (alias arrow,
-  then the table's own card: engine, rows, columns), from the
-  declaration or any later use.
+  then the table's own card), from the declaration or any later use.
 - Fixed: writing a join as a bare condition ("join af.campaign_id =
   ...") no longer makes schema intelligence read the alias as an
-  unknown database; the alias bound in FROM keeps working for
-  completions, hover, and column checks, and a misspelled column
-  still gets its own flag.
+  unknown database; the alias keeps working for completions, hover,
+  and column checks.
+
+### Hover cards
+
+- Server descriptions render with their own markdown, behind a rule
+  separating zeDB's metadata from the server's prose, with breathing
+  room around the rule and at the end of long cards.
+- Links in descriptions actually work: doc-relative targets resolve
+  onto clickhouse.com/docs (every shape the server writes, verified
+  against the live site), a card carrying links stays open while your
+  pointer is inside it, and links render Zed-style: body color and an
+  underline, no chip, no blue.
 
 ## v0.1.35 - 2026-08-25
 
