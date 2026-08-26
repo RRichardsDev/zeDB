@@ -1,7 +1,7 @@
 # Phase 17: the server-aware editor
 
 Status: NEXT UP (2026-08-26). Queue-jumps every unimplemented phase
-(15's test seams, 16's remaining tracks, 10.7): v0.1.36 proved the
+(16's remaining tracks, 10.7; the test-seams backlog is now CHORE-1): v0.1.36 proved the
 pattern and the appetite, and this phase finishes the thought while
 the machinery is warm.
 

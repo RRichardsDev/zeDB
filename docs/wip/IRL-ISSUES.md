@@ -96,3 +96,4 @@ they leave the list when shipped.
   -> fixed (unreleased) for query runs; EXPLAIN/estimate/advisor,
   the column-filter probe, and export do not attach params yet, so
   those still fail on parameterized statements
+![](image.png)

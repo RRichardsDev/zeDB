@@ -32,7 +32,7 @@ already carrying a result), not that it is still running: fixture
 endpoints fail in microseconds on the real tokio runtime, so
 `action_running` alone races the completion. The remaining untestable
 seams (Cloud/GitHub HTTP, Keychain, simulated time, pixels) are the
-Phase 15 backlog (`docs/wip/PHASE-15.md`).
+test-seams chore backlog (`docs/wip/CHORE-1.md`).
 
 The end-to-end tier (a real ephemeral ClickHouse via
 `zedb-ch/test-support`) is opt-in so the default suite stays fast and

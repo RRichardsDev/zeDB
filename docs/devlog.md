@@ -108,8 +108,8 @@
   that an action started rather than is still running (dead-endpoint
   runners fail in microseconds on the real tokio runtime).
 - The four remaining seams (Cloud/GitHub HTTP fakes, a Keychain seam,
-  simulated time, pixels) are now the Phase 15 backlog
-  (docs/wip/PHASE-15.md).
+  simulated time, pixels) are now the test-seams chore backlog
+  (docs/wip/CHORE-1.md, formerly PHASE-15).
 
 ## 2026-08-21: end-to-end tier on a real ClickHouse
 
