@@ -595,6 +595,11 @@ impl Paragraph {
                         .lock()
                         .unwrap()
                         .set_text(text.clone().into());
+                    strip_link_backgrounds(
+                        node_cx.style.link_color.is_some(),
+                        &links,
+                        &mut highlights,
+                    );
                     child_nodes.push(
                         Inline::new(
                             ix,
@@ -689,11 +694,35 @@ impl Paragraph {
         // Add the last text node
         if text.len() > 0 {
             self.state.lock().unwrap().set_text(text.into());
+            strip_link_backgrounds(node_cx.style.link_color.is_some(), &links, &mut highlights);
             child_nodes
                 .push(Inline::new(ix, self.state.clone(), links, highlights).into_any_element());
         }
 
         div().id(span.unwrap_or_default()).children(child_nodes)
+    }
+}
+
+
+/// zeDB patch (quiet links): with the quiet link style active, runs
+/// under a link never keep a background. Backticked link text
+/// ([`Date`](...)) arrives as a separate code mark whose background
+/// `combine_highlights` preserves, so it is stripped at flush time.
+fn strip_link_backgrounds(
+    quiet: bool,
+    links: &[(std::ops::Range<usize>, LinkMark)],
+    highlights: &mut [(std::ops::Range<usize>, HighlightStyle)],
+) {
+    if !quiet {
+        return;
+    }
+    for (range, highlight) in highlights.iter_mut() {
+        if links
+            .iter()
+            .any(|(link, _)| link.start < range.end && range.start < link.end)
+        {
+            highlight.background_color = None;
+        }
     }
 }
 
