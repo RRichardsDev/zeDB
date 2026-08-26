@@ -102,3 +102,7 @@ Phase 12 shipped its increments in v0.1.30 (doc harvested into
   binary; WSL2 story instead?).
 - Collaboration features (shared sessions, Zed-style). Very far
   future.
+- Editor occurrence highlighting: cursor on an alias/column/CTE name
+  lights up every instance in the statement (composes with the
+  alias hover, which already shows the referenced table). Needs
+  render-layer support in the vendored input.

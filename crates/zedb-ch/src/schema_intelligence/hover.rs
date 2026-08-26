@@ -64,6 +64,18 @@ pub fn hover(
         });
     }
 
+    // The word is a bound alias: hover the table it stands for, saying
+    // so (hover a variable, see its definition). Checked before the
+    // database and column fallbacks; the alias is the most local name.
+    if let Some((database, object)) = bindings.aliases.get(&word.to_ascii_lowercase()) {
+        if let Some(cached) = snapshot.object(database, object) {
+            return Some(HoverInfo {
+                range,
+                markdown: format!("_{word}_ → {}", object_hover_markdown(database, cached)),
+            });
+        }
+    }
+
     // The word itself is a database name.
     if let Some(database) = snapshot
         .databases
@@ -213,6 +225,22 @@ mod tests {
         .unwrap();
         assert!(info.markdown.contains("UInt64"));
         assert!(info.markdown.contains("Primary event id"));
+    }
+
+    #[test]
+    fn hovering_an_alias_shows_the_table_it_references() {
+        let snapshot = snapshot(Some(columns()));
+        // Both the declaration ("events e") and a later usage resolve;
+        // the card is the table's own hover, prefixed with the alias
+        // so the indirection is visible.
+        let sql = "SELECT * FROM analytics.events e WHERE e.event_id > 1 AND e > 0";
+        let declaration = hover(&snapshot, None, sql, sql.find(" e ").unwrap() + 1).unwrap();
+        assert!(declaration.markdown.starts_with("_e_ →"), "{declaration:?}");
+        assert!(declaration.markdown.contains("analytics.events"));
+        assert!(declaration.markdown.contains("Engine:"));
+
+        let usage = hover(&snapshot, None, sql, sql.rfind("e >").unwrap()).unwrap();
+        assert!(usage.markdown.contains("analytics.events"));
     }
 
     #[test]

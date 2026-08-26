@@ -9,6 +9,9 @@ GitHub release notes.
 
 ## Unreleased
 
+- Hovering a table alias shows the table it references (alias arrow,
+  then the table's own card: engine, rows, columns), from the
+  declaration or any later use.
 - Fixed: writing a join as a bare condition ("join af.campaign_id =
   ...") no longer makes schema intelligence read the alias as an
   unknown database; the alias bound in FROM keeps working for
