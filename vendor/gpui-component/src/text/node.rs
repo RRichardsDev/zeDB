@@ -652,9 +652,16 @@ impl Paragraph {
                     }
 
                     if let Some(mut link_mark) = style.link.clone() {
-                        // zeDB patch (quiet links).
-                        highlight.color =
-                            Some(node_cx.style.link_color.unwrap_or(cx.theme().link));
+                        // zeDB patch (quiet links): body-colored, and a
+                        // link is a link, not a code chip; the server
+                        // writes [`Date`](...) so backticked link text
+                        // would otherwise carry the code background.
+                        if let Some(color) = node_cx.style.link_color {
+                            highlight.color = Some(color);
+                            highlight.background_color = None;
+                        } else {
+                            highlight.color = Some(cx.theme().link);
+                        }
                         highlight.underline = Some(gpui::UnderlineStyle {
                             thickness: gpui::px(1.),
                             ..Default::default()
