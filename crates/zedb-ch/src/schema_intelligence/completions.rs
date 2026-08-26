@@ -283,6 +283,27 @@ pub fn completions_with_placeholders(
                 }
             }
         }
+        // Inside a CREATE's ORDER BY / PARTITION BY / PRIMARY KEY /
+        // SAMPLE BY, the statement's own declared columns are the
+        // vocabulary; no snapshot knows a table that doesn't exist yet.
+        // Functions still ride below (toYYYYMM around a key is normal).
+        if super::create_clause::in_engine_clause(sql, cursor) {
+            let bounds = super::tokens::statement_bounds(sql, cursor);
+            if let Some(statement) = sql.get(bounds) {
+                for column in super::create_clause::declared_columns(statement) {
+                    if starts_with_case_insensitive(&column.name, prefix)
+                        && seen.insert(column.name.to_ascii_lowercase())
+                    {
+                        suggestions.push(SchemaSuggestion {
+                            label: column.name.clone(),
+                            detail: column.type_head.clone(),
+                            kind: SuggestionKind::Column,
+                            replace: replace.clone(),
+                        });
+                    }
+                }
+            }
+        }
         // Vocabulary rides along with bare words only once something is
         // typed: an empty prefix would wall every keystroke with keywords.
         if !prefix.is_empty() {

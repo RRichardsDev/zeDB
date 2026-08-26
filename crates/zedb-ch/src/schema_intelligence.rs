@@ -14,6 +14,7 @@ use std::ops::Range;
 mod analysis;
 mod bindings;
 mod completions;
+mod create_clause;
 mod filters;
 mod functions;
 mod hover;

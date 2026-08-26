@@ -102,6 +102,19 @@ pub fn analyze_sql(
             }
         }
     }
+    // PARTITION BY over a raw high-cardinality declared column: one
+    // partition per distinct value, said at type time. Wrapping the
+    // key (toYYYYMM(at)) is the author choosing a granularity, so
+    // wrapped keys never flag; this needs no snapshot at all.
+    for (range, column, type_head) in super::create_clause::partition_hazards(sql) {
+        issues.push(IdentifierIssue {
+            range,
+            message: format!(
+                "PARTITION BY on raw {type_head} column `{column}` makes one partition per \
+                 distinct value; wrap it (e.g. toYYYYMM({column})) to pick a granularity"
+            ),
+        });
+    }
     issues.sort_by_key(|issue| issue.range.start);
     issues.dedup_by(|left, right| left.range == right.range);
     issues
