@@ -9,6 +9,11 @@ GitHub release notes.
 
 ## Unreleased
 
+- The editor highlights every use of the identifier under the caret
+  within the statement: park the cursor on an alias and its uses in
+  ON and WHERE light up dimly. Strings, comments, keywords, and other
+  statements stay dark; selections, multi-cursor, and search take
+  precedence.
 - Hovering a table alias shows the table it references (alias arrow,
   then the table's own card: engine, rows, columns), from the
   declaration or any later use.

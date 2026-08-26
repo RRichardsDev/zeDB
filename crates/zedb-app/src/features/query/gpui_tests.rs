@@ -83,6 +83,43 @@ fn close_tab_action_dispatches_to_the_workspace(cx: &mut TestAppContext) {
     });
 }
 
+/// Occurrence highlighting runs inside the editor's paint (the vendor
+/// patch calls the provider per frame), so the proof is a full frame
+/// with the caret parked on an alias in real SQL: a provider panic or
+/// a bad range would fail the render.
+#[gpui::test]
+fn occurrence_provider_survives_frames_with_the_caret_on_an_alias(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    let editor = workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open_query_editor(cx);
+        let editor = workspace.query.tabs[0].editor.clone();
+        window.focus(&editor.read(cx).focus_handle(cx));
+        editor
+    });
+    cx.run_until_parked();
+    cx.simulate_input("select af.id from events af where af.id > 1");
+    cx.run_until_parked();
+    // Walk the caret left into the final "af.id" so it sits on an
+    // identifier with multiple occurrences; every step renders a frame
+    // with the provider active.
+    for _ in 0..8 {
+        cx.simulate_keystrokes("left");
+    }
+    cx.run_until_parked();
+    workspace.update(cx, |workspace, cx| {
+        assert!(workspace.query.tabs[0]
+            .editor
+            .read(cx)
+            .value()
+            .contains("events af"));
+    });
+    // And the pure computation agrees about what would light up.
+    let sql = "select af.id from events af where af.id > 1";
+    let hits = zedb_ch::schema_intelligence::occurrences_at(sql, sql.rfind("af").unwrap());
+    assert_eq!(hits.len(), 3);
+    let _ = editor;
+}
+
 #[gpui::test]
 fn export_needs_a_displayed_result(cx: &mut TestAppContext) {
     let (workspace, cx) = test_harness::workspace(cx);

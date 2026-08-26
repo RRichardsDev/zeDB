@@ -291,6 +291,14 @@ pub struct InputState {
     pub(super) multi_anchor: Option<usize>,
     pub(super) search_panel: Option<Entity<SearchPanel>>,
     pub(super) searchable: bool,
+    /// zeDB patch (occurrence highlight): callback returning the byte
+    /// ranges to underlay-highlight for the caret position, computed
+    /// per prepaint (the buffer sizes here make that microseconds).
+    /// The element only consults it for a collapsed single cursor, so
+    /// it never fights selections, cmd-D, or search.
+    #[allow(clippy::type_complexity)]
+    pub(super) occurrence_provider:
+        Option<std::rc::Rc<dyn Fn(&str, usize) -> Vec<std::ops::Range<usize>>>>,
     /// Range for save the selected word, use to keep word range when drag move.
     pub(super) selected_word_range: Option<Selection>,
     pub(super) selection_reversed: bool,
@@ -399,6 +407,7 @@ impl InputState {
             extra_selections: Vec::new(),
             multi_anchor: None,
             search_panel: None,
+            occurrence_provider: None,
             searchable: false,
             selected_word_range: None,
             selection_reversed: false,
@@ -1727,6 +1736,15 @@ impl InputState {
             self.update_preferred_column();
         }
         cx.notify()
+    }
+
+    /// zeDB patch (occurrence highlight): install the callback that
+    /// names the byte ranges to highlight for a caret position.
+    pub fn set_occurrence_provider(
+        &mut self,
+        provider: std::rc::Rc<dyn Fn(&str, usize) -> Vec<std::ops::Range<usize>>>,
+    ) {
+        self.occurrence_provider = Some(provider);
     }
 
     /// Unselects the currently selected text.

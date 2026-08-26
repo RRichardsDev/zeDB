@@ -17,6 +17,7 @@ mod completions;
 mod filters;
 mod hover;
 mod limit;
+mod occurrences;
 mod order_by;
 mod search;
 mod tokens;
@@ -27,6 +28,7 @@ pub use completions::{completions, completions_with_placeholders};
 pub use filters::{column_filter, column_filters, filtered_columns, set_column_filter};
 pub use hover::{hover, object_at};
 pub use limit::strip_top_level_limit;
+pub use occurrences::occurrences_at;
 pub use order_by::{aggregate_projection, has_group_by, set_order_by, top_level_order_by};
 pub use search::{schema_search, SchemaSearchHit};
 

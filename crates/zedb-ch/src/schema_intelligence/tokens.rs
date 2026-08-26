@@ -33,10 +33,10 @@ pub(super) fn word_range(text: &str, offset: usize) -> Range<usize> {
     start..end
 }
 
-/// The slice of `sql` for the statement containing `cursor`, split on
+/// The byte bounds of the statement containing `cursor`, split on
 /// top-level semicolons. Semicolons inside strings and comments are
 /// skipped by the tokenizer, so they do not break statements.
-pub(super) fn current_statement(sql: &str, cursor: usize) -> &str {
+pub(super) fn statement_bounds(sql: &str, cursor: usize) -> Range<usize> {
     let cursor = cursor.min(sql.len());
     let semicolons: Vec<usize> = tokenize(sql)
         .into_iter()
@@ -54,7 +54,12 @@ pub(super) fn current_statement(sql: &str, cursor: usize) -> &str {
         .find(|&&pos| pos >= cursor)
         .copied()
         .unwrap_or(sql.len());
-    &sql[start..end.max(start)]
+    start..end.max(start)
+}
+
+/// The slice of `sql` for the statement containing `cursor`.
+pub(super) fn current_statement(sql: &str, cursor: usize) -> &str {
+    &sql[statement_bounds(sql, cursor)]
 }
 
 /// Byte length of the UTF-8 character starting at `index`, so the

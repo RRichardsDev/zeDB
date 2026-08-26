@@ -471,6 +471,35 @@ impl TextElement {
         paths
     }
 
+    /// zeDB patch (occurrence highlight): paths for every occurrence of
+    /// the identifier under a collapsed single caret, from the
+    /// installed provider. Selections, extra cursors, and the search
+    /// panel take precedence by suppressing this entirely.
+    fn layout_occurrences(
+        &self,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        cx: &mut App,
+    ) -> Vec<Path<Pixels>> {
+        let state = self.state.read(cx);
+        let Some(provider) = state.occurrence_provider.clone() else {
+            return vec![];
+        };
+        let searching = state
+            .search_panel
+            .as_ref()
+            .is_some_and(|panel| panel.read(cx).matcher().is_some());
+        if !state.selected_range.is_empty() || !state.extra_selections.is_empty() || searching {
+            return vec![];
+        }
+        let cursor = state.cursor();
+        let text = state.text.to_string();
+        provider(&text, cursor)
+            .into_iter()
+            .filter_map(|range| Self::layout_match_range(range, last_layout, bounds))
+            .collect()
+    }
+
     fn layout_hover_highlight(
         &self,
         last_layout: &LastLayout,
@@ -917,6 +946,9 @@ pub(super) struct PrepaintState {
     extra_selection_paths: Vec<Path<Pixels>>,
     hover_highlight_path: Option<Path<Pixels>>,
     search_match_paths: Vec<(Path<Pixels>, bool)>,
+    /// zeDB patch (occurrence highlight): dim underlays for the
+    /// identifier under the caret.
+    occurrence_paths: Vec<Path<Pixels>>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
     hover_definition_hitbox: Option<Hitbox>,
     indent_guides_path: Option<Path<Pixels>>,
@@ -1285,6 +1317,8 @@ impl Element for TextElement {
         last_layout.cursor_bounds = cursor_bounds;
 
         let search_match_paths = self.layout_search_matches(&last_layout, &mut bounds, cx);
+        // zeDB patch (occurrence highlight).
+        let occurrence_paths = self.layout_occurrences(&last_layout, &bounds, cx);
         let selection_path = self.layout_selections(&last_layout, &mut bounds, cx);
         let extra_selection_paths = self.layout_extra_selections(&last_layout, &mut bounds, cx);
         let hover_highlight_path = self.layout_hover_highlight(&last_layout, &mut bounds, cx);
@@ -1354,6 +1388,7 @@ impl Element for TextElement {
             selection_path,
             extra_selection_paths,
             search_match_paths,
+            occurrence_paths,
             hover_highlight_path,
             hover_definition_hitbox,
             document_color_paths,
@@ -1462,6 +1497,12 @@ impl Element for TextElement {
         // Paint selections
         if window.is_window_active() {
             let secondary_selection = cx.theme().selection.saturation(0.1);
+            // zeDB patch (occurrence highlight): beneath everything else
+            // and dimmer than a search match, so it reads as "same
+            // name", not "result".
+            for path in prepaint.occurrence_paths.drain(..) {
+                window.paint_path(path, secondary_selection.opacity(0.5));
+            }
             for (path, is_active) in prepaint.search_match_paths.iter() {
                 window.paint_path(path.clone(), secondary_selection);
 

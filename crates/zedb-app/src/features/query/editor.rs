@@ -24,6 +24,11 @@ impl Workspace {
                 .default_value(default_value);
             editor.lsp.completion_provider = Some(schema_provider.clone());
             editor.lsp.hover_provider = Some(schema_provider.clone());
+            // Every use of the identifier under the caret gets a dim
+            // underlay (alias in FROM lights its uses in ON and WHERE).
+            editor.set_occurrence_provider(Rc::new(|sql, offset| {
+                zedb_ch::schema_intelligence::occurrences_at(sql, offset)
+            }));
             // Right-clicking a recognized table adds "View DDL" to the
             // editor's context menu.
             editor.context_menu_extension = Some(Rc::new(move |text, offset, menu| {

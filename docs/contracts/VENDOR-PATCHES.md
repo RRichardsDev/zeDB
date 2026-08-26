@@ -225,3 +225,15 @@ agent transcript uses it to pause stick-to-bottom autoscroll while
 the user selects (streaming output no longer yanks the view out from
 under a highlight) and to drive edge autoscroll during a selection
 drag. Drop together with patch 11.
+
+## 14. Occurrence highlight provider
+
+`src/input/state.rs` + `src/input/element.rs`: a host-installed
+callback (`set_occurrence_provider`) returns byte ranges to underlay
+for the caret position; the element computes it per prepaint for a
+collapsed single cursor only (selections, cmd-D extras, and an active
+search suppress it) and paints the ranges beneath search matches at
+half the secondary-selection strength. zeDB feeds it
+`schema_intelligence::occurrences_at`, so the same tokenizer that
+powers hover and completions decides what "the same identifier"
+means. Drop if upstream grows document-highlight support.
