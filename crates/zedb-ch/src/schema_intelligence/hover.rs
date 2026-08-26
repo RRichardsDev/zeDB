@@ -5,6 +5,13 @@ use super::tokens::{current_statement, tokenize, word_range};
 use super::HoverInfo;
 use crate::schema_cache::{CachedObject, SchemaSnapshot};
 
+/// Server descriptions carry doc-site-relative link targets
+/// (`[Date](/docs/en/...)`), which the OS cannot open. Absolutize them
+/// against clickhouse.com; the display text is untouched.
+pub(super) fn absolutize_doc_links(text: &str) -> String {
+    text.replace("](/", "](https://clickhouse.com/")
+}
+
 pub fn hover(
     snapshot: &SchemaSnapshot,
     default_database: Option<&str>,
@@ -32,8 +39,12 @@ pub fn hover(
             markdown.push_str(&format!("\n\n**Overrides:** _{layer}_ {value}"));
             if !setting.description.is_empty() {
                 // The rule separates zeDB's metadata above from the
-                // server's own prose below, relayed verbatim.
-                markdown.push_str(&format!("\n\n---\n\n{}", setting.description));
+                // server's own prose below, relayed verbatim (links
+                // absolutized so they open).
+                markdown.push_str(&format!(
+                    "\n\n---\n\n{}",
+                    absolutize_doc_links(&setting.description)
+                ));
             }
             return Some(HoverInfo { range, markdown });
         }

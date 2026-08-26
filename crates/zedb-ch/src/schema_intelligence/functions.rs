@@ -155,8 +155,12 @@ pub(super) fn function_markdown(name: &str, resolved: &ResolvedFunction<'_>) -> 
     }
     if !prose.is_empty() {
         // Same separator contract as the setting card: zeDB's lines
-        // above, the server's prose verbatim below.
-        markdown.push_str(&format!("\n\n---\n\n{prose}"));
+        // above, the server's prose verbatim below (links absolutized
+        // so they open).
+        markdown.push_str(&format!(
+            "\n\n---\n\n{}",
+            super::hover::absolutize_doc_links(&prose)
+        ));
     }
     markdown
 }
@@ -185,6 +189,31 @@ mod tests {
         // Combinators never apply to non-aggregates or unknown bases.
         assert!(resolve_function(&snapshot, "lowerIf").is_none());
         assert!(resolve_function(&snapshot, "nonsenseIf").is_none());
+    }
+
+    #[test]
+    fn doc_relative_links_absolutize_against_clickhouse_com() {
+        use crate::schema_cache::{CachedFunction, SchemaSnapshot};
+        let mut snapshot = SchemaSnapshot::default();
+        snapshot.functions = vec![CachedFunction {
+            name: "toDate".into(),
+            description: "See [Date](/docs/en/sql-reference/data-types/date) \
+                          and [external](https://example.test)."
+                .into(),
+            ..Default::default()
+        }];
+        let sql = "select toDate(x)";
+        let info = hover(&snapshot, None, sql, sql.find("toDate").unwrap()).unwrap();
+        assert!(
+            info.markdown
+                .contains("](https://clickhouse.com/docs/en/sql-reference/data-types/date)"),
+            "{info:?}"
+        );
+        assert!(
+            info.markdown.contains("](https://example.test)"),
+            "absolute links stay as they are: {info:?}"
+        );
+        assert!(info.markdown.contains("[Date]"), "display text untouched");
     }
 
     #[test]
