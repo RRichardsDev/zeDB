@@ -28,7 +28,8 @@ pub fn hover(
             if !setting.type_name.is_empty() {
                 markdown.push_str(&format!("\n\nType: `{}`", setting.type_name));
             }
-            markdown.push_str(&format!("\n\n{}", super::settings::override_line(setting)));
+            let (layer, value) = super::settings::override_parts(setting);
+            markdown.push_str(&format!("\n\n**Overrides:** _{layer}_ {value}"));
             if !setting.description.is_empty() {
                 markdown.push_str(&format!("\n\n{}", setting.description));
             }

@@ -84,7 +84,7 @@ pub fn completions_with_placeholders(
                         suggestions.push(SchemaSuggestion {
                             label: setting.name.clone(),
                             detail: format!(
-                                "{} \u{b7} {}",
+                                "{} \u{b7} Overrides: {}",
                                 setting.type_name,
                                 super::settings::override_line(setting)
                             ),

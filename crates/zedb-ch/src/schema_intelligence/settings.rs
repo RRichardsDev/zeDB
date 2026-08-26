@@ -123,20 +123,25 @@ pub(super) fn settings_names(sql: &str) -> Vec<(Range<usize>, String)> {
     names
 }
 
-/// One line naming what a query-level value for this setting would
-/// override: the connection's driver setting, the server's changed
-/// value, or the ClickHouse default.
-pub(super) fn override_line(setting: &CachedSetting) -> String {
+/// What a query-level value for this setting would override, split as
+/// (layer, value) so callers can style the layer word: the
+/// connection's driver setting, the server's changed value, or the
+/// ClickHouse default. Hover renders `**Overrides:** _layer_ value`;
+/// completion details are plain text.
+pub(super) fn override_parts(setting: &CachedSetting) -> (&'static str, String) {
     if let Some(connection) = &setting.connection_value {
-        return format!("overrides connection setting {connection}");
+        return ("connection setting", connection.clone());
     }
     if setting.changed {
         if setting.default_value.is_empty() || setting.default_value == setting.value {
-            return format!("overrides server value {}", setting.value);
+            return ("server value", setting.value.clone());
         }
-        return format!(
-            "overrides server value {} (ClickHouse default {})",
-            setting.value, setting.default_value
+        return (
+            "server value",
+            format!(
+                "{} (ClickHouse default {})",
+                setting.value, setting.default_value
+            ),
         );
     }
     let default = if setting.default_value.is_empty() {
@@ -144,7 +149,12 @@ pub(super) fn override_line(setting: &CachedSetting) -> String {
     } else {
         &setting.default_value
     };
-    format!("overrides default {default}")
+    ("default", default.clone())
+}
+
+pub(super) fn override_line(setting: &CachedSetting) -> String {
+    let (layer, value) = override_parts(setting);
+    format!("{layer} {value}")
 }
 
 #[cfg(test)]
@@ -162,7 +172,7 @@ mod tests {
         assert_eq!(items[0].label, "max_threads");
         assert_eq!(items[0].kind, SuggestionKind::Setting);
         assert!(
-            items[0].detail.contains("overrides default 8"),
+            items[0].detail.contains("Overrides: default 8"),
             "{}",
             items[0].detail
         );
@@ -170,7 +180,7 @@ mod tests {
         let sql = "select * from analytics.events settings join_";
         let items = completions(&snapshot, None, sql, sql.len());
         assert!(
-            items[0].detail.contains("overrides connection setting 1"),
+            items[0].detail.contains("Overrides: connection setting 1"),
             "the nearest layer wins the wording: {}",
             items[0].detail
         );
@@ -195,7 +205,7 @@ mod tests {
         let sql = "select 1 settings max_threads = 4";
         let info = hover(&snapshot, None, sql, sql.find("max_threads").unwrap() + 2).unwrap();
         assert!(info.markdown.contains("**max_threads**"), "{info:?}");
-        assert!(info.markdown.contains("overrides default 8"));
+        assert!(info.markdown.contains("**Overrides:** _default_ 8"));
         assert!(info.markdown.contains("Maximum query processing threads"));
     }
 
@@ -256,16 +266,16 @@ mod tests {
             default_value: "8".into(),
             ..Default::default()
         };
-        assert_eq!(override_line(&setting), "overrides default 8");
+        assert_eq!(override_line(&setting), "default 8");
 
         setting.changed = true;
         setting.value = "16".into();
         assert_eq!(
             override_line(&setting),
-            "overrides server value 16 (ClickHouse default 8)"
+            "server value 16 (ClickHouse default 8)"
         );
 
         setting.connection_value = Some("4".into());
-        assert_eq!(override_line(&setting), "overrides connection setting 4");
+        assert_eq!(override_line(&setting), "connection setting 4");
     }
 }
