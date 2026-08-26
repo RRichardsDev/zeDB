@@ -87,15 +87,39 @@ pub(super) fn settings_cursor(sql: &str, cursor: usize) -> Option<SettingsCursor
     }
 }
 
-/// Every setting-name token in SETTINGS clauses across `sql`:
-/// identifiers in name position (after SETTINGS or a comma).
-pub(super) fn settings_names(sql: &str) -> Vec<(Range<usize>, String)> {
+/// One `name = value` in a SETTINGS clause. The value is the raw
+/// source slice between `=` and the next delimiter (this tokenizer
+/// skips strings and fragments numbers, so token-wise values would
+/// lie); empty while still being typed.
+pub(super) struct SettingAssignment {
+    pub(super) name_range: Range<usize>,
+    pub(super) name: String,
+    pub(super) value_range: Range<usize>,
+    pub(super) value: String,
+}
+
+/// Every assignment in SETTINGS clauses across `sql`: names in name
+/// position (after SETTINGS or a comma), with their raw values.
+pub(super) fn settings_assignments(sql: &str) -> Vec<SettingAssignment> {
     let tokens = tokenize(sql);
-    let mut names = Vec::new();
+    let mut assignments: Vec<SettingAssignment> = Vec::new();
     let mut in_clause = false;
     let mut name_position = false;
+    // The pending value slice start for the most recent `name =`.
+    let mut value_open: Option<usize> = None;
+    let mut close_value =
+        |assignments: &mut Vec<SettingAssignment>, value_open: &mut Option<usize>, end: usize| {
+            if let (Some(start), Some(assignment)) = (value_open.take(), assignments.last_mut()) {
+                let raw = &sql[start..end.max(start)];
+                let trimmed = raw.trim();
+                let offset = start + (raw.len() - raw.trim_start().len());
+                assignment.value_range = offset..offset + trimmed.len();
+                assignment.value = trimmed.to_string();
+            }
+        };
     for token in &tokens {
         if token.text.eq_ignore_ascii_case("SETTINGS") {
+            close_value(&mut assignments, &mut value_open, token.range.start);
             in_clause = true;
             name_position = true;
             continue;
@@ -108,19 +132,81 @@ pub(super) fn settings_names(sql: &str) -> Vec<(Range<usize>, String)> {
                 .iter()
                 .any(|ender| token.text.eq_ignore_ascii_case(ender))
         {
+            close_value(&mut assignments, &mut value_open, token.range.start);
             in_clause = false;
             continue;
         }
         if token.text == "," {
+            close_value(&mut assignments, &mut value_open, token.range.start);
             name_position = true;
             continue;
         }
         if name_position && token.identifier {
-            names.push((token.range.clone(), token.text.to_string()));
+            assignments.push(SettingAssignment {
+                name_range: token.range.clone(),
+                name: token.text.to_string(),
+                value_range: token.range.end..token.range.end,
+                value: String::new(),
+            });
+            name_position = false;
+            continue;
+        }
+        if token.text == "=" && value_open.is_none() && !assignments.is_empty() {
+            value_open = Some(token.range.end);
+            continue;
         }
         name_position = false;
     }
-    names
+    close_value(&mut assignments, &mut value_open, sql.len());
+    assignments
+}
+
+/// Every setting-name token in SETTINGS clauses across `sql`.
+pub(super) fn settings_names(sql: &str) -> Vec<(Range<usize>, String)> {
+    settings_assignments(sql)
+        .into_iter()
+        .map(|assignment| (assignment.name_range, assignment.name))
+        .collect()
+}
+
+/// Whether `value` cannot possibly satisfy `type_name`. Conservative:
+/// placeholders, empty (still typing), and types we don't model make
+/// no claim. Returns the expected shape for the message.
+pub(super) fn value_type_issue(type_name: &str, value: &str) -> Option<&'static str> {
+    if value.is_empty() || value.contains('{') || value.contains('$') {
+        return None;
+    }
+    // A quoted value checks as its contents; ClickHouse accepts both.
+    let inner = value
+        .strip_prefix('\'')
+        .and_then(|rest| rest.strip_suffix('\''))
+        .or_else(|| {
+            value
+                .strip_prefix('"')
+                .and_then(|rest| rest.strip_suffix('"'))
+        })
+        .unwrap_or(value);
+    let numeric = |text: &str| text.parse::<f64>().is_ok();
+    let unsigned_integer =
+        |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+    let integer = |text: &str| unsigned_integer(text.strip_prefix('-').unwrap_or(text));
+    match type_name {
+        "Bool" => (!matches!(
+            inner.to_ascii_lowercase().as_str(),
+            "0" | "1" | "true" | "false"
+        ))
+        .then_some("Bool (0/1/true/false)"),
+        // max_threads and friends accept 'auto' besides a count.
+        "MaxThreads" => (!(unsigned_integer(inner) || inner.eq_ignore_ascii_case("auto")))
+            .then_some("a thread count or 'auto'"),
+        "Seconds" | "Milliseconds" => (!numeric(inner)).then_some("a duration number"),
+        "Float" => (!numeric(inner)).then_some("a number"),
+        name if name.starts_with("UInt") || name == "NonZeroUInt64" => {
+            (!unsigned_integer(inner)).then_some("a non-negative integer")
+        }
+        name if name.starts_with("Int") => (!integer(inner)).then_some("an integer"),
+        _ => None,
+    }
 }
 
 /// What a query-level value for this setting would override, split as
@@ -211,6 +297,45 @@ mod tests {
                 .contains("---\n\nMaximum query processing threads"),
             "a rule separates zeDB's metadata from the server's prose: {info:?}"
         );
+    }
+
+    #[test]
+    fn values_that_cannot_satisfy_the_type_are_flagged() {
+        let snapshot = snapshot(None);
+        let sql = "select 1 settings join_use_nulls = banana, max_threads = 4";
+        let issues = analyze_sql(&snapshot, None, sql);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(issues[0].message.contains("join_use_nulls"), "{issues:?}");
+        assert!(issues[0].message.contains("Bool"), "{issues:?}");
+        assert_eq!(&sql[issues[0].range.clone()], "banana");
+
+        // Legal shapes across the modeled types make no noise, and a
+        // value still being typed claims nothing.
+        for sql in [
+            "select 1 settings join_use_nulls = true",
+            "select 1 settings join_use_nulls = '1'",
+            "select 1 settings max_threads = 'auto'",
+            "select 1 settings max_threads = ",
+            "select 1 settings max_threads = {threads:UInt64}",
+        ] {
+            assert!(analyze_sql(&snapshot, None, sql).is_empty(), "{sql}");
+        }
+
+        // A wrong numeric shape flags too.
+        let sql = "select 1 settings max_threads = -2";
+        let issues = analyze_sql(&snapshot, None, sql);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(issues[0].message.contains("auto"), "{issues:?}");
+    }
+
+    #[test]
+    fn assignments_capture_raw_values() {
+        let sql = "select 1 settings max_threads = 100, join_use_nulls='x y'";
+        let assignments = settings_assignments(sql);
+        assert_eq!(assignments.len(), 2);
+        assert_eq!(assignments[0].value, "100");
+        assert_eq!(&sql[assignments[0].value_range.clone()], "100");
+        assert_eq!(assignments[1].value, "'x y'");
     }
 
     #[test]

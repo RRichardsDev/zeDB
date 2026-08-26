@@ -76,15 +76,28 @@ pub fn analyze_sql(
             });
         }
     }
-    // SETTINGS names are checked against the server's own catalog, so
-    // the squiggle is version-true; without a catalog (no connection
-    // yet) nothing is claimed.
+    // SETTINGS are checked against the server's own catalog, so both
+    // squiggles are version-true; without a catalog (no connection
+    // yet) nothing is claimed. Values only flag when they cannot
+    // possibly satisfy the setting's type.
     if !snapshot.settings.is_empty() {
-        for (range, name) in super::settings::settings_names(sql) {
-            if snapshot.setting(&name).is_none() {
+        for assignment in super::settings::settings_assignments(sql) {
+            let Some(setting) = snapshot.setting(&assignment.name) else {
                 issues.push(IdentifierIssue {
-                    range,
-                    message: format!("Unknown setting `{name}` on this server"),
+                    range: assignment.name_range,
+                    message: format!("Unknown setting `{}` on this server", assignment.name),
+                });
+                continue;
+            };
+            if let Some(expected) =
+                super::settings::value_type_issue(&setting.type_name, &assignment.value)
+            {
+                issues.push(IdentifierIssue {
+                    range: assignment.value_range,
+                    message: format!(
+                        "`{}` expects {expected}, got {}",
+                        setting.name, assignment.value
+                    ),
                 });
             }
         }
