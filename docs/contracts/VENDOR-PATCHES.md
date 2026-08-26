@@ -241,3 +241,14 @@ half the secondary-selection strength. zeDB feeds it
 `schema_intelligence::occurrences_at`, so the same tokenizer that
 powers hover and completions decides what "the same identifier"
 means. Drop if upstream grows document-highlight support.
+
+## 15. Hoverable link cards
+
+`src/input/popovers/hover_popover.rs` + `src/input/lsp/hover.rs`: a
+hover card whose contents carry a markdown link stays open while the
+pointer is inside it (an `on_hover` flag on the content div; the
+dismiss/replace paths in `handle_hover_popover` and its in-flight
+task respect it), so the links in server-provided setting/function
+descriptions are reachable and clickable. Link-free cards keep the
+stock vanish-on-move behavior, and clicks still pass through to the
+editor (patch 7). Drop if upstream makes hover popovers interactive.

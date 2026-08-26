@@ -17,6 +17,13 @@ pub struct HoverPopover {
     /// The symbol range byte of the hover trigger.
     pub(crate) symbol_range: Range<usize>,
     pub(crate) hover: Rc<lsp_types::Hover>,
+    /// zeDB patch (hoverable link cards): whether the contents carry a
+    /// markdown link, and whether the pointer is currently inside the
+    /// card. A link-bearing card is kept open while hovered so its
+    /// links are reachable; link-free cards keep the lighter
+    /// vanish-on-move behavior.
+    has_link: bool,
+    hovered: Rc<std::cell::Cell<bool>>,
 }
 
 impl HoverPopover {
@@ -27,16 +34,31 @@ impl HoverPopover {
         cx: &mut App,
     ) -> Entity<Self> {
         let hover = Rc::new(hover.clone());
+        let has_link = match &hover.contents {
+            lsp_types::HoverContents::Markup(markup) => markup.value.contains("]("),
+            lsp_types::HoverContents::Scalar(lsp_types::MarkedString::String(text)) => {
+                text.contains("](")
+            }
+            _ => false,
+        };
 
         cx.new(|_| Self {
             editor,
             symbol_range,
             hover,
+            has_link,
+            hovered: Rc::new(std::cell::Cell::new(false)),
         })
     }
 
     pub(crate) fn is_same(&self, offset: usize) -> bool {
         self.symbol_range.contains(&offset)
+    }
+
+    /// zeDB patch (hoverable link cards): the card must survive this
+    /// mouse move because the pointer is inside it reading/clicking.
+    pub(crate) fn keep_open(&self) -> bool {
+        self.has_link && self.hovered.get()
     }
 }
 
@@ -58,13 +80,19 @@ impl Render for HoverPopover {
             lsp_types::HoverContents::Markup(markup) => markup.value,
         };
 
-        Popover::new(
+        let popover = Popover::new(
             "hover-popover",
             self.editor.clone(),
             self.symbol_range.clone(),
             move |window, cx| render_markdown("message", contents.clone(), window, cx),
-        )
-        .into_any_element()
+        );
+        // zeDB patch (hoverable link cards).
+        let popover = if self.has_link {
+            popover.track_hover(self.hovered.clone())
+        } else {
+            popover
+        };
+        popover.into_any_element()
     }
 }
 
@@ -75,6 +103,9 @@ pub(crate) struct Popover {
     range: Range<usize>,
     width_limit: Range<Pixels>,
     content_builder: Box<dyn Fn(&mut Window, &mut App) -> AnyElement>,
+    /// zeDB patch (hoverable link cards): set true while the pointer
+    /// is inside the card.
+    hover_flag: Option<Rc<std::cell::Cell<bool>>>,
 }
 
 impl Styled for Popover {
@@ -101,7 +132,15 @@ impl Popover {
             style: StyleRefinement::default(),
             width_limit: px(200.)..px(500.),
             content_builder: Box::new(move |window, cx| (f)(window, cx).into_any_element()),
+            hover_flag: None,
         }
+    }
+
+    /// zeDB patch (hoverable link cards): report pointer presence
+    /// inside the card through `flag`.
+    pub(crate) fn track_hover(mut self, flag: Rc<std::cell::Cell<bool>>) -> Self {
+        self.hover_flag = Some(flag);
+        self
     }
 
     /// Get the bounds of the range in the editor, if it is visible.
@@ -202,6 +241,11 @@ impl Element for Popover {
                 // through to the editor; wheel scrolling stays
                 // contained to the card.
                 .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                // zeDB patch (hoverable link cards): pointer presence
+                // keeps a link-bearing card open (see lsp/hover.rs).
+                .when_some(self.hover_flag.clone(), |style, flag| {
+                    style.on_hover(move |hovered, _, _| flag.set(*hovered))
+                })
                 // zeDB patch: roomier padding so hover cards (schema
                 // db.table.column + type) don't read as cramped.
                 .px_2p5()

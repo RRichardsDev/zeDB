@@ -39,7 +39,15 @@ impl InputState {
         };
 
         if let Some(hover_popover) = self.hover_popover.as_ref() {
-            if hover_popover.read(cx).is_same(offset) {
+            let hover_popover = hover_popover.read(cx);
+            if hover_popover.is_same(offset) {
+                return;
+            }
+            // zeDB patch (hoverable link cards): the pointer is inside
+            // a card that carries links; leaving the symbol to reach
+            // them must not dismiss it. Moving off the card resumes
+            // the normal vanish-on-move behavior.
+            if hover_popover.keep_open() {
                 return;
             }
         }
@@ -58,18 +66,31 @@ impl InputState {
 
             let result = task.await?;
 
-            _ = editor.update(cx, |editor, cx| match result {
-                Some(hover) => {
-                    if let Some(range) = hover.range {
-                        let start = editor.text.position_to_offset(&range.start);
-                        let end = editor.text.position_to_offset(&range.end);
-                        symbol_range = start..end;
-                    }
-                    let hover_popover = HoverPopover::new(cx.entity(), symbol_range, &hover, cx);
-                    editor.hover_popover = Some(hover_popover);
+            _ = editor.update(cx, |editor, cx| {
+                // zeDB patch (hoverable link cards): the pointer moved
+                // onto the card while this lookup was in flight;
+                // neither replace nor dismiss under the reader.
+                if editor
+                    .hover_popover
+                    .as_ref()
+                    .is_some_and(|popover| popover.read(cx).keep_open())
+                {
+                    return;
                 }
-                None => {
-                    editor.hover_popover = None;
+                match result {
+                    Some(hover) => {
+                        if let Some(range) = hover.range {
+                            let start = editor.text.position_to_offset(&range.start);
+                            let end = editor.text.position_to_offset(&range.end);
+                            symbol_range = start..end;
+                        }
+                        let hover_popover =
+                            HoverPopover::new(cx.entity(), symbol_range, &hover, cx);
+                        editor.hover_popover = Some(hover_popover);
+                    }
+                    None => {
+                        editor.hover_popover = None;
+                    }
                 }
             });
 
