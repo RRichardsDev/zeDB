@@ -206,7 +206,11 @@ mod tests {
         let info = hover(&snapshot, None, sql, sql.find("max_threads").unwrap() + 2).unwrap();
         assert!(info.markdown.contains("**max_threads**"), "{info:?}");
         assert!(info.markdown.contains("**Overrides:** _default_ 8"));
-        assert!(info.markdown.contains("Maximum query processing threads"));
+        assert!(
+            info.markdown
+                .contains("---\n\nMaximum query processing threads"),
+            "a rule separates zeDB's metadata from the server's prose: {info:?}"
+        );
     }
 
     #[test]

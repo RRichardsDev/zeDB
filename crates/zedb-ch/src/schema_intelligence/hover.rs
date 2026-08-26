@@ -31,7 +31,9 @@ pub fn hover(
             let (layer, value) = super::settings::override_parts(setting);
             markdown.push_str(&format!("\n\n**Overrides:** _{layer}_ {value}"));
             if !setting.description.is_empty() {
-                markdown.push_str(&format!("\n\n{}", setting.description));
+                // The rule separates zeDB's metadata above from the
+                // server's own prose below, relayed verbatim.
+                markdown.push_str(&format!("\n\n---\n\n{}", setting.description));
             }
             return Some(HoverInfo { range, markdown });
         }
