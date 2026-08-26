@@ -9,6 +9,25 @@ GitHub release notes.
 
 ## Unreleased
 
+- The editor knows the server's functions. Completion offers the
+  connected server's own catalog (system.functions, refreshed with
+  the schema sweep) with syntax and aggregate/alias flags; hovering a
+  call shows its card behind the same metadata/prose separator as the
+  setting cards. Aggregate combinators resolve: hover quantileIf and
+  the card names the base function and explains -If (stacks like
+  sumArrayIf too).
+- SETTINGS values type-check against the setting's own type: Bool
+  given banana or a negative thread count squiggles on the value.
+  Conservative: quoted forms count as their contents, placeholders
+  and half-typed values claim nothing.
+- CREATE TABLE's ORDER BY / PARTITION BY / PRIMARY KEY / SAMPLE BY
+  complete the statement's own declared columns, before the table
+  exists and before any connection. PARTITION BY on a raw DateTime,
+  String, or UUID column warns at type time (one partition per
+  distinct value); wrapped keys like toYYYYMM(at) never flag.
+- Occurrence highlighting is scope-aware: an alias declared in a
+  subquery shadows the outer one, and only uses governed by the same
+  declaration light together.
 - The SETTINGS clause knows your server. Completion after SETTINGS
   offers the connected server's own settings catalog (version-true,
   refreshed with the schema sweep), each with its type and what a
