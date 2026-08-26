@@ -107,7 +107,7 @@ pub(super) fn settings_assignments(sql: &str) -> Vec<SettingAssignment> {
     let mut name_position = false;
     // The pending value slice start for the most recent `name =`.
     let mut value_open: Option<usize> = None;
-    let mut close_value =
+    let close_value =
         |assignments: &mut Vec<SettingAssignment>, value_open: &mut Option<usize>, end: usize| {
             if let (Some(start), Some(assignment)) = (value_open.take(), assignments.last_mut()) {
                 let raw = &sql[start..end.max(start)];
