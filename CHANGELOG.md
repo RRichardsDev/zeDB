@@ -7,21 +7,37 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.37 - 2026-09-03
 
-- The editor now flags an unqualified column the table does not have
-  (`WHERE name LIKE ...` on a table with no `name`), not only the
-  `alias.column` form, and highlights known bare columns like qualified
-  ones. It only speaks when every source in the statement is a cached
-  table: CTEs, subqueries, table functions, and comma joins stay quiet.
-  `ARRAY JOIN arr` is no longer squiggled as an unknown table.
+Two editor releases in one: the linter now sees bare column names,
+and the server formats your SQL for you.
+
+### Format SQL
+
 - Format SQL, in the command palette: re-lays the selection or the
-  whole buffer through the connected server's own `formatQuery()`, so
-  the result is the statement as the server parsed it (CASE comes back
-  as multiIf, lambdas, SETTINGS and placeholders intact). Statement by
-  statement, undoable. Leading comment lines are kept; a statement
-  with a comment inside it, or a `${var}` use, is left as written and
-  the status line says so. Needs ClickHouse 23.10 or newer.
+  whole buffer through the connected server's own `formatQuery()`,
+  so the result is the statement exactly as the server parsed it
+  (a CASE comes back as multiIf; lambdas, window clauses, SETTINGS,
+  and placeholders all intact). Statement by statement, and cmd-z
+  undoes the whole thing in one step.
+- Comments are handled honestly: the server formatter drops them, so
+  comment lines above a statement are kept by hand, and a statement
+  with a comment inside it, or a `${var}` use, is left as written.
+  The status line says how many were formatted and how many kept.
+- Already-formatted text is a no-op that says so. A syntax error
+  names the statement and the position. Needs ClickHouse 23.10 or
+  newer; an older server gets a message, not a stack trace.
+
+### Unknown bare columns
+
+- The editor flags an unqualified column the table does not have
+  (`WHERE name LIKE ...` on a table with no `name`), not only the
+  `alias.column` form, and highlights known bare columns like
+  qualified ones.
+- It only speaks when every source in the statement is a cached
+  table: CTEs, subqueries, table functions, comma joins, and system
+  tables stay quiet rather than guess.
+- `ARRAY JOIN arr` is no longer squiggled as an unknown table.
 
 ## v0.1.36 - 2026-08-26
 
