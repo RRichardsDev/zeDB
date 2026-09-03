@@ -9,6 +9,7 @@ mod execution;
 mod execution_advisor;
 #[path = "execution/controls.rs"]
 mod execution_controls;
+mod format_sql;
 #[cfg(test)]
 mod gpui_tests;
 mod input;

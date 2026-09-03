@@ -198,3 +198,122 @@ fn add_on_cluster_edits_the_buffer_explicitly(cx: &mut TestAppContext) {
         assert!(sql.starts_with("SELECT 1;"));
     });
 }
+
+/// Format SQL says what it needs (a connection, some SQL) instead of
+/// silently doing nothing, and a failed round trip leaves the buffer
+/// untouched and names the failure.
+#[gpui::test]
+fn format_sql_names_its_blockers_and_leaves_the_buffer_alone_on_failure(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.format_sql(window, cx);
+        assert!(
+            workspace
+                .notice
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Connect"),
+            "notice: {:?}",
+            workspace.notice
+        );
+
+        workspace.connection.connected = Some(test_harness::connected_cluster("dev"));
+        let editor = workspace.query.tabs[0].editor.clone();
+        editor.update(cx, |editor, cx| editor.set_value("  \n", window, cx));
+        workspace.format_sql(window, cx);
+        assert_eq!(workspace.notice.as_deref(), Some("Nothing to format"));
+
+        editor.update(cx, |editor, cx| {
+            editor.set_value("select 1 /* keep */", window, cx);
+        });
+        workspace.format_sql(window, cx);
+        assert!(
+            workspace
+                .notice
+                .as_deref()
+                .unwrap_or_default()
+                .contains("comment inside"),
+            "notice: {:?}",
+            workspace.notice
+        );
+
+        editor.update(cx, |editor, cx| {
+            editor.set_value("select a,b from t", window, cx);
+        });
+        workspace.notice = None;
+        workspace.format_sql(window, cx);
+    });
+
+    // The dead endpoint fails on the real tokio runtime; wait for it.
+    let notice = test_harness::wait_for(cx, std::time::Duration::from_secs(10), |cx| {
+        workspace.update(cx, |workspace, _| workspace.notice.clone())
+    });
+    assert!(notice.contains("Format failed"), "notice: {notice}");
+    workspace.update(cx, |workspace, cx| {
+        assert_eq!(
+            workspace.query.tabs[0].editor.read(cx).value().as_ref(),
+            "select a,b from t"
+        );
+    });
+}
+
+/// End to end: the server's formatQuery re-lays the buffer, leading
+/// comments survive, a commented statement is left as written, and
+/// the status line says both. Opt-in like the fleet e2e test.
+#[gpui::test]
+fn format_sql_formats_through_a_real_server(cx: &mut TestAppContext) {
+    use zedb_ch::test_support::e2e_binary;
+
+    if std::env::var_os("ZEDB_E2E").is_none() && std::env::var_os("ZEDB_E2E_DOWNLOAD").is_none() {
+        eprintln!("skipping: end-to-end tier is opt-in (ZEDB_E2E=1, or ZEDB_E2E_DOWNLOAD=1 to allow a verified download)");
+        return;
+    }
+    let Some(binary) = e2e_binary() else {
+        eprintln!("skipping: no trusted cached ClickHouse binary");
+        return;
+    };
+    let server = zedb_ch::ephemeral::EphemeralServer::start(&binary).expect("ephemeral server");
+
+    let (workspace, cx) = test_harness::workspace(cx);
+    workspace.update_in(cx, |workspace, window, cx| {
+        let mut connected = test_harness::connected_cluster("local-e2e");
+        connected.active_endpoint = server.http_url.clone();
+        connected.client_config.url = server.http_url.clone();
+        workspace.connection.connected = Some(connected);
+        let editor = workspace.query.tabs[0].editor.clone();
+        editor.update(cx, |editor, cx| {
+            editor.set_value(
+                "-- head\nselect a,b from t where x=1;\nselect 1 /* c */ from t",
+                window,
+                cx,
+            );
+        });
+        workspace.format_sql(window, cx);
+    });
+
+    let notice = test_harness::wait_for(cx, std::time::Duration::from_secs(30), |cx| {
+        workspace.update(cx, |workspace, _| workspace.notice.clone())
+    });
+    assert_eq!(
+        notice,
+        "Formatted 1 statement; kept 1 statement with a comment inside as written"
+    );
+    workspace.update(cx, |workspace, cx| {
+        assert_eq!(
+            workspace.query.tabs[0].editor.read(cx).value().as_ref(),
+            "-- head\nSELECT\n    a,\n    b\nFROM t\nWHERE x = 1;\nselect 1 /* c */ from t"
+        );
+    });
+
+    // Formatting the result again is a no-op that says so: the
+    // multi-line text round-trips (it goes up as a literal, since a
+    // String query parameter cannot carry a newline).
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.notice = None;
+        workspace.format_sql(window, cx);
+    });
+    let notice = test_harness::wait_for(cx, std::time::Duration::from_secs(30), |cx| {
+        workspace.update(cx, |workspace, _| workspace.notice.clone())
+    });
+    assert_eq!(notice, "Already formatted; nothing to change");
+}

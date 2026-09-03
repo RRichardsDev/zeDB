@@ -15,6 +15,13 @@ GitHub release notes.
   ones. It only speaks when every source in the statement is a cached
   table: CTEs, subqueries, table functions, and comma joins stay quiet.
   `ARRAY JOIN arr` is no longer squiggled as an unknown table.
+- Format SQL, in the command palette: re-lays the selection or the
+  whole buffer through the connected server's own `formatQuery()`, so
+  the result is the statement as the server parsed it (CASE comes back
+  as multiIf, lambdas, SETTINGS and placeholders intact). Statement by
+  statement, undoable. Leading comment lines are kept; a statement
+  with a comment inside it, or a `${var}` use, is left as written and
+  the status line says so. Needs ClickHouse 23.10 or newer.
 
 ## v0.1.36 - 2026-08-26
 

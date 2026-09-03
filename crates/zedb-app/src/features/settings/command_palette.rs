@@ -53,6 +53,7 @@ pub enum PaletteCommand {
     ToggleQueryHistory,
     ExplainQuery,
     EstimateQuery,
+    FormatSql,
     ExportResults,
     LinkCloud,
 }
@@ -75,6 +76,7 @@ const ALL_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand::ToggleQueryHistory,
     PaletteCommand::ExplainQuery,
     PaletteCommand::EstimateQuery,
+    PaletteCommand::FormatSql,
     PaletteCommand::ExportResults,
     PaletteCommand::LinkCloud,
 ];
@@ -99,8 +101,18 @@ impl PaletteCommand {
             Self::ToggleQueryHistory => "Query history and saved queries",
             Self::ExplainQuery => "Explain query (plan and index pruning)",
             Self::EstimateQuery => "Estimate query cost (parts, rows, marks)",
+            Self::FormatSql => "Format SQL",
             Self::LinkCloud => "Link ClickHouse Cloud",
             Self::ExportResults => "Export current query results",
+        }
+    }
+
+    /// A qualifier drawn beside the label in a quieter tone: what the
+    /// command does that its name alone would overpromise or hide.
+    fn detail(self) -> Option<&'static str> {
+        match self {
+            Self::FormatSql => Some("(as parsed by server)"),
+            _ => None,
         }
     }
 
@@ -113,7 +125,8 @@ impl PaletteCommand {
             | Self::ToggleOps
             | Self::ToggleQueryAnalytics
             | Self::ExplainQuery
-            | Self::EstimateQuery => workspace.connection.connected.is_some(),
+            | Self::EstimateQuery
+            | Self::FormatSql => workspace.connection.connected.is_some(),
             Self::ExportResults => workspace.export_available(),
             _ => true,
         }
@@ -138,6 +151,7 @@ impl PaletteCommand {
             Self::ToggleQueryHistory => workspace.history_toggle(cx),
             Self::ExplainQuery => workspace.explain_query(window, cx),
             Self::EstimateQuery => workspace.estimate_query(window, cx),
+            Self::FormatSql => workspace.format_sql(window, cx),
             Self::ExportResults => workspace.export_open(cx),
             Self::LinkCloud => workspace.cloud_open(cx),
         }
@@ -235,7 +249,13 @@ impl Workspace {
             .iter()
             .copied()
             .filter(|command| command.available(self))
-            .filter(|command| query.is_empty() || command.label().to_lowercase().contains(&query))
+            .filter(|command| {
+                query.is_empty()
+                    || command.label().to_lowercase().contains(&query)
+                    || command
+                        .detail()
+                        .is_some_and(|detail| detail.to_lowercase().contains(&query))
+            })
             .collect()
     }
 
@@ -340,6 +360,15 @@ impl Workspace {
                                                 command.run(this, window, cx);
                                             }))
                                             .child(command.label())
+                                            .when_some(command.detail(), |row, detail| {
+                                                row.child(
+                                                    div()
+                                                        .ml_2()
+                                                        .text_xs()
+                                                        .text_color(theme::disabled())
+                                                        .child(detail),
+                                                )
+                                            })
                                     }),
                                 ))
                                 .when(commands.is_empty(), |panel| {
