@@ -12,7 +12,7 @@ pub mod protocol;
 
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -65,6 +65,10 @@ pub struct AgentConnection {
     child: Child,
     outgoing: mpsc::Sender<String>,
     pending: Pending,
+    /// Set by the reader pump the moment the agent's output ends, before
+    /// it fails what is in flight, so a request registered after that
+    /// drain fails at once instead of waiting out its deadline.
+    closed: Arc<AtomicBool>,
     next_id: AtomicU64,
     events: Option<mpsc::Receiver<AgentEvent>>,
 }
@@ -144,6 +148,8 @@ impl AgentConnection {
         // notifications into events, answer agent-initiated requests.
         let reader_pending = pending.clone();
         let reader_outgoing = outgoing_tx.clone();
+        let closed = Arc::new(AtomicBool::new(false));
+        let reader_closed = closed.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             let close_reason = loop {
@@ -175,6 +181,9 @@ impl AgentConnection {
                 }
             };
             // Fail everything still in flight, then tell the consumer.
+            // The flag goes up first: a request that registers after
+            // this drain sees it and fails without waiting.
+            reader_closed.store(true, Ordering::SeqCst);
             {
                 let mut pending = reader_pending.lock().expect("pending lock");
                 for (_, responder) in pending.drain() {
@@ -194,6 +203,7 @@ impl AgentConnection {
             child,
             outgoing: outgoing_tx,
             pending,
+            closed,
             next_id: AtomicU64::new(1),
             events: Some(event_rx),
         })
@@ -218,6 +228,12 @@ impl AgentConnection {
                 return Err(AcpError::Limit("too many pending requests"));
             }
             pending.insert(id, tx);
+        }
+        // Registered after the reader drained the map: nobody will
+        // ever answer this one, so say so now rather than at the deadline.
+        if self.closed.load(Ordering::SeqCst) {
+            self.pending.lock().expect("pending lock").remove(&id);
+            return Err(AcpError::Closed);
         }
         let message = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         let message = message.to_string();

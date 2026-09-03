@@ -1,3 +1,14 @@
+## 2026-09-03: the dead-agent request race
+
+- CI failed once on `agent_death_fails_pending_and_closes`: the
+  request after the agent died got a 30 s Timeout instead of Closed.
+  The reader pump drains the pending map when the agent's output
+  ends, but a request that registers after that drain has nobody to
+  answer it and waited out its deadline. A `closed` flag now goes up
+  before the drain, and `request` checks it right after registering,
+  so the late request fails at once. Not reproducible locally; the
+  fix is by construction, checked by eight green runs of the test.
+
 ## 2026-08-23: the scope honesty hint
 
 - The user asked the right question: with "Executing on: cluster"
