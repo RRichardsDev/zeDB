@@ -7,6 +7,15 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- The editor now flags an unqualified column the table does not have
+  (`WHERE name LIKE ...` on a table with no `name`), not only the
+  `alias.column` form, and highlights known bare columns like qualified
+  ones. It only speaks when every source in the statement is a cached
+  table: CTEs, subqueries, table functions, and comma joins stay quiet.
+  `ARRAY JOIN arr` is no longer squiggled as an unknown table.
+
 ## v0.1.36 - 2026-08-26
 
 The schema-intelligence release: the editor knows the server you are

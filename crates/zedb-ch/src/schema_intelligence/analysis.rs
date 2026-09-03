@@ -1,6 +1,7 @@
 //! Whole-statement passes: linting unknown names, highlighting known ones,
 //! and classifying which databases a statement reads or changes.
 
+use super::bare_columns::bare_column_references;
 use super::bindings::{is_column_reference, resolve_bindings};
 use super::tokens::tokenize;
 use super::{IdentifierIssue, RecognizedIdentifier, RecognizedKind};
@@ -76,6 +77,18 @@ pub fn analyze_sql(
             });
         }
     }
+    // Bare names, resolved against every table the statement reads;
+    // only claimed when the whole scope is cached (see bare_columns).
+    for reference in bare_column_references(snapshot, default_database, sql, &tokens) {
+        if reference.known {
+            continue;
+        }
+        let scope = reference.scope.join(", ");
+        issues.push(IdentifierIssue {
+            range: reference.range,
+            message: format!("Unknown column `{}` on {scope}", reference.text),
+        });
+    }
     // SETTINGS are checked against the server's own catalog, so both
     // squiggles are version-true; without a catalog (no connection
     // yet) nothing is claimed. Values only flag when they cannot
@@ -150,6 +163,14 @@ pub fn recognized_identifiers(
         {
             recognized.push(RecognizedIdentifier {
                 range: window[2].range.clone(),
+                kind: RecognizedKind::Column,
+            });
+        }
+    }
+    for reference in bare_column_references(snapshot, default_database, sql, &tokens) {
+        if reference.known {
+            recognized.push(RecognizedIdentifier {
+                range: reference.range,
                 kind: RecognizedKind::Column,
             });
         }

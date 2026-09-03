@@ -12,6 +12,7 @@
 use std::ops::Range;
 
 mod analysis;
+mod bare_columns;
 mod bindings;
 mod completions;
 mod create_clause;

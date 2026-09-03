@@ -48,6 +48,11 @@ pub(super) fn resolve_bindings(
             index += 1;
             continue;
         };
+        // `ARRAY JOIN arr`: an expression, not a table.
+        if index > 0 && tokens[index - 1].text.eq_ignore_ascii_case("ARRAY") {
+            index += 1;
+            continue;
+        }
         if bindings.ctes.contains(&first.text.to_ascii_lowercase()) {
             index += 2;
             continue;
