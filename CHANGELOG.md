@@ -7,27 +7,43 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.38 - 2026-09-18
 
-- Running `SYSTEM REFRESH VIEW` (or `SYSTEM WAIT VIEW`) now holds the
-  run open until the view has actually rebuilt, watching the view in
-  `system.view_refreshes` instead of trusting the statement: both come
-  back in milliseconds while the refresh is still going, so anything
-  that ran next read the old data. A refresh that fails now surfaces
-  the server's reason as the statement's error instead of passing
-  silently, and the row counts tick along while it rebuilds.
+Rough edges from real use: the suggestion popup you can actually read,
+a new tab on cmd-n, and a view refresh that is over when the view says
+it is.
 
-- cmd-n opens a new query tab, from any view (in the open agent pane it
-  still starts a new thread). The command palette's "New query tab" now
-  opens one too, instead of only switching to the editor.
-- The editor's suggestion popup is now as wide as the suggestions it
-  holds: long table names and their engines were being clipped
-  because the box sized itself to a minimum instead of its content.
-  Each suggestion's detail (a table's engine, a column's type) is now
+### The suggestion popup
+
+- The popup is as wide as the suggestions it holds. It was sizing
+  itself to a minimum instead of its content, so long table names and
+  their engines were clipped mid-word.
+- Each suggestion's detail (a table's engine, a column's type) sits
   flush right in its own column.
-- The blue match highlight in that popup marks what you actually
-  typed. It used to be measured from wherever the popup opened, so it
-  trailed the cursor by a few letters, or ran over the whole name.
+- The blue match highlight marks what you actually typed. It used to
+  be measured from wherever the popup opened, so it trailed the cursor
+  by a few letters, or ran over the whole name.
+
+### New tab
+
+- cmd-n opens a new query tab, from any view. In the open agent pane
+  it still starts a new thread.
+- The command palette's "New query tab" opens one too, instead of only
+  switching to the editor.
+
+### Refreshable views
+
+- Running `SYSTEM REFRESH VIEW` (or `SYSTEM WAIT VIEW`) holds the run
+  open until the view has actually rebuilt, watching it in
+  `system.view_refreshes` rather than trusting the statement: both
+  return in milliseconds while the refresh is still going, so anything
+  that ran next read the old data.
+- A refresh that fails surfaces the server's reason as the statement's
+  error instead of passing silently, and the row counts tick along
+  while it rebuilds.
+- Guarded against the opposite failure: a refresh that never starts is
+  given up on after ten seconds, a view the server reports nothing for
+  returns at once, and cancelling the run cancels the wait.
 
 ## v0.1.37 - 2026-09-03
 
