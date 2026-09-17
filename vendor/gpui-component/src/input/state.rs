@@ -584,6 +584,29 @@ impl InputState {
         }
     }
 
+    /// zeDB patch: the open completion popup's query (see
+    /// `CompletionMenu::query`), for window tests.
+    pub fn completion_menu_query(&self, cx: &App) -> Option<SharedString> {
+        match &self.context_menu {
+            Some(ContextMenu::Completion(menu)) if menu.read(cx).is_open() => {
+                Some(menu.read(cx).query())
+            }
+            _ => None,
+        }
+    }
+
+    /// zeDB patch: the completion popup's last painted bounds while it
+    /// is showing, for window tests that check the box fits its widest
+    /// suggestion.
+    pub fn completion_menu_bounds(&self, cx: &App) -> Option<gpui::Bounds<gpui::Pixels>> {
+        match &self.context_menu {
+            Some(ContextMenu::Completion(menu)) if menu.read(cx).is_open() => {
+                Some(menu.read(cx).measured_bounds())
+            }
+            _ => None,
+        }
+    }
+
     #[inline]
     pub fn diagnostics(&self) -> Option<&DiagnosticSet> {
         self.mode.diagnostics()

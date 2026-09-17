@@ -93,6 +93,9 @@ fn occurrence_provider_survives_frames_with_the_caret_on_an_alias(cx: &mut TestA
     let editor = workspace.update_in(cx, |workspace, window, cx| {
         workspace.open_query_editor(cx);
         let editor = workspace.query.tabs[0].editor.clone();
+        // The scratch tab opens with sample SQL; an empty buffer keeps
+        // the trigger at the end of the text, as typing a fresh query.
+        editor.update(cx, |editor, cx| editor.set_value("", window, cx));
         window.focus(&editor.read(cx).focus_handle(cx));
         editor
     });
@@ -316,4 +319,169 @@ fn format_sql_formats_through_a_real_server(cx: &mut TestAppContext) {
         workspace.update(cx, |workspace, _| workspace.notice.clone())
     });
     assert_eq!(notice, "Already formatted; nothing to change");
+}
+
+/// The completion popup is as wide as its widest suggestion, whatever
+/// the order. It used to measure its rows at zero width and fall back
+/// to its minimum, clipping every name and engine it showed.
+#[gpui::test]
+fn completion_popup_fits_its_widest_suggestion(cx: &mut TestAppContext) {
+    const LONG: &str = "conversion_facts_by_activity_daily";
+    let short_only = completion_popup_width(cx, &["acts"]);
+    let long_only = completion_popup_width(cx, &[LONG]);
+    let long_behind_short = completion_popup_width(cx, &["acts", LONG]);
+    assert!(
+        long_only > short_only,
+        "the popup ignores how wide its suggestions are: {long_only:?} for \
+         a long name, {short_only:?} for a short one"
+    );
+    assert!(
+        long_behind_short >= long_only,
+        "the popup shrank to its first suggestion: {long_behind_short:?} \
+         with a short name first, {long_only:?} with the long name alone"
+    );
+}
+
+/// Type `analytics.` into a fresh query tab whose schema holds exactly
+/// `tables`, and report how wide the completion popup paints.
+fn completion_popup_width(cx: &mut TestAppContext, tables: &[&str]) -> gpui::Pixels {
+    use zedb_ch::schema_cache::{CachedObjectKind, SchemaCache, TableRecord};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache = SchemaCache::open(dir.path().join("schema.json")).expect("open schema cache");
+    cache
+        .publish_tables(
+            tables
+                .iter()
+                .map(|name| TableRecord {
+                    database: "analytics".to_string(),
+                    name: (*name).to_string(),
+                    engine: "ReplicatedMergeTree".to_string(),
+                    kind: CachedObjectKind::Table,
+                    total_rows: None,
+                    total_bytes: None,
+                    comment: String::new(),
+                })
+                .collect(),
+        )
+        .expect("publish tables");
+
+    let (workspace, cx) = test_harness::workspace(cx);
+    let editor = workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open_query_editor(cx);
+        workspace
+            .schema
+            .provider
+            .set_context(Some(cache), Some("analytics".to_string()));
+        let editor = workspace.query.tabs[0].editor.clone();
+        // The scratch tab opens with sample SQL; an empty buffer keeps
+        // the trigger at the end of the text, as typing a fresh query.
+        editor.update(cx, |editor, cx| editor.set_value("", window, cx));
+        window.focus(&editor.read(cx).focus_handle(cx));
+        editor
+    });
+    cx.run_until_parked();
+    cx.simulate_input("select count() from analytics.");
+    cx.refresh().expect("schedule redraw");
+    cx.run_until_parked();
+
+    workspace.update(cx, |_, cx| {
+        editor
+            .read(cx)
+            .completion_menu_bounds(cx)
+            .expect("completion popup showing")
+            .size
+            .width
+    })
+}
+
+/// The blue matched-prefix highlight covers exactly what the user
+/// typed. The popup's query runs from wherever it opened (a whole
+/// clause, here), so the highlight is matched against the label rather
+/// than taken from that query's length, which used to lag the typing
+/// and then swallow the whole row.
+#[gpui::test]
+fn completion_highlight_matches_the_typed_word(cx: &mut TestAppContext) {
+    use gpui_component::input::completion_matched_prefix_len;
+    use zedb_ch::schema_cache::{CachedObjectKind, SchemaCache, TableRecord};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache = SchemaCache::open(dir.path().join("schema.json")).expect("open schema cache");
+    cache
+        .publish_tables(vec![TableRecord {
+            database: "RefreshableViews".to_string(),
+            name: "AFAS_ActivityFacts".to_string(),
+            engine: "ReplacingMergeTree".to_string(),
+            kind: CachedObjectKind::Table,
+            total_rows: None,
+            total_bytes: None,
+            comment: String::new(),
+        }])
+        .expect("publish tables");
+
+    let (workspace, cx) = test_harness::workspace(cx);
+    let editor = workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open_query_editor(cx);
+        workspace
+            .schema
+            .provider
+            .set_context(Some(cache), Some("RefreshableViews".to_string()));
+        let editor = workspace.query.tabs[0].editor.clone();
+        editor.update(cx, |editor, cx| editor.set_value("", window, cx));
+        window.focus(&editor.read(cx).focus_handle(cx));
+        editor
+    });
+    cx.run_until_parked();
+    cx.simulate_input("select * from Refreshable");
+    cx.run_until_parked();
+
+    let query = workspace
+        .update(cx, |_, cx| editor.read(cx).completion_menu_query(cx))
+        .expect("completion popup showing");
+    assert!(
+        query.len() > "Refreshable".len(),
+        "this test is only meaningful while the query outruns the typed \
+         word, and it is {query:?}"
+    );
+    assert_eq!(
+        completion_matched_prefix_len("RefreshableViews.AFAS_ActivityFacts", &query),
+        "Refreshable".len(),
+        "the highlight must cover the typed word, no more and no less"
+    );
+}
+
+/// The matched-prefix rule itself, over the shapes the schema provider
+/// actually produces.
+#[test]
+fn completion_highlight_rules() {
+    use gpui_component::input::completion_matched_prefix_len;
+
+    // A qualified suggestion against a partly typed database name.
+    assert_eq!(
+        completion_matched_prefix_len("RefreshableViews.AFAS_Facts", "select * from Refresh"),
+        "Refresh".len()
+    );
+    // Case folds: typing lowercase still marks the match.
+    assert_eq!(
+        completion_matched_prefix_len("RefreshableViews.AFAS_Facts", "from refresh"),
+        "Refresh".len()
+    );
+    // A bare column suggested after "table.": the segment after the
+    // last dot is what was typed of it.
+    assert_eq!(
+        completion_matched_prefix_len("event_time", "t.even"),
+        "even".len()
+    );
+    // A qualified label typed through its dot.
+    assert_eq!(
+        completion_matched_prefix_len("RefreshableViews.AFAS_Facts", "RefreshableViews.AFAS"),
+        "RefreshableViews.AFAS".len()
+    );
+    // Nothing shared: no highlight rather than a stale one.
+    assert_eq!(
+        completion_matched_prefix_len("AFAS_Facts", "select * from "),
+        0
+    );
+    // A query longer than the label cannot overrun it.
+    assert_eq!(completion_matched_prefix_len("ab", "abcdef"), 2);
 }

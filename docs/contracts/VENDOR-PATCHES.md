@@ -45,11 +45,31 @@ through the affected UI.
 ## 2. Completion popup width + menu-open check
 
 - `src/input/popovers/completion_menu.rs` (top-of-file width
-  constant) and `src/input/state.rs` (`is_completion_menu_open`-style
-  hook near line 548)
+  constant, `CompletionMenu::measured_bounds`) and
+  `src/input/state.rs` (`completion_menu_open`,
+  `completion_menu_bounds`, near line 580)
 - Widens the popup so the longest suggestion plus its detail column
-  fits, and exposes whether the completion menu is showing so the
-  app's key handling can defer to it.
+  fits, lays each row out `w_full` + `justify_between` so the detail
+  (a table's engine, a column's type) sits flush right in its own
+  column, and exposes whether the completion menu is showing so the
+  app's key handling can defer to it. `measured_bounds` /
+  `completion_menu_bounds` report the popup's painted box, and
+  `CompletionMenu::query` / `completion_menu_query` the query it is
+  highlighting against; the window tests in
+  `features/query/gpui_tests.rs` assert on both.
+
+## 2a. Vertical virtual-list width
+
+- `src/virtual_list.rs` (`request_layout`, vertical `content_size`)
+- A vertical list sized itself from a probe render of its first item
+  only, which measures short (near zero for the completion rows), so
+  the list collapsed to its container's minimum width and clipped
+  every row: the completion popup showed table names and engines cut
+  off mid-word. The width now takes the widest of that probe and the
+  per-entry sizes the caller already measured against its longest
+  item (`ListState::set_item_to_measure_index`). Only `List` builds a
+  vertical virtual list; `Table` uses the horizontal axis, untouched.
+- Pinned by `completion_popup_fits_its_widest_suggestion`.
 
 ## 3. Context-menu extension hook
 
@@ -57,13 +77,22 @@ through the affected UI.
 - Host-app hook to append items to the editor's right-click menu.
   zeDB uses it for "View DDL" on recognized table names.
 
-## 4. Completion highlight clamp
+## 4. Completion highlight = matched prefix
 
-- `src/input/popovers/completion_menu.rs` (~line 95)
-- A qualified filter ("table.x") can be longer than a suggestion's
-  label; the highlight range now clamps to a char boundary within the
-  label. Unpatched, StyledText panicked (app crash while typing
-  `table.x`).
+- `src/input/popovers/completion_menu.rs` (`matched_prefix_len`,
+  `common_prefix_len`, used in `CompletionMenuItem::render`), exported
+  through `src/input/mod.rs` as `completion_matched_prefix_len`
+- Upstream painted the blue highlight over `0..query.len()`, but the
+  menu's query runs from wherever the popup last opened, not from the
+  identifier under the cursor. The highlight lagged the typing, and a
+  query longer than the label overran it (`StyledText` panicked on an
+  out-of-range or mid-char range, which an earlier patch clamped).
+  The length is now the case-insensitive common prefix of the label
+  and the query's trailing identifier (or its last dot-segment, for a
+  bare column suggested after `table.`), so it always covers exactly
+  the shared characters and always lands on a char boundary.
+- Pinned by `completion_highlight_rules` and
+  `completion_highlight_matches_the_typed_word`.
 
 ## 5. `SyntaxHighlighter::replace_all`
 

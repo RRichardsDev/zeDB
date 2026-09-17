@@ -12,6 +12,9 @@ mod movement;
 mod number_input;
 mod otp_input;
 pub(crate) mod popovers;
+// zeDB patch: the completion popup's matched-prefix rule, exported so
+// the host app can pin it in tests.
+pub use popovers::matched_prefix_len as completion_matched_prefix_len;
 mod rope_ext;
 mod search;
 mod state;

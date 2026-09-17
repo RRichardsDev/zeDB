@@ -6,6 +6,8 @@ mod hover_popover;
 
 pub(crate) use code_action_menu::*;
 pub(crate) use completion_menu::*;
+// zeDB patch: re-exported through `input` for the host app's tests.
+pub use completion_menu::matched_prefix_len;
 pub(crate) use context_menu::*;
 pub(crate) use diagnostic_popover::*;
 pub(crate) use hover_popover::*;

@@ -15,10 +15,17 @@ use crate::{apply_theme_preference, Context, Workspace};
 /// path it wanders into. The Keychain has no such override; tests must
 /// simply avoid paths that store or fetch secrets (an empty password on
 /// a new connection does).
+/// The variable is written exactly once per process: tests run in
+/// parallel threads of one process, and a test that points the variable
+/// at its own directory (the settings-sync round trip) must not have it
+/// yanked away by the next window test starting up.
 fn sandbox_config_dir() {
     static SANDBOX: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    let dir = SANDBOX.get_or_init(|| tempfile::tempdir().expect("sandbox config dir"));
-    std::env::set_var("ZEDB_CONFIG_DIR", dir.path());
+    SANDBOX.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("sandbox config dir");
+        std::env::set_var("ZEDB_CONFIG_DIR", dir.path());
+        dir
+    });
 }
 
 /// A Workspace in a headless test window, with the real theme, key

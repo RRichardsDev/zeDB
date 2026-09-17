@@ -87,18 +87,12 @@ impl RenderOnce for CompletionMenuItem {
         let item = self.item;
 
         let deprecated = item.deprecated.unwrap_or(false);
-        let matched_len = item
-            .filter_text
-            .as_ref()
-            .map(|s| s.len())
-            .unwrap_or(self.highlight_prefix.len());
-        // zeDB patch: a qualified filter ("table.x") can be longer than
-        // the label ("x"); out-of-range or mid-char highlight ranges
-        // make StyledText panic. Clamp to a char boundary in the label.
-        let mut matched_len = matched_len.min(item.label.len());
-        while matched_len > 0 && !item.label.is_char_boundary(matched_len) {
-            matched_len -= 1;
-        }
+        let matched_len = matched_prefix_len(
+            &item.label,
+            item.filter_text
+                .as_deref()
+                .unwrap_or(&self.highlight_prefix),
+        );
 
         let highlights = vec![(
             0..matched_len,
@@ -110,6 +104,11 @@ impl RenderOnce for CompletionMenuItem {
 
         h_flex()
             .id(self.ix)
+            // zeDB patch: the detail column sits flush right, so the
+            // engines line up against the popup's edge instead of
+            // ragged behind names of different lengths.
+            .w_full()
+            .justify_between()
             .gap_2()
             .p_1()
             .text_xs()
@@ -132,6 +131,48 @@ impl RenderOnce for CompletionMenuItem {
             })
             .children(self.children)
     }
+}
+
+/// zeDB patch: how much of `label` the user has actually typed, in
+/// bytes, for the blue matched-prefix highlight.
+///
+/// The menu's query runs from wherever the popup last opened, not from
+/// the start of the identifier under the cursor, so its raw length is
+/// not a match length: it used to lag the typing, and once the query
+/// outgrew the label it swallowed the whole row (the length also had to
+/// be clamped to a char boundary or StyledText panicked). Matching the
+/// query's trailing identifier against the label, case-insensitively,
+/// is self-correcting: the highlight covers exactly the characters the
+/// suggestion shares with what was typed, and it always lands on a char
+/// boundary within the label.
+pub fn matched_prefix_len(label: &str, query: &str) -> usize {
+    let identifier: String = query
+        .chars()
+        .rev()
+        .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '$'))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    // A qualified label ("db.table") matches the whole run; a bare one
+    // ("column", suggested after "table.") matches the last segment.
+    let after_dot = identifier.rsplit('.').next().unwrap_or_default();
+    common_prefix_len(label, &identifier).max(common_prefix_len(label, after_dot))
+}
+
+/// The shared leading bytes of `label` and `typed`, ignoring ASCII case.
+fn common_prefix_len(label: &str, typed: &str) -> usize {
+    let mut len = 0;
+    let mut label_chars = label.chars();
+    for typed_char in typed.chars() {
+        match label_chars.next() {
+            Some(label_char) if label_char.eq_ignore_ascii_case(&typed_char) => {
+                len += label_char.len_utf8()
+            }
+            _ => break,
+        }
+    }
+    len
 }
 
 impl EventEmitter<DismissEvent> for ContextMenuDelegate {}
@@ -331,6 +372,18 @@ impl CompletionMenu {
 
     pub(crate) fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// zeDB patch: the query the popup is highlighting against, so
+    /// window tests can pin what the user typed reaching the menu.
+    pub(crate) fn query(&self) -> SharedString {
+        self.query.clone()
+    }
+
+    /// zeDB patch: the popup's last painted bounds, so window tests can
+    /// assert the box is wide enough for the suggestions it holds.
+    pub(crate) fn measured_bounds(&self) -> Bounds<Pixels> {
+        self.bounds
     }
 
     /// Hide the completion menu and reset the trigger start offset.

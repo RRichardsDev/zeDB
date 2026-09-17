@@ -426,8 +426,22 @@ impl Element for VirtualList {
                                     height: longest_item_size.height,
                                 }
                             } else {
+                                // zeDB patch: width came from a probe
+                                // render of the *first* item alone, which
+                                // can measure short (or near zero), so the
+                                // list collapsed to its container's
+                                // minimum and clipped its rows. The caller
+                                // has already measured every entry against
+                                // its longest item (see
+                                // ListState::set_item_to_measure_index);
+                                // take the widest measurement of all.
+                                let widest = self
+                                    .item_sizes
+                                    .iter()
+                                    .map(|size| size.width)
+                                    .fold(longest_item_size.width, |a, b| a.max(b));
                                 Size {
-                                    width: longest_item_size.width,
+                                    width: widest,
                                     height: px(state
                                         .sizes
                                         .iter()

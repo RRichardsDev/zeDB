@@ -7,6 +7,17 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- The editor's suggestion popup is now as wide as the suggestions it
+  holds: long table names and their engines were being clipped
+  because the box sized itself to a minimum instead of its content.
+  Each suggestion's detail (a table's engine, a column's type) is now
+  flush right in its own column.
+- The blue match highlight in that popup marks what you actually
+  typed. It used to be measured from wherever the popup opened, so it
+  trailed the cursor by a few letters, or ran over the whole name.
+
 ## v0.1.37 - 2026-09-03
 
 Two editor releases in one: the linter now sees bare column names,
