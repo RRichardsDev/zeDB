@@ -321,6 +321,76 @@ fn format_sql_formats_through_a_real_server(cx: &mut TestAppContext) {
     assert_eq!(notice, "Already formatted; nothing to change");
 }
 
+/// End to end: running SYSTEM REFRESH VIEW keeps the tab running until
+/// the view has actually rebuilt. The statement itself returns in
+/// milliseconds, so without the client-side wait the run would be over
+/// while the view was still being rebuilt. Opt-in like the other e2e
+/// tests.
+#[gpui::test]
+fn a_view_refresh_runs_until_the_view_has_rebuilt(cx: &mut TestAppContext) {
+    use zedb_ch::test_support::{e2e_binary, http_query};
+
+    if std::env::var_os("ZEDB_E2E").is_none() && std::env::var_os("ZEDB_E2E_DOWNLOAD").is_none() {
+        eprintln!("skipping: end-to-end tier is opt-in (ZEDB_E2E=1, or ZEDB_E2E_DOWNLOAD=1 to allow a verified download)");
+        return;
+    }
+    let Some(binary) = e2e_binary() else {
+        eprintln!("skipping: no trusted cached ClickHouse binary");
+        return;
+    };
+    let server = zedb_ch::ephemeral::EphemeralServer::start(&binary).expect("ephemeral server");
+    // A view whose rebuild takes two seconds, refreshed only on demand.
+    http_query(&server, "CREATE DATABASE rv");
+    http_query(
+        &server,
+        "CREATE MATERIALIZED VIEW rv.slow REFRESH EVERY 1 YEAR \
+         ENGINE = MergeTree ORDER BY tuple() \
+         AS SELECT number, sleepEachRow(0.2) AS slept FROM numbers(10) \
+         SETTINGS allow_experimental_refreshable_materialized_view = 1",
+    );
+    // Let the refresh that creation kicks off finish first.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let (workspace, cx) = test_harness::workspace(cx);
+    workspace.update_in(cx, |workspace, window, cx| {
+        let mut connected = test_harness::connected_cluster("local-e2e");
+        connected.active_endpoint = server.http_url.clone();
+        connected.client_config.url = server.http_url.clone();
+        workspace.connection.connected = Some(connected);
+        let editor = workspace.query.tabs[0].editor.clone();
+        editor.update(cx, |editor, cx| {
+            editor.set_value("SYSTEM REFRESH VIEW rv.slow", window, cx)
+        });
+        workspace.run_query(window, cx);
+    });
+
+    // A second in: the statement is long since answered, but the run is
+    // still going because the view is still rebuilding.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    workspace.update(cx, |workspace, _| {
+        assert!(
+            matches!(
+                workspace.query.tabs[0].outcome,
+                crate::QueryOutcome::Running
+            ),
+            "the run ended while the view was still rebuilding"
+        );
+    });
+
+    let outcome = test_harness::wait_for(cx, std::time::Duration::from_secs(60), |cx| {
+        workspace.update(cx, |workspace, _| match &workspace.query.tabs[0].outcome {
+            crate::QueryOutcome::Running => None,
+            crate::QueryOutcome::Error(message) => Some(Err(message.clone())),
+            crate::QueryOutcome::StatementError { message, .. } => Some(Err(message.clone())),
+            _ => Some(Ok(())),
+        })
+    });
+    if let Err(message) = outcome {
+        panic!("the refresh should have finished cleanly: {message}");
+    }
+}
+
 /// cmd-n opens a new query tab, from whichever view is on screen, and
 /// lands on it.
 #[gpui::test]

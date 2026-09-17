@@ -9,6 +9,14 @@ GitHub release notes.
 
 ## Unreleased
 
+- Running `SYSTEM REFRESH VIEW` (or `SYSTEM WAIT VIEW`) now holds the
+  run open until the view has actually rebuilt, watching the view in
+  `system.view_refreshes` instead of trusting the statement: both come
+  back in milliseconds while the refresh is still going, so anything
+  that ran next read the old data. A refresh that fails now surfaces
+  the server's reason as the statement's error instead of passing
+  silently, and the row counts tick along while it rebuilds.
+
 - cmd-n opens a new query tab, from any view (in the open agent pane it
   still starts a new thread). The command palette's "New query tab" now
   opens one too, instead of only switching to the editor.
