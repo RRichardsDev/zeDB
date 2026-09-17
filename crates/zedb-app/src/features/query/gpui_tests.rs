@@ -321,6 +321,26 @@ fn format_sql_formats_through_a_real_server(cx: &mut TestAppContext) {
     assert_eq!(notice, "Already formatted; nothing to change");
 }
 
+/// cmd-n opens a new query tab, from whichever view is on screen, and
+/// lands on it.
+#[gpui::test]
+fn cmd_n_opens_a_new_query_tab(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    // Start away from the editor: the chord is global.
+    workspace.update(cx, |workspace, cx| workspace.toggle_fleet(cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-n");
+    workspace.update(cx, |workspace, _| {
+        assert_eq!(workspace.query.tabs.len(), 2, "cmd-n adds a tab");
+        assert_eq!(
+            workspace.query.active_tab, 1,
+            "the new tab is the active one"
+        );
+        assert!(workspace.show_query_editor, "cmd-n shows the query editor");
+        assert!(!workspace.show_fleet);
+    });
+}
+
 /// The completion popup is as wide as its widest suggestion, whatever
 /// the order. It used to measure its rows at zero width and fall back
 /// to its minimum, clipping every name and engine it showed.

@@ -864,14 +864,19 @@ impl Workspace {
                         cx.stop_propagation();
                         return;
                     }
-                    // cmd-n with the agent pane open: new thread with the
-                    // last-used agent.
+                    // cmd-n: a new thread in the open agent pane,
+                    // otherwise a new query tab. Interceptor-handled
+                    // like the palette chord, since a key equivalent
+                    // dies whenever the window has no live focus path
+                    // (the fleet and ops views often have none).
                     if event.keystroke.modifiers.platform
                         && !event.keystroke.modifiers.shift
                         && event.keystroke.key == "n"
-                        && this.agent.open
                     {
-                        this.agent_start_last_thread(window, cx);
+                        match this.agent.open {
+                            true => this.agent_start_last_thread(window, cx),
+                            false => this.new_query_tab(window, cx),
+                        }
                         cx.stop_propagation();
                         return;
                     }

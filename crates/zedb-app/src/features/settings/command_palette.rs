@@ -136,7 +136,7 @@ impl PaletteCommand {
         match self {
             Self::OpenSettingsFile => workspace.open_settings_file(cx),
             Self::OpenPreferences => workspace.open_preferences(cx),
-            Self::NewQuery => workspace.open_query_editor(cx),
+            Self::NewQuery => workspace.new_query_tab(window, cx),
             Self::ToggleFleet => workspace.toggle_fleet(cx),
             Self::ToggleAgentPane => workspace.agent_toggle(window, cx),
             Self::ToggleVimMode => workspace.toggle_vim_mode(cx),

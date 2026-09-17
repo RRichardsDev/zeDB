@@ -9,6 +9,9 @@ GitHub release notes.
 
 ## Unreleased
 
+- cmd-n opens a new query tab, from any view (in the open agent pane it
+  still starts a new thread). The command palette's "New query tab" now
+  opens one too, instead of only switching to the editor.
 - The editor's suggestion popup is now as wide as the suggestions it
   holds: long table names and their engines were being clipped
   because the box sized itself to a minimum instead of its content.

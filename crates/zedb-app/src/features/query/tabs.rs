@@ -16,6 +16,13 @@ impl Workspace {
         cx.notify();
     }
 
+    /// cmd-n, and the palette's "New query tab": a fresh tab in the
+    /// query editor, whichever view was on screen.
+    pub(crate) fn new_query_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_query_editor(cx);
+        self.add_query_tab(window, cx);
+    }
+
     /// The active connection's name, the scope open tabs belong to.
     pub(crate) fn active_connection_name(&self) -> Option<String> {
         self.connection
