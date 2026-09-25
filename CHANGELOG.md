@@ -7,25 +7,37 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.39 - 2026-09-25
 
-- View refreshes behave exactly as they do in ClickHouse again:
-  `SYSTEM REFRESH VIEW` starts the rebuild and returns, and
-  `SYSTEM WAIT VIEW` blocks until it is done (reporting a failed
-  refresh as its own error). v0.1.38 made zeDB poll the view after
-  either statement; that is gone. The server's own `WAIT` already
-  does the job, and a script that refreshes several views and waits
-  on each runs them strictly in turn.
+See where a script is: the statement in flight is marked in the
+editor and followed as the run moves down. And view refreshes are
+back to behaving exactly as ClickHouse does.
+
+### Where the run is
+
 - A multi-statement run (Execute, ctrl-x) marks the statement it is
   on in the editor's gutter: an amber bar behind the line numbers of
   every line that statement covers, a bright edge where the gutter
-  meets the text, and a small spinner beside its first line (from
-  line 100, where the ring would crowd the number, that line's bright
-  edge loops instead), moving down as the run goes and cleared when it
-  finishes. The editor scrolls to follow it; scroll the running
-  statement off screen to read elsewhere and it stops following, until
-  you scroll it back into view. A long wait or a slow insert now shows
-  where the run is instead of an anonymous "Running".
+  meets the text, and a small spinner beside its first line. From
+  line 100, where the spinner would crowd the number, that line's
+  edge loops instead.
+- The marker moves down as the run goes, stays on a failed statement
+  while the run waits for you to skip or cancel, and clears when the
+  run finishes. A single statement is not marked.
+- The editor scrolls to follow it. Scroll the running statement off
+  screen to read elsewhere and it stops following; scroll it back
+  into view and it picks up again.
+
+### View refreshes
+
+- `SYSTEM REFRESH VIEW` starts the rebuild and returns, and
+  `SYSTEM WAIT VIEW` blocks until it is done, reporting a failed
+  refresh as its own error: exactly what ClickHouse does.
+- v0.1.38 polled the view after either statement, on the belief that
+  a WAIT sent right after a REFRESH could miss it. Tested against a
+  real server, it does not: the server's own WAIT already does the
+  job, so the polling is gone. A script that refreshes several views
+  and waits on each runs them strictly in turn.
 
 ## v0.1.38 - 2026-09-18
 
