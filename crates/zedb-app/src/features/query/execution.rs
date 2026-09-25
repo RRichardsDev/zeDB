@@ -397,15 +397,6 @@ impl Workspace {
                     .get(index)
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                // A refresh statement returns as soon as the server has
-                // taken the request, so the state before it is sent is
-                // what tells the refresh it schedules apart from the last
-                // one (see zedb_ch::refresh).
-                let refresh = zedb_ch::refresh::refresh_target(&send_sql);
-                let before = match &refresh {
-                    Some(target) => client.view_refresh_state(target).await.ok().flatten(),
-                    None => None,
-                };
                 let outcome = client
                     .query_stream(
                         &send_sql,
@@ -416,25 +407,6 @@ impl Workspace {
                         },
                     )
                     .await;
-                // Hold the run open until the refresh it asked for has
-                // actually finished, reporting the rows it moved as it
-                // goes; the statement is only done when the view is.
-                let outcome = match (outcome, &refresh) {
-                    (Ok(summary), Some(target)) => client
-                        .wait_for_refresh(target, before.as_ref(), |state| {
-                            let _ = sender.send(RunEvent::Stream(QueryStreamEvent::Progress(
-                                zedb_ch::QueryProgress {
-                                    read_rows: Some(state.read_rows),
-                                    read_bytes: None,
-                                    total_rows: Some(state.total_rows),
-                                    received_bytes: 0,
-                                },
-                            )));
-                        })
-                        .await
-                        .map(|()| summary),
-                    (outcome, _) => outcome,
-                };
                 match outcome {
                     Ok(current) => {
                         summary = Some(current);

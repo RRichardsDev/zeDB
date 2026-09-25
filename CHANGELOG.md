@@ -7,6 +7,16 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- View refreshes behave exactly as they do in ClickHouse again:
+  `SYSTEM REFRESH VIEW` starts the rebuild and returns, and
+  `SYSTEM WAIT VIEW` blocks until it is done (reporting a failed
+  refresh as its own error). v0.1.38 made zeDB poll the view after
+  either statement; that is gone. The server's own `WAIT` already
+  does the job, and a script that refreshes several views and waits
+  on each runs them strictly in turn.
+
 ## v0.1.38 - 2026-09-18
 
 Rough edges from real use: the suggestion popup you can actually read,

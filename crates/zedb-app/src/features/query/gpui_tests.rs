@@ -321,13 +321,16 @@ fn format_sql_formats_through_a_real_server(cx: &mut TestAppContext) {
     assert_eq!(notice, "Already formatted; nothing to change");
 }
 
-/// End to end: running SYSTEM REFRESH VIEW keeps the tab running until
-/// the view has actually rebuilt. The statement itself returns in
-/// milliseconds, so without the client-side wait the run would be over
-/// while the view was still being rebuilt. Opt-in like the other e2e
-/// tests.
+/// End to end: view refreshes behave in the editor exactly as they do in
+/// ClickHouse. `SYSTEM REFRESH VIEW` only starts the rebuild and returns;
+/// `SYSTEM WAIT VIEW` blocks until it is done. Three views rebuild in 3, 5
+/// and 10 seconds; one multi-statement run (ctrl-x, every statement in
+/// the buffer) refreshes and waits on each in turn, and the server's own query_log shows every start returning at
+/// once, every wait lasting its view's rebuild, and each statement
+/// starting only once the one before it finished. Opt-in like the other
+/// e2e tests.
 #[gpui::test]
-fn a_view_refresh_runs_until_the_view_has_rebuilt(cx: &mut TestAppContext) {
+fn view_refresh_starts_and_wait_waits_like_clickhouse(cx: &mut TestAppContext) {
     use zedb_ch::test_support::{e2e_binary, http_query};
 
     if std::env::var_os("ZEDB_E2E").is_none() && std::env::var_os("ZEDB_E2E_DOWNLOAD").is_none() {
@@ -339,18 +342,49 @@ fn a_view_refresh_runs_until_the_view_has_rebuilt(cx: &mut TestAppContext) {
         return;
     };
     let server = zedb_ch::ephemeral::EphemeralServer::start(&binary).expect("ephemeral server");
-    // A view whose rebuild takes two seconds, refreshed only on demand.
+    const REBUILD_SECONDS: [u64; 3] = [3, 5, 10];
     http_query(&server, "CREATE DATABASE rv");
-    http_query(
+    for seconds in REBUILD_SECONDS {
+        // One row per block, one second per row: a rebuild of exactly
+        // `seconds`, under the server's three-second sleep cap per block.
+        http_query(
+            &server,
+            &format!(
+                "CREATE MATERIALIZED VIEW rv.v{seconds} REFRESH EVERY 1 YEAR \
+                 ENGINE = MergeTree ORDER BY tuple() \
+                 AS SELECT number, sleepEachRow(1) AS slept FROM numbers({seconds}) \
+                 SETTINGS max_block_size = 1, max_threads = 1"
+            ),
+        );
+    }
+    // Creating a refreshable view kicks off its first rebuild; let all
+    // three settle so the run only ever sees the refreshes it starts.
+    let settle = std::time::Instant::now();
+    while http_query(
         &server,
-        "CREATE MATERIALIZED VIEW rv.slow REFRESH EVERY 1 YEAR \
-         ENGINE = MergeTree ORDER BY tuple() \
-         AS SELECT number, sleepEachRow(0.2) AS slept FROM numbers(10) \
-         SETTINGS allow_experimental_refreshable_materialized_view = 1",
-    );
-    // Let the refresh that creation kicks off finish first.
-    std::thread::sleep(std::time::Duration::from_secs(3));
+        "SELECT count() FROM system.view_refreshes \
+         WHERE database = 'rv' AND (status LIKE 'Running%' OR last_success_time IS NULL)",
+    )
+    .trim()
+        != "0"
+    {
+        assert!(
+            settle.elapsed().as_secs() < 30,
+            "creation refreshes never settled"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    let marker = http_query(&server, "SELECT toUnixTimestamp64Micro(now64(6))")
+        .trim()
+        .to_string();
 
+    let script = REBUILD_SECONDS
+        .iter()
+        .map(|seconds| {
+            format!("SYSTEM REFRESH VIEW rv.v{seconds};\nSYSTEM WAIT VIEW rv.v{seconds};")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let (workspace, cx) = test_harness::workspace(cx);
     workspace.update_in(cx, |workspace, window, cx| {
         let mut connected = test_harness::connected_cluster("local-e2e");
@@ -359,26 +393,11 @@ fn a_view_refresh_runs_until_the_view_has_rebuilt(cx: &mut TestAppContext) {
         workspace.connection.connected = Some(connected);
         let editor = workspace.query.tabs[0].editor.clone();
         editor.update(cx, |editor, cx| {
-            editor.set_value("SYSTEM REFRESH VIEW rv.slow", window, cx)
+            editor.set_value(script.clone(), window, cx)
         });
-        workspace.run_query(window, cx);
+        workspace.run_selection(window, cx);
     });
-
-    // A second in: the statement is long since answered, but the run is
-    // still going because the view is still rebuilding.
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    cx.run_until_parked();
-    workspace.update(cx, |workspace, _| {
-        assert!(
-            matches!(
-                workspace.query.tabs[0].outcome,
-                crate::QueryOutcome::Running
-            ),
-            "the run ended while the view was still rebuilding"
-        );
-    });
-
-    let outcome = test_harness::wait_for(cx, std::time::Duration::from_secs(60), |cx| {
+    let outcome = test_harness::wait_for(cx, std::time::Duration::from_secs(90), |cx| {
         workspace.update(cx, |workspace, _| match &workspace.query.tabs[0].outcome {
             crate::QueryOutcome::Running => None,
             crate::QueryOutcome::Error(message) => Some(Err(message.clone())),
@@ -387,7 +406,73 @@ fn a_view_refresh_runs_until_the_view_has_rebuilt(cx: &mut TestAppContext) {
         })
     });
     if let Err(message) = outcome {
-        panic!("the refresh should have finished cleanly: {message}");
+        panic!("the run should finish cleanly: {message}");
+    }
+
+    // Every statement as the server saw it: seconds from the first
+    // statement's start, how long it ran, and its text.
+    http_query(&server, "SYSTEM FLUSH LOGS");
+    let log = http_query(
+        &server,
+        &format!(
+            "SELECT \
+                (toUnixTimestamp64Micro(query_start_time_microseconds) \
+                    - min(toUnixTimestamp64Micro(query_start_time_microseconds)) OVER ()) / 1e6, \
+                query_duration_ms / 1e3, \
+                query \
+             FROM system.query_log \
+             WHERE type = 'QueryFinish' AND is_initial_query \
+               AND toUnixTimestamp64Micro(query_start_time_microseconds) >= {marker} \
+               AND query ILIKE 'SYSTEM %VIEW rv.%' \
+             ORDER BY query_start_time_microseconds \
+             FORMAT TSV"
+        ),
+    );
+    let statements: Vec<(f64, f64, String)> = log
+        .lines()
+        .map(|line| {
+            let mut fields = line.splitn(3, '\t');
+            let start = fields.next().unwrap().parse().unwrap();
+            let took = fields.next().unwrap().parse().unwrap();
+            (start, took, fields.next().unwrap().to_string())
+        })
+        .collect();
+    for (start, took, statement) in &statements {
+        eprintln!(
+            "{start:>6.2}s  took {took:>6.2}s  done {:>6.2}s  {statement}",
+            start + took
+        );
+    }
+    let expected: Vec<String> = script
+        .lines()
+        .map(|line| line.trim_end_matches(';').to_string())
+        .collect();
+    let ran: Vec<String> = statements
+        .iter()
+        .map(|(_, _, statement)| statement.trim_end_matches(';').to_string())
+        .collect();
+    assert_eq!(ran, expected, "all six statements ran, in order");
+
+    for (index, seconds) in REBUILD_SECONDS.iter().enumerate() {
+        let (_, refresh_took, _) = &statements[index * 2];
+        let (_, wait_took, _) = &statements[index * 2 + 1];
+        assert!(
+            *refresh_took < 1.0,
+            "SYSTEM REFRESH VIEW rv.v{seconds} only starts the rebuild, yet took {refresh_took:.2}s"
+        );
+        assert!(
+            *wait_took >= *seconds as f64 - 0.5 && *wait_took < *seconds as f64 + 3.0,
+            "SYSTEM WAIT VIEW rv.v{seconds} waits out the {seconds}s rebuild, yet took {wait_took:.2}s"
+        );
+    }
+    for pair in statements.windows(2) {
+        let (previous_start, previous_took, previous) = &pair[0];
+        let (start, _, statement) = &pair[1];
+        assert!(
+            *start >= previous_start + previous_took - 0.05,
+            "`{statement}` started at {start:.2}s, before `{previous}` finished at {:.2}s",
+            previous_start + previous_took
+        );
     }
 }
 
