@@ -1350,7 +1350,13 @@ impl Element for TextElement {
                 let ix = last_layout.visible_range.start + ix;
                 let line_no = format!("{:>width$}", ix + 1, width = line_number_len).into();
 
-                let runs = if current_row == Some(ix) {
+                // zeDB patch (gutter marker): a marked number reads in
+                // the foreground color, legible on its marker.
+                let marked = state
+                    .gutter_marker
+                    .as_ref()
+                    .is_some_and(|rows| rows.contains(&ix));
+                let runs = if current_row == Some(ix) || marked {
                     &current_line_runs
                 } else {
                     &other_line_runs
@@ -1599,6 +1605,8 @@ impl Element for TextElement {
                 cx.theme().editor_background(),
             ));
 
+            let gutter_marker = self.state.read(cx).gutter_marker.clone();
+
             // Each item is the normal lines.
             for (ix, lines) in line_numbers.iter().enumerate() {
                 let row = visible_range.start + ix;
@@ -1617,6 +1625,69 @@ impl Element for TextElement {
                     }
                 }
 
+                // zeDB patch (gutter marker): one continuous translucent
+                // bar behind every marked row's number, rounded only at
+                // the ends of the span so a multi-line statement reads as
+                // one block; a bright edge on the gutter's right side,
+                // held a hair off the bar; and a spinner beside the
+                // span's first line while the statement is in flight.
+                if let Some(rows) = gutter_marker.as_ref().filter(|rows| rows.contains(&row)) {
+                    let gutter_right = p.x + prepaint.last_layout.line_number_width
+                        - LINE_NUMBER_RIGHT_MARGIN;
+                    let inset = px(2.);
+                    let edge = px(2.);
+                    let gap = px(2.);
+                    let radius = px(4.);
+                    let top = if row == rows.start { radius } else { px(0.) };
+                    let bottom = if row + 1 == rows.end { radius } else { px(0.) };
+                    let bar_left = p.x + inset;
+                    let bar_right = gutter_right - edge - gap;
+                    window.paint_quad(
+                        fill(
+                            Bounds::new(
+                                point(bar_left, p.y),
+                                size(bar_right - bar_left, height),
+                            ),
+                            cx.theme().warning.opacity(0.35),
+                        )
+                        .corner_radii(gpui::Corners {
+                            top_left: top,
+                            top_right: top,
+                            bottom_right: bottom,
+                            bottom_left: bottom,
+                        }),
+                    );
+                    // Up to line 99 a ring spinner sits beside the first
+                    // line. From line 100 the number fills the column, so
+                    // that line's edge is the spinner instead: a stub at
+                    // the bottom growing up to fill the line, looping.
+                    let first = row == rows.start;
+                    let looping_edge = first && row + 1 >= 100;
+                    let fill_height = if looping_edge {
+                        height * gutter_edge_fill()
+                    } else {
+                        height
+                    };
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(gutter_right - edge, p.y + height - fill_height),
+                            size(edge, fill_height),
+                        ),
+                        cx.theme().warning,
+                    ));
+                    if first {
+                        if !looping_edge {
+                            paint_gutter_spinner(
+                                point(bar_left + px(4.), p.y),
+                                line_height,
+                                cx.theme().warning,
+                                window,
+                            );
+                        }
+                        window.request_animation_frame();
+                    }
+                }
+
                 for line in lines {
                     _ = line.paint(p, line_height, window, cx);
                     offset_y += line_height;
@@ -1630,6 +1701,16 @@ impl Element for TextElement {
         }
 
         self.state.update(cx, |state, cx| {
+            // zeDB patch (gutter marker): a wheel scroll that left the
+            // marker fully off screen stops following; one that brought
+            // any of it back resumes.
+            if std::mem::take(&mut state.gutter_marker_scrolled) {
+                if let Some(rows) = state.gutter_marker.as_ref() {
+                    let visible = &prepaint.last_layout.visible_range;
+                    state.gutter_marker_follow =
+                        rows.start < visible.end && visible.start < rows.end;
+                }
+            }
             state.last_layout = Some(prepaint.last_layout.clone());
             state.last_bounds = Some(bounds);
             state.last_cursor = Some(state.cursor());
@@ -1869,4 +1950,57 @@ mod tests {
         assert_eq!(result[4].color, gpui::black());
         assert_eq!(result[5].color, gpui::blue());
     }
+}
+
+/// zeDB patch (gutter marker): a ring spinner, a 270° arc that turns
+/// once a second, vertically centered on a line of `line_height` whose
+/// top-left is `origin`. Drawn as a short polyline, so it needs nothing
+/// beyond a stroked path.
+fn paint_gutter_spinner(
+    origin: Point<Pixels>,
+    line_height: Pixels,
+    color: gpui::Hsla,
+    window: &mut Window,
+) {
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let turns = EPOCH
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f32();
+    let diameter = (line_height * 0.55).min(px(11.));
+    let radius = diameter / 2.;
+    let center = point(origin.x + radius, origin.y + line_height / 2.);
+    let start = turns * std::f32::consts::TAU;
+    let sweep = std::f32::consts::TAU * 0.75;
+    const SEGMENTS: usize = 24;
+    let mut builder = gpui::PathBuilder::stroke(px(1.6));
+    for step in 0..=SEGMENTS {
+        let angle = start + sweep * step as f32 / SEGMENTS as f32;
+        let at = point(
+            center.x + radius * angle.cos(),
+            center.y + radius * angle.sin(),
+        );
+        if step == 0 {
+            builder.move_to(at);
+        } else {
+            builder.line_to(at);
+        }
+    }
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
+}
+
+/// zeDB patch (gutter marker): the looping edge's height, as a fraction
+/// of its line: a 20% stub growing (eased) to the full line over a
+/// second, then starting again.
+fn gutter_edge_fill() -> f32 {
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let phase = EPOCH
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f32()
+        .fract();
+    let eased = 1. - (1. - phase).powi(2);
+    0.2 + 0.8 * eased
 }

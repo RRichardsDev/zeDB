@@ -36,6 +36,6 @@ pub(crate) use buffer::{
 };
 pub(crate) use state::{
     max_rows_from_limit, next_tab_label, tab_display_name, MaxRows, QueryEstimate, QueryOutcome,
-    QueryResizeTarget, QueryState, QueryTab, RunEvent, TailBatch, TailPush, TailState, TailStream,
-    TailStreamBatch, TailStripInfo, TailWatch,
+    QueryResizeTarget, QueryState, QueryTab, RunEvent, RunningStatement, TailBatch, TailPush,
+    TailState, TailStream, TailStreamBatch, TailStripInfo, TailWatch,
 };

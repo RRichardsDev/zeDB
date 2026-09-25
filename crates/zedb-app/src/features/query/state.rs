@@ -114,7 +114,43 @@ pub(crate) struct QueryTab {
     pub(crate) displayed_statement: Option<String>,
     pub(crate) displayed_statement_offset: Option<usize>,
     pub(crate) running_query_id: Option<String>,
+    /// Which statement a run is on, for the status line; cleared when
+    /// the run settles.
+    pub(crate) running_statement: Option<RunningStatement>,
     pub(crate) tail: Option<TailState>,
+}
+
+/// The statement a run has reached, marked in the editor's gutter so a
+/// long statement (a `SYSTEM WAIT VIEW`, a slow INSERT) shows where the
+/// run is instead of an anonymous "Running".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RunningStatement {
+    pub(crate) index: usize,
+    pub(crate) total: usize,
+    /// The statement's byte span in the editor; `None` when the text sent
+    /// is not the editor's own (variables substituted), so there is no
+    /// honest place to mark.
+    pub(crate) span: Option<std::ops::Range<usize>>,
+}
+
+impl RunningStatement {
+    /// The editor rows (0-based, end-exclusive) the statement covers in
+    /// `text`: every line of a multi-line statement. Counts bytes, so an
+    /// edit made mid-run can move the marker but never panic on a char
+    /// boundary.
+    pub(crate) fn rows_in(&self, text: &str) -> Option<std::ops::Range<usize>> {
+        let span = self.span.as_ref()?;
+        let bytes = text.as_bytes();
+        let row_at = |offset: usize| {
+            bytes[..offset.min(bytes.len())]
+                .iter()
+                .filter(|byte| **byte == b'\n')
+                .count()
+        };
+        let first = row_at(span.start);
+        let last = row_at(span.end.max(span.start));
+        Some(first..last + 1)
+    }
 }
 
 /// A pre-flight cost estimate: `EXPLAIN ESTIMATE` totals plus the
@@ -235,6 +271,8 @@ pub(crate) enum QueryOutcome {
 }
 
 pub(crate) enum RunEvent {
+    /// The runner moved on to this statement.
+    StatementStarted(RunningStatement),
     Stream(QueryStreamEvent),
     StatementFailed {
         index: usize,

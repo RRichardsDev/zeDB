@@ -16,6 +16,16 @@ GitHub release notes.
   either statement; that is gone. The server's own `WAIT` already
   does the job, and a script that refreshes several views and waits
   on each runs them strictly in turn.
+- A multi-statement run (Execute, ctrl-x) marks the statement it is
+  on in the editor's gutter: an amber bar behind the line numbers of
+  every line that statement covers, a bright edge where the gutter
+  meets the text, and a small spinner beside its first line (from
+  line 100, where the ring would crowd the number, that line's bright
+  edge loops instead), moving down as the run goes and cleared when it
+  finishes. The editor scrolls to follow it; scroll the running
+  statement off screen to read elsewhere and it stops following, until
+  you scroll it back into view. A long wait or a slow insert now shows
+  where the run is instead of an anonymous "Running".
 
 ## v0.1.38 - 2026-09-18
 

@@ -142,6 +142,9 @@ impl Workspace {
         }) {
             tab.elapsed = tab.started_at.take().map(|started| started.elapsed());
             tab.outcome = QueryOutcome::Cancelled;
+            tab.running_statement = None;
+            tab.editor
+                .update(cx, |editor, cx| editor.set_gutter_marker(None, cx));
         }
         cx.notify();
     }

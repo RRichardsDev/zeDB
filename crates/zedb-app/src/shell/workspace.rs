@@ -446,6 +446,7 @@ impl Workspace {
             )
             .child(
                 div()
+                    .debug_selector(|| "query-editor".into())
                     .when(!has_result, |editor| editor.flex_1())
                     .when(has_result, |editor| editor.h(px(editor_height)).flex_none())
                     .min_h_0()

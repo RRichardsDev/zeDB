@@ -109,8 +109,8 @@ use features::query::{
     nearest_occurrence, next_tab_label, params_at, resolve_query_variables, split_statements,
     sql_is_blank, statement_at_cursor, strip_insert_values_comments, tab_display_name,
     variable_hover, MaxRows, QueryEstimate, QueryOutcome, QueryResizeTarget, QueryState, QueryTab,
-    RunEvent, TailBatch, TailPush, TailState, TailStream, TailStreamBatch, TailStripInfo,
-    TailWatch,
+    RunEvent, RunningStatement, TailBatch, TailPush, TailState, TailStream, TailStreamBatch,
+    TailStripInfo, TailWatch,
 };
 use features::schema::{
     apply_in_place_allowed, database_nodes_from_cache, schema_object_from_cache, DatabaseNode,

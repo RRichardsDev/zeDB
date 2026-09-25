@@ -352,6 +352,9 @@ impl Workspace {
         tab.advise_pending = false;
         tab.advisor_generation += 1;
         tab.failed_sql = None;
+        tab.running_statement = None;
+        tab.editor
+            .update(cx, |editor, cx| editor.set_gutter_marker(None, cx));
         tab.result_columns = 0;
         tab.result_rows = 0;
         // has_result stays as it was: an already-displayed result keeps
@@ -389,6 +392,11 @@ impl Workspace {
             let mut skipped = 0usize;
             let mut succeeded = Vec::new();
             for (index, (sql, offset)) in statements.iter().enumerate() {
+                let _ = sender.send(RunEvent::StatementStarted(RunningStatement {
+                    index,
+                    total,
+                    span: offset.map(|start| start..start + sql.len()),
+                }));
                 // The server's Values parser chokes on comments between
                 // rows; the editor keeps the annotated text, the wire
                 // gets it stripped.
@@ -468,6 +476,19 @@ impl Workspace {
                                     message,
                                 };
                             }
+                            RunEvent::StatementStarted(statement) => {
+                                // Mark the statement's lines only for a
+                                // real script; a single statement needs
+                                // no "you are here".
+                                let rows = (statement.total > 1)
+                                    .then(|| {
+                                        statement.rows_in(tab.editor.read(cx).value().as_ref())
+                                    })
+                                    .flatten();
+                                tab.editor
+                                    .update(cx, |editor, cx| editor.set_gutter_marker(rows, cx));
+                                tab.running_statement = Some(statement);
+                            }
                             RunEvent::Stream(QueryStreamEvent::Started { query_id }) => {
                                 tab.running_query_id = Some(query_id);
                             }
@@ -524,6 +545,9 @@ impl Workspace {
                 };
                 let advise_pending = std::mem::take(&mut tab.advise_pending);
                 tab.elapsed = tab.started_at.take().map(|started| started.elapsed());
+                tab.running_statement = None;
+                tab.editor
+                    .update(cx, |editor, cx| editor.set_gutter_marker(None, cx));
                 let mut successful_statements = Vec::new();
                 tab.outcome = match result {
                     Ok(Ok((summary, skipped, succeeded))) => {

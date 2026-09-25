@@ -291,3 +291,32 @@ foreground for editor popovers, so links in hover cards read
 Zed-style (underline only) instead of theme-link blue. Everywhere
 else (agent transcript, docs views) keeps the theme link color.
 Drop if upstream adds per-view link styling.
+
+## 17. Gutter marker
+
+`src/input/state.rs` (`gutter_marker`, `set_gutter_marker`) +
+`src/input/element.rs` (line-number prepaint and paint): the host
+names a span of rows (0-based, end-exclusive) and the gutter paints
+one continuous amber bar (`theme.warning` at 35%) behind those rows'
+line numbers, rounded only at the ends of the span, with the numbers
+in the foreground color so they stay legible; a 2px bright
+`theme.warning` edge on the gutter's right side, held 2px off the bar;
+and a ring spinner (a 270° arc turning once a second,
+`paint_gutter_spinner`) beside the span's first line. From line 100
+the number fills the column, so that line's edge loops instead of the
+ring (`gutter_edge_fill`: a 20% stub growing up to the full line each
+second). The element requests animation frames only while a marker is
+showing.
+
+The view follows the marker: `set_gutter_marker` scrolls just enough
+to show the marked rows whole with three lines of margin (their top,
+when taller than the view). A wheel scroll while a marker shows
+(`on_scroll_wheel`) is settled against the next layout's visible rows:
+the marker fully off screen stops following, any of it back in view
+resumes. `gutter_marker_following` and `visible_rows` expose this to
+tests. zeDB uses it to show
+which statement a multi-statement run is on, every line of a
+multi-line one. Pinned by `a_multi_statement_run_marks_the_statement_it_is_on`,
+`the_editor_follows_the_running_statement_until_scrolled_away` and
+`view_refresh_starts_and_wait_waits_like_clickhouse`. Drop if
+upstream grows gutter decorations.

@@ -139,6 +139,7 @@ impl Workspace {
             displayed_statement: None,
             displayed_statement_offset: None,
             running_query_id: None,
+            running_statement: None,
             tail: None,
         }
     }

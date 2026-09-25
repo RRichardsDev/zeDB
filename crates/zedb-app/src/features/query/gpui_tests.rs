@@ -397,6 +397,26 @@ fn view_refresh_starts_and_wait_waits_like_clickhouse(cx: &mut TestAppContext) {
         });
         workspace.run_selection(window, cx);
     });
+    // While the last wait blocks, its line (line 6) is marked.
+    let marked = test_harness::wait_for(cx, std::time::Duration::from_secs(60), |cx| {
+        workspace.update(cx, |workspace, cx| {
+            let tab = &workspace.query.tabs[0];
+            tab.running_statement
+                .as_ref()
+                .filter(|statement| statement.index == 5)
+                .map(|_| {
+                    (
+                        tab.editor.read(cx).gutter_marker(),
+                        matches!(tab.outcome, crate::QueryOutcome::Running),
+                    )
+                })
+        })
+    });
+    assert_eq!(
+        marked,
+        (Some(5..6), true),
+        "the gutter marks the statement the run is blocked on"
+    );
     let outcome = test_harness::wait_for(cx, std::time::Duration::from_secs(90), |cx| {
         workspace.update(cx, |workspace, _| match &workspace.query.tabs[0].outcome {
             crate::QueryOutcome::Running => None,
@@ -408,6 +428,15 @@ fn view_refresh_starts_and_wait_waits_like_clickhouse(cx: &mut TestAppContext) {
     if let Err(message) = outcome {
         panic!("the run should finish cleanly: {message}");
     }
+    workspace.update(cx, |workspace, cx| {
+        let tab = &workspace.query.tabs[0];
+        assert_eq!(tab.running_statement, None);
+        assert_eq!(
+            tab.editor.read(cx).gutter_marker(),
+            None,
+            "a settled run leaves no marker behind"
+        );
+    });
 
     // Every statement as the server saw it: seconds from the first
     // statement's start, how long it ran, and its text.
@@ -474,6 +503,152 @@ fn view_refresh_starts_and_wait_waits_like_clickhouse(cx: &mut TestAppContext) {
             previous_start + previous_took
         );
     }
+}
+
+/// A multi-statement run marks the gutter beside the statement it is
+/// on: every line of a multi-line one. Against the harness's dead
+/// endpoint the first statement fails and the run pauses on it, still
+/// marked.
+#[gpui::test]
+fn a_multi_statement_run_marks_the_statement_it_is_on(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.connection.connected = Some(test_harness::connected_cluster("dead"));
+        let editor = workspace.query.tabs[0].editor.clone();
+        editor.update(cx, |editor, cx| {
+            editor.set_value("SELECT\n    1;\nSELECT 2;", window, cx)
+        });
+        workspace.run_selection(window, cx);
+    });
+    let (statement, marker) =
+        test_harness::wait_for(cx, std::time::Duration::from_secs(10), |cx| {
+            workspace.update(cx, |workspace, cx| {
+                let tab = &workspace.query.tabs[0];
+                match tab.outcome {
+                    crate::QueryOutcome::StatementError { .. } => tab
+                        .running_statement
+                        .clone()
+                        .map(|statement| (statement, tab.editor.read(cx).gutter_marker())),
+                    _ => None,
+                }
+            })
+        });
+    assert_eq!((statement.index, statement.total), (0, 2));
+    assert_eq!(
+        marker,
+        Some(0..2),
+        "both lines of the first statement are marked"
+    );
+}
+
+/// The view follows the running statement: a run that starts on a
+/// statement far down the buffer scrolls to it. A wheel scroll that
+/// leaves it fully off screen stops following (so reading elsewhere is
+/// not yanked back), and scrolling it back into view resumes.
+#[gpui::test]
+fn the_editor_follows_the_running_statement_until_scrolled_away(cx: &mut TestAppContext) {
+    let (workspace, cx) = test_harness::workspace(cx);
+    let editor = workspace.update_in(cx, |workspace, window, cx| {
+        workspace.connection.connected = Some(test_harness::connected_cluster("dead"));
+        workspace.open_query_editor(cx);
+        let editor = workspace.query.tabs[0].editor.clone();
+        let script = format!("{}SELECT 1;\nSELECT 2;", "\n".repeat(150));
+        editor.update(cx, |editor, cx| editor.set_value(script, window, cx));
+        editor
+    });
+    // Lay the editor out at the top before the run starts.
+    test_harness::bounds(cx, "query-editor");
+    let visible = |cx: &mut gpui::VisualTestContext| {
+        cx.refresh().expect("schedule redraw");
+        cx.run_until_parked();
+        workspace.update(cx, |_, cx| {
+            let editor = editor.read(cx);
+            (
+                editor.visible_rows().expect("the editor has been laid out"),
+                editor.gutter_marker_following(),
+            )
+        })
+    };
+    assert!(
+        !visible(cx).0.contains(&150),
+        "the first statement starts off screen"
+    );
+
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.run_selection(window, cx)
+    });
+    // The dead endpoint fails the first statement; the run pauses on it.
+    test_harness::wait_for(cx, std::time::Duration::from_secs(10), |cx| {
+        workspace.update(cx, |workspace, _| {
+            matches!(
+                workspace.query.tabs[0].outcome,
+                crate::QueryOutcome::StatementError { .. }
+            )
+            .then_some(())
+        })
+    });
+    let (rows, following) = visible(cx);
+    assert!(
+        rows.contains(&150),
+        "the view scrolled to the running statement: {rows:?}"
+    );
+    assert!(following);
+
+    let editor_bounds = test_harness::bounds(cx, "query-editor");
+    let scroll = |cx: &mut gpui::VisualTestContext, dy: f32| {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: editor_bounds.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(dy))),
+            modifiers: gpui::Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+    };
+    scroll(cx, 100_000.);
+    let (rows, following) = visible(cx);
+    assert!(!rows.contains(&150), "scrolled to the top: {rows:?}");
+    assert!(
+        !following,
+        "scrolling the statement off screen stops following"
+    );
+
+    scroll(cx, -100_000.);
+    let (rows, following) = visible(cx);
+    assert!(rows.contains(&150), "scrolled back down: {rows:?}");
+    assert!(
+        following,
+        "bringing the statement back into view resumes following"
+    );
+}
+
+/// The rows a statement's span covers.
+#[test]
+fn running_statement_rows() {
+    use crate::RunningStatement;
+
+    let text = "SELECT 1;\nSELECT\n    2\nFROM t;\nSELECT 3;";
+    let statement = |start: usize, sql: &str| RunningStatement {
+        index: 0,
+        total: 3,
+        span: Some(start..start + sql.len()),
+    };
+    assert_eq!(statement(0, "SELECT 1").rows_in(text), Some(0..1));
+    let second = text.find("SELECT\n").unwrap();
+    assert_eq!(
+        statement(second, "SELECT\n    2\nFROM t").rows_in(text),
+        Some(1..4),
+        "a multi-line statement covers all of its lines"
+    );
+    let third = text.rfind("SELECT 3").unwrap();
+    assert_eq!(statement(third, "SELECT 3").rows_in(text), Some(4..5));
+    // No span (variables substituted): nothing honest to mark.
+    let unplaced = RunningStatement {
+        index: 0,
+        total: 2,
+        span: None,
+    };
+    assert_eq!(unplaced.rows_in(text), None);
+    // A span past the end (the buffer shrank mid-run) cannot panic.
+    assert_eq!(statement(100, "x").rows_in(text), Some(4..5));
 }
 
 /// cmd-n opens a new query tab, from whichever view is on screen, and

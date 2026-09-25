@@ -299,6 +299,19 @@ pub struct InputState {
     #[allow(clippy::type_complexity)]
     pub(super) occurrence_provider:
         Option<std::rc::Rc<dyn Fn(&str, usize) -> Vec<std::ops::Range<usize>>>>,
+    /// zeDB patch (gutter marker): rows (0-based, end-exclusive) whose
+    /// line numbers carry a marker, e.g. the statement a multi-statement
+    /// run is executing.
+    pub(super) gutter_marker: Option<std::ops::Range<usize>>,
+    /// zeDB patch (gutter marker): whether the view follows the marker
+    /// as it moves. Starts on with each marker; a wheel scroll that
+    /// leaves the marker fully off screen turns it off, and one that
+    /// brings any of it back turns it on again.
+    pub(super) gutter_marker_follow: bool,
+    /// zeDB patch (gutter marker): a wheel scroll happened while a
+    /// marker was showing; the element settles `gutter_marker_follow`
+    /// against the next layout's visible rows.
+    pub(super) gutter_marker_scrolled: bool,
     /// Range for save the selected word, use to keep word range when drag move.
     pub(super) selected_word_range: Option<Selection>,
     pub(super) selection_reversed: bool,
@@ -408,6 +421,9 @@ impl InputState {
             multi_anchor: None,
             search_panel: None,
             occurrence_provider: None,
+            gutter_marker: None,
+            gutter_marker_follow: true,
+            gutter_marker_scrolled: false,
             searchable: false,
             selected_word_range: None,
             selection_reversed: false,
@@ -1428,6 +1444,11 @@ impl InputState {
 
         let old_offset = self.scroll_handle.offset();
         self.update_scroll_offset(Some(old_offset + delta), cx);
+        // zeDB patch (gutter marker): let the next layout decide whether
+        // this scroll left the marker in view.
+        if self.gutter_marker.is_some() {
+            self.gutter_marker_scrolled = true;
+        }
 
         // Only stop propagation if the offset actually changed
         if self.scroll_handle.offset() != old_offset {
@@ -1768,6 +1789,84 @@ impl InputState {
         provider: std::rc::Rc<dyn Fn(&str, usize) -> Vec<std::ops::Range<usize>>>,
     ) {
         self.occurrence_provider = Some(provider);
+    }
+
+    /// zeDB patch (gutter marker): mark the line numbers of `rows`
+    /// (0-based, end-exclusive), or clear the marker with `None`. While
+    /// following, the view scrolls to keep the marked rows in sight.
+    pub fn set_gutter_marker(
+        &mut self,
+        rows: Option<std::ops::Range<usize>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.gutter_marker == rows {
+            return;
+        }
+        if self.gutter_marker.is_none() || rows.is_none() {
+            // A fresh marker (a new run) follows from the start.
+            self.gutter_marker_follow = true;
+            self.gutter_marker_scrolled = false;
+        }
+        self.gutter_marker = rows;
+        if let Some(rows) = self.gutter_marker.clone() {
+            if self.gutter_marker_follow {
+                self.reveal_rows(&rows, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// zeDB patch (gutter marker): whether the view is following the
+    /// marker.
+    pub fn gutter_marker_following(&self) -> bool {
+        self.gutter_marker_follow
+    }
+
+    /// zeDB patch (gutter marker): the rows the last layout drew.
+    pub fn visible_rows(&self) -> Option<std::ops::Range<usize>> {
+        self.last_layout
+            .as_ref()
+            .map(|layout| layout.visible_range.clone())
+    }
+
+    /// zeDB patch (gutter marker): scroll just enough to show `rows`
+    /// whole with three lines of margin, or its top when it is taller
+    /// than the view.
+    fn reveal_rows(&mut self, rows: &std::ops::Range<usize>, cx: &mut Context<Self>) {
+        let Some(line_height) = self.last_layout.as_ref().map(|layout| layout.line_height) else {
+            return;
+        };
+        let Some(viewport) = self.last_bounds.as_ref().map(|bounds| bounds.size.height) else {
+            return;
+        };
+        let (mut top, mut bottom, mut y) = (px(0.), px(0.), px(0.));
+        for (ix, line) in self.text_wrapper.lines.iter().enumerate() {
+            if ix == rows.start {
+                top = y;
+            }
+            y += line.height(line_height);
+            bottom = y;
+            if ix + 1 >= rows.end {
+                break;
+            }
+        }
+        let margin = line_height * 3.;
+        let offset = self.scroll_handle.offset();
+        let view_top = -offset.y;
+        let view_bottom = view_top + viewport;
+        let new_top = if bottom - top + margin * 2. > viewport || top - margin < view_top {
+            top - margin
+        } else if bottom + margin > view_bottom {
+            bottom + margin - viewport
+        } else {
+            return;
+        };
+        self.update_scroll_offset(Some(point(offset.x, -new_top.max(px(0.)))), cx);
+    }
+
+    /// zeDB patch (gutter marker): the rows currently marked.
+    pub fn gutter_marker(&self) -> Option<std::ops::Range<usize>> {
+        self.gutter_marker.clone()
     }
 
     /// Unselects the currently selected text.
