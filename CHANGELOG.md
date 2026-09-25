@@ -7,16 +7,22 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
-## Unreleased
+## v0.1.40 - 2026-09-25
 
-- Completing a table name puts databases first: after `FROM` or
-  `JOIN`, typing `a` offers the databases starting with `a` ahead of
-  tables, and tables take over once no database matches.
+Table completion that starts where you do: with the database.
+
+### Databases first
+
+- After `FROM`, `JOIN` or `INTO`, typing the start of a name offers
+  the matching databases ahead of tables, instead of burying them
+  under a wall of their own tables. Tables take over once no database
+  matches.
 - A partial database name before the dot is understood: `a.Ac` offers
-  the `Ac...` tables of every database starting with `a` (the closest
-  first), and picking one writes the name out in full, e.g.
-  `analytics.ActivityFacts`. An exact database, table or alias before
-  the dot still means just that.
+  the `Ac...` tables of every database starting with `a`, the closest
+  first, and picking one writes the name out in full (for example
+  `audit.AccessLog`). Case does not matter; matching is by prefix.
+- An exact database, table or alias before the dot still means just
+  that.
 
 ## v0.1.39 - 2026-09-25
 
