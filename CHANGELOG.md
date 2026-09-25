@@ -7,6 +7,17 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Completing a table name puts databases first: after `FROM` or
+  `JOIN`, typing `a` offers the databases starting with `a` ahead of
+  tables, and tables take over once no database matches.
+- A partial database name before the dot is understood: `a.Ac` offers
+  the `Ac...` tables of every database starting with `a` (the closest
+  first), and picking one writes the name out in full, e.g.
+  `analytics.ActivityFacts`. An exact database, table or alias before
+  the dot still means just that.
+
 ## v0.1.39 - 2026-09-25
 
 See where a script is: the statement in flight is marked in the

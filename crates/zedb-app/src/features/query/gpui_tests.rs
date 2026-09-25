@@ -745,6 +745,64 @@ fn completion_popup_width(cx: &mut TestAppContext, tables: &[&str]) -> gpui::Pix
     })
 }
 
+/// A partial database name before the dot completes as the full
+/// `db.table`: typing `a.Ac` and taking the first suggestion rewrites the
+/// qualifier too, leaving valid SQL behind.
+#[gpui::test]
+fn a_partial_database_qualifier_completes_in_full(cx: &mut TestAppContext) {
+    use zedb_ch::schema_cache::{CachedObjectKind, SchemaCache, TableRecord};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache = SchemaCache::open(dir.path().join("schema.json")).expect("open schema cache");
+    let table = |database: &str, name: &str| TableRecord {
+        database: database.to_string(),
+        name: name.to_string(),
+        engine: "MergeTree".to_string(),
+        kind: CachedObjectKind::Table,
+        total_rows: None,
+        total_bytes: None,
+        comment: String::new(),
+    };
+    cache
+        .publish_tables(vec![
+            table("analytics", "ActivityFacts"),
+            table("audit", "AccessLog"),
+        ])
+        .expect("publish tables");
+
+    let (workspace, cx) = test_harness::workspace(cx);
+    let editor = workspace.update_in(cx, |workspace, window, cx| {
+        workspace.open_query_editor(cx);
+        workspace.schema.provider.set_context(Some(cache), None);
+        let editor = workspace.query.tabs[0].editor.clone();
+        editor.update(cx, |editor, cx| editor.set_value("", window, cx));
+        window.focus(&editor.read(cx).focus_handle(cx));
+        editor
+    });
+    cx.run_until_parked();
+    cx.simulate_input("select * from a.Ac");
+    cx.run_until_parked();
+    workspace.update(cx, |_, cx| {
+        assert!(
+            editor.read(cx).completion_menu_open(cx),
+            "suggestions are showing"
+        );
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    workspace.update(cx, |_, cx| {
+        // Compared without trailing whitespace: the accepting Enter can
+        // also fall through to the buffer as a newline (the vendored
+        // completion menu propagates the action it handled), which is a
+        // separate matter from the rewrite pinned here.
+        assert_eq!(
+            editor.read(cx).value().trim_end(),
+            "select * from audit.AccessLog",
+            "the closer database's table, qualifier rewritten in full"
+        );
+    });
+}
+
 /// The blue matched-prefix highlight covers exactly what the user
 /// typed. The popup's query runs from wherever it opened (a whole
 /// clause, here), so the highlight is matched against the label rather

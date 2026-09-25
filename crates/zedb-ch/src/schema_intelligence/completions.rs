@@ -137,15 +137,16 @@ pub fn completions_with_placeholders(
         .last()
         .is_some_and(|token| token.text == "." && token.range.end == context_end);
     if dot_adjacent {
-        let qualifier = tokens
-            .get(tokens.len().saturating_sub(2))
-            .filter(|token| {
-                token.identifier
-                    && tokens
-                        .last()
-                        .is_some_and(|dot| token.range.end == dot.range.start)
-            })
-            .map(|token| token.text);
+        let qualifier_token = tokens.get(tokens.len().saturating_sub(2)).filter(|token| {
+            token.identifier
+                && tokens
+                    .last()
+                    .is_some_and(|dot| token.range.end == dot.range.start)
+        });
+        // Where a typed (not placeholder) qualifier starts: a partial
+        // database name resolved below rewrites from here.
+        let typed_qualifier_start = qualifier_token.map(|token| token.range.start);
+        let qualifier = qualifier_token.map(|token| token.text);
         // A placeholder before the dot qualifies it too: resolve
         // `{db:Identifier}.` / `${db}.` to the declared value and treat
         // that as the typed qualifier.
@@ -212,6 +213,12 @@ pub fn completions_with_placeholders(
                         }
                     }
                 }
+            } else if let Some(start) = typed_qualifier_start {
+                // Nothing is called that exactly: read it as the start of
+                // a database name (`a.Ac` while meaning `analytics.`) and
+                // offer the matching tables of every database it starts,
+                // written out in full so picking one fixes the qualifier.
+                return partial_database_tables(snapshot, qualifier, prefix, start..replace.end);
             }
         }
         suggestions.sort_by(|left, right| left.label.cmp(&right.label));
@@ -363,15 +370,20 @@ pub fn completions_with_placeholders(
         }
     }
     // Schema names outrank vocabulary: what the user's own data calls
-    // things is almost always what a prefix means.
+    // things is almost always what a prefix means. At a table position a
+    // matching database leads: a word that names a database is usually
+    // the start of `db.table`, and its tables (which the word also
+    // matches, qualified) would otherwise bury it.
+    let rank = |kind: &SuggestionKind| match kind {
+        SuggestionKind::Database if table_position => 0,
+        other => kind_rank(other),
+    };
     suggestions.sort_by(|left, right| {
-        kind_rank(&left.kind)
-            .cmp(&kind_rank(&right.kind))
-            .then_with(|| {
-                left.label
-                    .to_ascii_lowercase()
-                    .cmp(&right.label.to_ascii_lowercase())
-            })
+        rank(&left.kind).cmp(&rank(&right.kind)).then_with(|| {
+            left.label
+                .to_ascii_lowercase()
+                .cmp(&right.label.to_ascii_lowercase())
+        })
     });
     suggestions
 }
@@ -384,6 +396,49 @@ fn kind_rank(kind: &SuggestionKind) -> u8 {
         SuggestionKind::Function => 3,
         SuggestionKind::Keyword => 4,
     }
+}
+
+/// Tables named `prefix...` in every database whose name starts with
+/// `partial` (case-insensitive), labelled `database.table` and replacing
+/// `replace` (the typed `partial.prefix`) whole. The closer database
+/// comes first: the shorter name, so `a` lists `audit` before
+/// `analytics`; then by name.
+fn partial_database_tables(
+    snapshot: &SchemaSnapshot,
+    partial: &str,
+    prefix: &str,
+    replace: Range<usize>,
+) -> Vec<SchemaSuggestion> {
+    let mut databases: Vec<_> = snapshot
+        .databases
+        .values()
+        .filter(|database| starts_with_case_insensitive(&database.name, partial))
+        .collect();
+    databases.sort_by(|left, right| {
+        left.name.len().cmp(&right.name.len()).then_with(|| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+        })
+    });
+    let mut suggestions = Vec::new();
+    for database in databases {
+        let mut objects: Vec<_> = database
+            .objects
+            .values()
+            .filter(|object| starts_with_case_insensitive(&object.name, prefix))
+            .collect();
+        objects.sort_by_key(|object| object.name.to_ascii_lowercase());
+        for object in objects {
+            suggestions.push(SchemaSuggestion {
+                label: format!("{}.{}", database.name, object.name),
+                detail: object.engine.clone(),
+                kind: SuggestionKind::Object,
+                replace: replace.clone(),
+            });
+        }
+    }
+    suggestions
 }
 
 fn column_suggestion(column: &CachedColumn, replace: Range<usize>) -> SchemaSuggestion {
@@ -408,6 +463,140 @@ fn object_suggestion(object: &CachedObject, replace: Range<usize>) -> SchemaSugg
 mod tests {
     use super::*;
     use crate::schema_intelligence::fixtures::{columns, snapshot};
+
+    /// `analytics`, `audit` and `billing`, for database-first ranking and
+    /// partial database qualifiers.
+    fn databases() -> SchemaSnapshot {
+        use crate::schema_cache::{CachedDatabase, CachedObjectKind};
+        use std::collections::HashMap;
+        let database = |name: &str, tables: &[(&str, &str)]| CachedDatabase {
+            name: name.into(),
+            touched: 1,
+            objects: tables
+                .iter()
+                .map(|(table, engine)| {
+                    (
+                        (*table).to_string(),
+                        CachedObject {
+                            name: (*table).into(),
+                            engine: (*engine).into(),
+                            kind: CachedObjectKind::Table,
+                            total_rows: None,
+                            total_bytes: None,
+                            comment: String::new(),
+                            columns: None,
+                        },
+                    )
+                })
+                .collect::<HashMap<_, _>>(),
+        };
+        let mut snapshot = SchemaSnapshot::default();
+        for db in [
+            database(
+                "analytics",
+                &[
+                    ("ActivityFacts", "ReplacingMergeTree"),
+                    ("AccountSnapshots", "MergeTree"),
+                    ("events", "MergeTree"),
+                ],
+            ),
+            database(
+                "audit",
+                &[("AccessLog", "MergeTree"), ("sessions", "MergeTree")],
+            ),
+            database("billing", &[("Accounts", "MergeTree")]),
+        ] {
+            snapshot.databases.insert(db.name.clone(), db);
+        }
+        snapshot
+    }
+
+    fn labels(items: &[SchemaSuggestion]) -> Vec<&str> {
+        items.iter().map(|item| item.label.as_str()).collect()
+    }
+
+    #[test]
+    fn databases_lead_at_a_table_position() {
+        let snapshot = databases();
+        // No default database: every `db.table` under an `a...`
+        // database matches too, yet the databases come first.
+        let sql = "SELECT * FROM a";
+        let items = completions(&snapshot, None, sql, sql.len());
+        assert_eq!(labels(&items[..2]), ["analytics", "audit"]);
+        assert!(items[..2]
+            .iter()
+            .all(|item| item.kind == SuggestionKind::Database));
+        assert!(items[2..]
+            .iter()
+            .all(|item| item.kind == SuggestionKind::Object));
+
+        // With a default database its tables follow the databases.
+        let items = completions(&snapshot, Some("analytics"), sql, sql.len());
+        assert_eq!(
+            labels(&items),
+            ["analytics", "audit", "AccountSnapshots", "ActivityFacts"]
+        );
+
+        // Once no database matches, the tables are what is left.
+        let sql = "SELECT * FROM Acc";
+        let items = completions(&snapshot, Some("analytics"), sql, sql.len());
+        assert_eq!(labels(&items), ["AccountSnapshots"]);
+    }
+
+    #[test]
+    fn a_partial_database_before_the_dot_resolves_by_prefix() {
+        let snapshot = databases();
+        let sql = "SELECT * FROM a.Ac";
+        let items = completions(&snapshot, None, sql, sql.len());
+        // Every database starting `a`, the shorter (closer) first, each
+        // table written out in full.
+        assert_eq!(
+            labels(&items),
+            [
+                "audit.AccessLog",
+                "analytics.AccountSnapshots",
+                "analytics.ActivityFacts"
+            ]
+        );
+        let typed = sql.find("a.Ac").unwrap();
+        assert!(
+            items.iter().all(|item| item.replace == (typed..sql.len())),
+            "picking one rewrites the partial qualifier too"
+        );
+
+        // Case-insensitive, and a longer prefix narrows it.
+        let sql = "SELECT * FROM AN.ac";
+        let items = completions(&snapshot, None, sql, sql.len());
+        assert_eq!(
+            labels(&items),
+            ["analytics.AccountSnapshots", "analytics.ActivityFacts"]
+        );
+
+        // Prefix only: text from the middle of a name matches nothing.
+        let sql = "SELECT * FROM lytics.Ac";
+        assert!(completions(&snapshot, None, sql, sql.len()).is_empty());
+    }
+
+    #[test]
+    fn an_exact_qualifier_still_wins_over_a_partial_database() {
+        let snapshot = databases();
+        // `audit` is a database: its tables, bare, replacing only `Ac`.
+        let sql = "SELECT * FROM audit.Ac";
+        let items = completions(&snapshot, None, sql, sql.len());
+        assert_eq!(labels(&items), ["AccessLog"]);
+        assert_eq!(items[0].replace, sql.len() - 2..sql.len());
+
+        // `a` is an alias here: it names the aliased table, never a
+        // partial `analytics`/`audit`.
+        let sql = "SELECT a.Ac FROM billing.Accounts a";
+        let cursor = sql.find("a.Ac").unwrap() + 4;
+        let items = completions(&snapshot, None, sql, cursor);
+        assert!(
+            items.iter().all(|item| !item.label.contains('.')),
+            "an alias qualifier must not resolve as a database: {:?}",
+            labels(&items)
+        );
+    }
 
     #[test]
     fn completes_tables_and_alias_columns() {
