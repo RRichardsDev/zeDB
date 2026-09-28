@@ -643,9 +643,13 @@ impl SyntaxHighlighter {
         // ERROR nodes and would render uncolored. Inside ERROR
         // regions of SQL, color known statement keywords with the
         // keyword style so unsupported-but-valid statements still
-        // read as SQL.
+        // read as SQL. String literals and function calls (`name(`)
+        // color as string and function too, so an ALTER ... DELETE
+        // WHERE reads like the same predicate in a parsed SELECT.
         if self.language.as_ref() == "sql" {
             let type_style = theme.style("type");
+            let string_style = theme.style("string");
+            let function_style = theme.style("function");
             if let (Some(tree), Some(style)) = (&self.tree, theme.style("keyword")) {
                 const SALVAGE: &[&str] = &[
                     "DESCRIBE",
@@ -716,6 +720,13 @@ impl SyntaxHighlighter {
                                         error_range.start + start..error_range.start + i,
                                         style,
                                     ));
+                                } else if bytes.get(i) == Some(&b'(') {
+                                    if let Some(function_style) = function_style {
+                                        styles.push((
+                                            error_range.start + start..error_range.start + i,
+                                            function_style,
+                                        ));
+                                    }
                                 } else if start > 0 && bytes[start - 1] == b'.' {
                                     // `db.table` in an unparsed statement:
                                     // the segment after the dot colors like
@@ -724,6 +735,37 @@ impl SyntaxHighlighter {
                                         styles.push((
                                             error_range.start + start..error_range.start + i,
                                             type_style,
+                                        ));
+                                    }
+                                }
+                            } else if bytes[i] == b'\'' || bytes[i] == b'`' || bytes[i] == b'"' {
+                                // Quoted run: a string literal, or a
+                                // quoted identifier skipped whole so its
+                                // contents are not read as words. `''`
+                                // and backslash escapes stay inside; an
+                                // unterminated quote runs to the end.
+                                let quote = bytes[i];
+                                let start = i;
+                                i += 1;
+                                while i < bytes.len() {
+                                    if bytes[i] == b'\\' {
+                                        i += 2;
+                                    } else if bytes[i] == quote {
+                                        i += 1;
+                                        if bytes.get(i) != Some(&quote) {
+                                            break;
+                                        }
+                                        i += 1;
+                                    } else {
+                                        i += 1;
+                                    }
+                                }
+                                i = i.min(bytes.len());
+                                if quote == b'\'' {
+                                    if let Some(string_style) = string_style {
+                                        styles.push((
+                                            error_range.start + start..error_range.start + i,
+                                            string_style,
                                         ));
                                     }
                                 }

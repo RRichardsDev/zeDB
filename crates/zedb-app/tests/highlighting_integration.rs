@@ -37,3 +37,27 @@ fn multibyte_text_in_error_region_does_not_panic() {
         let _ = hl.styles(&(0..end), &theme);
     }
 }
+
+#[test]
+fn unparsed_statement_colors_strings_and_function_calls() {
+    // ALTER TABLE ... DELETE is an ERROR region to the sequel grammar;
+    // its string literals and function calls must still color like
+    // they do in a parsed SELECT.
+    let text = "ALTER TABLE `AFAS`.ActivityFacts DELETE WHERE date = toDate('2026-09-22');";
+    let mut hl = SyntaxHighlighter::new("sql");
+    hl.update(None, &gpui_component::Rope::from(text));
+    let theme = HighlightTheme::default_dark();
+    let styles = hl.styles(&(0..text.len()), &theme);
+    let color_of = |needle: &str| {
+        let start = text.find(needle).unwrap();
+        styles
+            .iter()
+            .find(|(range, _)| range.start <= start && range.end >= start + needle.len())
+            .and_then(|(_, style)| style.color)
+    };
+    let string = theme.style("string").and_then(|s| s.color);
+    let function = theme.style("function").and_then(|s| s.color);
+    assert!(string.is_some() && function.is_some());
+    assert_eq!(color_of("'2026-09-22'"), string, "{styles:?}");
+    assert_eq!(color_of("toDate"), function, "{styles:?}");
+}

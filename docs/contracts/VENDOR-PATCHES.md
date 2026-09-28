@@ -113,11 +113,16 @@ through the affected UI.
   the patch colors known statement keywords with the keyword style
   and identifiers after a dot (`db.table`) with the type style, so
   valid-but-unparsed ClickHouse statements still read as SQL.
+  Single-quoted literals take the string style and `name(` takes the
+  function style (so `ALTER ... DELETE WHERE d = toDate('...')` reads
+  like the parsed SELECT); backtick and double-quoted identifiers are
+  skipped whole so their contents are not read as words.
   Slicing clamps to text length and char boundaries; unclamped it
   panicked on multibyte characters (app crash while typing accents
   or emoji in an unparsed statement).
-- Pinned by `crates/zedb-app/tests/describe_probe.rs` (keyword color,
-  dot-name color, multibyte no-panic sweep).
+- Pinned by `crates/zedb-app/tests/highlighting_integration.rs`
+  (keyword color, dot-name color, string and function color in an
+  unparsed ALTER, multibyte no-panic sweep).
 
 ## 7. Hover card click-through
 

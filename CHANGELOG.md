@@ -7,6 +7,12 @@ section to the version. Engineering internals live in docs/devlog.md,
 not here. The release workflow publishes the version's section as the
 GitHub release notes.
 
+## Unreleased
+
+- Strings and function calls in statements the editor cannot fully
+  parse (such as `ALTER TABLE ... DELETE WHERE d = toDate('...')`) now
+  color green and yellow, the same as in a SELECT.
+
 ## v0.1.40 - 2026-09-25
 
 Table completion that starts where you do: with the database.
